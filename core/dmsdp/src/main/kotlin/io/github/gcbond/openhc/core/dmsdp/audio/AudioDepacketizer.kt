@@ -224,7 +224,8 @@ internal class AudioDepacketizer(
         val decrypted = payloads.map { decryptPayloadCopy(it) }
         val allDecrypted = if (decrypted.all { it != null }) decrypted.filterNotNull() else null
         fun majority(list: List<ByteArray>, test: (ByteArray) -> Boolean) = list.count(test) * 2 > list.size
-        val adts = { p: ByteArray -> Adts.looksLike(p, 0, p.size) }
+        // 是 ADTS，或 12 字节头后跟着 ADTS（有的手机在 ADTS 帧前加和 PCM 一样的头）都算 AAC。
+        val adts = { p: ByteArray -> Adts.looksLike(p, 0, p.size) || AudioPacketHeader.dataLength(p, 0, p.size, adts = true) >= 0 }
         val pcm = { p: ByteArray -> PcmProbe.looksLikePcm(p, 0, p.size, stream.channels) }
         val judgeable = { list: List<ByteArray> -> list.any { PcmProbe.canJudge(it.size, stream.channels) } }
         when {

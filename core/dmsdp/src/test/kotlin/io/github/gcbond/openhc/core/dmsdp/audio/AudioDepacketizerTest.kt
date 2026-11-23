@@ -449,19 +449,19 @@ class AudioDepacketizerTest {
     fun payloadHeaderRules() {
         val unit = AudioSynthetic.adts(ByteArray(250)) // 帧长 257，奇数
         val headed = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = unit.size) + unit
-        assertEquals(unit.size, PayloadHeader.adtsLength(headed, 0, headed.size))
-        assertEquals(-1, PayloadHeader.pcmLength(headed, 0, headed.size), "PCM 的长度必须是偶数")
-        val tail = headed + ByteArray(PayloadHeader.MAX_TRAILER)
-        assertEquals(unit.size, PayloadHeader.adtsLength(tail, 0, tail.size), "包尾多出上限以内的字节")
+        assertEquals(unit.size, AudioPacketHeader.dataLength(headed, 0, headed.size, adts = true))
+        assertEquals(-1, AudioPacketHeader.dataLength(headed, 0, headed.size, adts = false), "PCM 的长度必须是偶数")
+        val tail = headed + ByteArray(AudioPacketHeader.MAX_TRAILER)
+        assertEquals(unit.size, AudioPacketHeader.dataLength(tail, 0, tail.size, adts = true), "包尾多出上限以内的字节")
         val tooLong = tail + byteArrayOf(0)
-        assertEquals(-1, PayloadHeader.adtsLength(tooLong, 0, tooLong.size), "包尾多出超过上限")
+        assertEquals(-1, AudioPacketHeader.dataLength(tooLong, 0, tooLong.size, adts = true), "包尾多出超过上限")
         val mismatch = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = unit.size + 1) + unit + byteArrayOf(0)
-        assertEquals(-1, PayloadHeader.adtsLength(mismatch, 0, mismatch.size), "ADTS 帧长和头里的长度不一样")
-        assertEquals(-1, PayloadHeader.adtsLength(unit, 0, unit.size), "不带头的 ADTS")
+        assertEquals(-1, AudioPacketHeader.dataLength(mismatch, 0, mismatch.size, adts = true), "ADTS 帧长和头里的长度不一样")
+        assertEquals(-1, AudioPacketHeader.dataLength(unit, 0, unit.size, adts = true), "不带头的 ADTS")
         val pcm = AudioSynthetic.pcm(0, frames = 64)
         val headedPcm = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = pcm.size) + pcm
-        assertEquals(pcm.size, PayloadHeader.pcmLength(headedPcm, 0, headedPcm.size))
-        assertEquals(-1, PayloadHeader.adtsLength(headedPcm, 0, headedPcm.size), "头后不是 ADTS")
+        assertEquals(pcm.size, AudioPacketHeader.dataLength(headedPcm, 0, headedPcm.size, adts = false))
+        assertEquals(-1, AudioPacketHeader.dataLength(headedPcm, 0, headedPcm.size, adts = true), "头后不是 ADTS")
     }
 
     @Test
