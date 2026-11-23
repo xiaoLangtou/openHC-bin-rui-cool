@@ -123,6 +123,8 @@ class ReceiverConfig(
             fps = display.fps,
             gop = display.gop,
             bitrate = display.bitrate,
+            maxBitrate = display.maxBitrate,
+            minBitrate = display.minBitrate,
         ),
         speaker = audio?.let { DmsdpConfig.Speaker(it.transport, it.codec, it.multiBus, it.aacPhones) },
         mic = mic?.let { DmsdpConfig.Mic(it.profile) },
@@ -145,13 +147,19 @@ class ReceiverConfig(
     )
 
     /**
-     * 认证握手应答里回给手机的车机信息（值都是字符串）：有线连接的连接能力取值、完整车型编号、品牌。
+     * 认证握手应答里回给手机的车机信息（值都是字符串）：连接能力、完整车型编号、品牌，以及
+     * initialConfig 能力键（官方 SDK 经 CarInfo.setCarDetail 上线，见 HiCar 文档「深浅模式」「车机类型」）：
+     * DAY_NIGHT_MODE 支持深浅模式检测（导航元数据依赖它），DRIVING_POSITION 方向盘侧（左舵），
+     * DEVICE_TYPE=4 前装车机（缺省 0=未知，可能影响手机对元数据/桌面能力的判定）。
      * 车型和品牌来自身份资产。
      */
     internal fun authDeviceInfo(): Map<String, String> = linkedMapOf(
         "CONNECT_ABILITY_KEY" to CONNECT_ABILITY_WIRED,
         "CAR_MODE_ID" to identity.host.fullModel,
         "CAR_BRAND" to identity.host.brand,
+        "DEVICE_TYPE" to "4",
+        "DAY_NIGHT_MODE" to "day",
+        "DRIVING_POSITION" to "left",
     )
 
     override fun toString() =
@@ -222,6 +230,10 @@ class DisplaySettings(
     val gop: Int? = null,
     /** 目标码率，bit/s；null 表示不声明。 */
     val bitrate: Int? = null,
+    /** 码率上限，bit/s；null 表示不声明（官方 1028）。 */
+    val maxBitrate: Int? = null,
+    /** 码率下限，bit/s；null 表示不声明（官方 1029）。 */
+    val minBitrate: Int? = null,
 ) {
     override fun toString() = "DisplaySettings(${width}x$height@$fps, dpi=$dpi, density=$density)"
 }

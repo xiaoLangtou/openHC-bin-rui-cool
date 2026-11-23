@@ -4,7 +4,9 @@ import io.github.gcbond.openhc.core.auth.AuthMode
 import io.github.gcbond.openhc.core.common.identity.IdentityAssets
 import kotlinx.serialization.json.JsonObject
 import io.github.gcbond.openhc.core.dmsdp.DmsdpConfig
+import io.github.gcbond.openhc.core.nearby.PairingQrCode
 import io.github.gcbond.openhc.core.session.DisplaySettings
+import io.github.gcbond.openhc.core.session.AudioSettings
 import io.github.gcbond.openhc.core.session.EndReason
 import io.github.gcbond.openhc.core.session.ReceiverConfig
 import io.github.gcbond.openhc.core.session.ReceiverSession
@@ -12,8 +14,14 @@ import io.github.gcbond.openhc.core.session.SessionEvent
 import io.github.gcbond.openhc.core.session.SocketRunner
 import java.io.IOException
 import java.io.PrintStream
+import java.awt.image.BufferedImage
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import javax.imageio.ImageIO
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -58,6 +66,9 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
     @Volatile private var phoneIp: String? = null
     @Volatile private var dataSocket: java.net.Socket? = null
 
+    /** 本机设备 ID（焦点授予 payload 用），启动时从配置里取出。 */
+    @Volatile private var deviceId: String = ""
+
     private class Prepared(val config: ReceiverConfig, val video: VideoFileSink)
 
     /** 返回进程退出码：收到了视频帧为 0，启动失败为 1，会话没出画面为 2。 */
@@ -71,6 +82,7 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
         }
         val video = prepared.video
         session = ReceiverSession(prepared.config, video)
+        deviceId = prepared.config.deviceId
         runner = SocketRunner(session, ::onEvent, SocketRunner.Options(log = { log("[执行器] $it") }))
 
         // Ctrl-C：先让会话按协议收尾（TEARDOWN 等），再等主线程打完统计。
@@ -158,8 +170,9 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
         log("信任库：${trustStore.file}（已配对的手机 ${trustStore.peerCount} 台）")
 
         val config = try {
-            // 实验服务：手机 104 请求掩码 0x31f 里有 1/3/5/9；属性留空，观察手机对声明出的服务的反应。
-            val extra = if (options.extraServices) listOf(1, 3, 5, 9).map { type ->
+            // 实验服务：手机 104 请求掩码 0x31f = 服务 1/2/3/4/8/9，本机只答 4（扬声器）+8（显示），
+            // 1/3/9 从未回应——官方车机会全部回应，缺的服务可能正是元数据通道。5 手机没要，不声明。
+            val extra = if (options.extraServices) listOf(1, 3, 9).map { type ->
                 DmsdpConfig.Service(type, "extra$type", JsonObject(emptyMap()))
             } else emptyList()
             ReceiverConfig(
@@ -180,12 +193,40 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
                 trustStore = trustStore,
                 controlBindHost = options.bindIp,
                 controlLocalFilter = options.localFilter,
+                // 扬声器声明（TCP+AAC，默认多声道分流）：手机 HiCar 只有看到扬声器服务才会把音频路由给车机
+                // （通知条「音频输出」才会出现"car"），音频路由是元数据/歌词推送的前提。数据出口暂用
+                // AudioStreamListener.NONE（收下即丢，不出声），后续接 Mac 播放。
+                audio = AudioSettings(),
                 extraDmsdpServices = extra,
+                pin = options.pin,
             )
         } catch (e: IllegalArgumentException) {
             throw StartupFailure("配置不合法：${e.message}")
         }
         log("本机 deviceId：${config.deviceId.take(4)}…（只显示前 4 位）；画布 ${options.width}x${options.height} @ ${options.fps} fps")
+
+        // 固定连接码时打印扫码配对二维码内容（手机 HiCar「扫一扫」扫它完成配对；只有扫码配对
+        // 手机才把 CAR_MODE_ID 写进配对记录，modelId 白名单特性依赖它）。
+        options.qrOut?.let { out ->
+            val pin = options.pin ?: throw StartupFailure("--qr-out 需要同时给 --pin")
+            val qr = PairingQrCode.build(identity.host, options.bluetooth, pin, supportsUsb = true)
+            val matrix = QRCodeWriter().encode(
+                qr, BarcodeFormat.QR_CODE, 0, 0,
+                mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M, EncodeHintType.MARGIN to 4, EncodeHintType.CHARACTER_SET to "UTF-8"),
+            )
+            val scale = 8
+            val size = matrix.width * scale
+            val image = BufferedImage(size, size, BufferedImage.TYPE_INT_RGB)
+            for (y in 0 until size) for (x in 0 until size) {
+                image.setRGB(x, y, if (matrix.get(x / scale, y / scale)) 0x000000 else 0xFFFFFF)
+            }
+            try {
+                ImageIO.write(image, "png", out.toFile())
+            } catch (e: IOException) {
+                throw StartupFailure("二维码 PNG 写不出去：${e.message}")
+            }
+            log("扫码配对二维码已写入 ${out.toAbsolutePath()}；内容：$qr")
+        }
 
         val carInfo = try {
             config.carInfo()
@@ -251,10 +292,15 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
             }
             is SessionEvent.Diagnostic -> {
                 log("诊断（${event.layer}）：${event.message}")
-                // 实验钩子：数据通道敲门（手机发 module=4 type=1 内容"1"）→ 回"2"，观察 SocketDataChannel 是否建立。
-                if (event.message.contains("UnhandledDeviceData(module=4, type=1, 1 字节，内容：1）")) {
-                    log("[实验] 回应数据通道敲门：module=4 type=1 → \"2\"")
-                    runner.submit { session.sendDeviceData(4, 1, "2".toByteArray()) }
+                // 焦点授予：手机要媒体焦点（module 4 type 1~4，数据=用途号）时，车机按 CarAudioFocus 协议
+                // 回 GAINED（type 1，数据=车机 deviceId UTF-8）。不授予的话手机每隔几十秒重试，
+                // HiCar 媒体管线（含 515 元数据推送）不工作。声明扬声器后焦点记录由 PhoneAudioFocus 消费，
+                // 只在 RawRecord 转储里可见，所以挂在这里。
+                if (event.message.contains("RawRecord(收到 module=4 type=") &&
+                    Regex("RawRecord\\(收到 module=4 type=[1-4] [0-9]+ 字节，UTF-8：[0-9]+）").matches(event.message)
+                ) {
+                    log("[实验] 手机请求音频焦点 → 授予 GAINED（type 1，payload=本机 deviceId）")
+                    runner.submit { session.sendDeviceData(4, 1, deviceId.toByteArray(Charsets.UTF_8)) }
                 }
                 // 硬件管理通道应答器（module=1 type=17，managementsdk 协议）：
                 // 手机问硬件信息（cmdId 1）/网络信息（cmdId 2），必须毫秒级回复，超时手机就放弃了。

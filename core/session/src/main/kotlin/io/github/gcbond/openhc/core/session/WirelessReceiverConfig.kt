@@ -5,6 +5,7 @@ import io.github.gcbond.openhc.core.auth.PinCodes
 import io.github.gcbond.openhc.core.auth.TrustStore
 import io.github.gcbond.openhc.core.common.identity.BluetoothAddress
 import io.github.gcbond.openhc.core.common.identity.IdentityAssets
+import io.github.gcbond.openhc.core.dmsdp.DmsdpConfig
 import io.github.gcbond.openhc.core.nearby.NearbySession
 import io.github.gcbond.openhc.core.nearby.PairingQrCode
 import java.security.SecureRandom
@@ -46,6 +47,8 @@ class WirelessReceiverConfig(
     val timeouts: WirelessTimeouts = WirelessTimeouts(),
     /** WiFi 阶段是否声明扬声器，规则与有线的 [ReceiverConfig.audio] 相同；null（默认）不声明。 */
     val audio: AudioSettings? = null,
+    /** 额外声明的 DMSDP 服务（104 掩码命中时回 102），规则与有线的 [ReceiverConfig.extraDmsdpServices] 相同。 */
+    val extraDmsdpServices: List<DmsdpConfig.Service> = emptyList(),
 ) {
     /** 本机 deviceId（64 位大写十六进制），与有线同一算法。 */
     val deviceId: String
@@ -85,17 +88,45 @@ class WirelessReceiverConfig(
         keyInput = keyInput,
         mediaKeyInput = mediaKeyInput,
         audio = audio,
+        extraDmsdpServices = extraDmsdpServices,
     )
 
     internal fun authConfig(pinCode: String): HiCarAuthConfig =
         HiCarAuthConfig(identity.authService, deviceId, authEnvelopeVersion, pinCode, usbConnection = false)
 
-    /** 认证握手应答里回给手机的车机信息：连接能力（只无线 1，无线和 USB 都支持 3）、完整车型编号、品牌。 */
-    internal fun authDeviceInfo(): Map<String, String> = linkedMapOf(
-        "CONNECT_ABILITY_KEY" to if (supportsUsb) CONNECT_ABILITY_BOTH else CONNECT_ABILITY_WIRELESS,
-        "CAR_MODE_ID" to identity.host.fullModel,
-        "CAR_BRAND" to identity.host.brand,
-    )
+    /**
+     * 认证握手应答里回给手机的车机信息。键名与官方 SDK 完全对齐（吉利 Link 包内 com.huawei.hicarsdk
+     * CarAuthentication.setCarInfo/setCarDetail 反汇编实锤，2026-11-23）：
+     * - CONNECT_ABILITY_KEY：只无线 1，无线和 USB 都支持 3（官方默认就是 3）；
+     * - CAR_MODE_ID：完整车型编号 8 位，手机拆成前 6 位 moduleId + 后 2 位 submodule（即回连
+     *   Intent extras 的 DEVICE_MODULE_ID/SUB_MODULE_ID），是融合桌面磁贴判定链的输入；
+     * - CarBrand/DayNightMode/InputFeatures/PrimaryInput/isOnlyParkAllow：官方 hicar_config.json
+     *   initialConfig 五键原样透传（键名区分大小写，不是旧版反汇编的 DAY_NIGHT_MODE 全大写形）；
+     * - FPS/WIDTH/HEIGHT/BITRATE/CODECS/MIN_BITRATE/MAX_BITRATE/DPI/SCREEN_WIDTH/SCREEN_HEIGHT：
+     *   官方 setCarDetail 十个能力键，值取自本机显示配置（CODECS=1 即 H.264，与官方星瑞配置同值）。
+     */
+    internal fun authDeviceInfo(): Map<String, String> {
+        val bitrate = display.bitrate ?: 15_000_000
+        return linkedMapOf(
+            "CONNECT_ABILITY_KEY" to if (supportsUsb) CONNECT_ABILITY_BOTH else CONNECT_ABILITY_WIRELESS,
+            "CAR_MODE_ID" to identity.host.fullModel,
+            "CarBrand" to identity.host.brand,
+            "DayNightMode" to "day",
+            "InputFeatures" to "7",
+            "PrimaryInput" to "1",
+            "isOnlyParkAllow" to "1",
+            "FPS" to display.fps.toString(),
+            "WIDTH" to display.width.toString(),
+            "HEIGHT" to display.height.toString(),
+            "BITRATE" to bitrate.toString(),
+            "CODECS" to "1",
+            "MIN_BITRATE" to (bitrate / 2).toString(),
+            "MAX_BITRATE" to bitrate.toString(),
+            "DPI" to display.dpi.toString(),
+            "SCREEN_WIDTH" to display.width.toString(),
+            "SCREEN_HEIGHT" to display.height.toString(),
+        )
+    }
 
     override fun toString() = "WirelessReceiverConfig(画布=${display.width}x${display.height}@${display.fps})"
 

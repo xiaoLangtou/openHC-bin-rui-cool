@@ -289,10 +289,20 @@ class RealLayersFlowTest {
         assertEquals(pin, reply.getValue("pin_code").jsonPrimitive.content)
         val info = Json.parseToJsonElement(reply.getValue("data").jsonPrimitive.content).jsonObject
         assertEquals(
-            mapOf("CONNECT_ABILITY_KEY" to "2", "CAR_MODE_ID" to "ABCDEF01", "CAR_BRAND" to "OpenHC 测试"),
+            mapOf(
+                "CONNECT_ABILITY_KEY" to "2",
+                "CAR_MODE_ID" to "ABCDEF01",
+                "CAR_BRAND" to "OpenHC 测试",
+                "DEVICE_TYPE" to "4",
+                "DAY_NIGHT_MODE" to "day",
+                "DRIVING_POSITION" to "left",
+            ),
             info.mapValues { it.value.jsonPrimitive.content },
         )
-        assertEquals(listOf("CONNECT_ABILITY_KEY", "CAR_MODE_ID", "CAR_BRAND"), info.keys.toList())
+        assertEquals(
+            listOf("CONNECT_ABILITY_KEY", "CAR_MODE_ID", "CAR_BRAND", "DEVICE_TYPE", "DAY_NIGHT_MODE", "DRIVING_POSITION"),
+            info.keys.toList(),
+        )
     }
 
     @Test

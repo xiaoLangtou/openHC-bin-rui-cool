@@ -157,12 +157,21 @@ internal class ReconnectTriggers(private val cooldownMillis: Long = DEFAULT_COOL
     /**
      * 一次连接结束（不论扫码还是车机拨的）：用户停的，这次蓝牙连接里回到界面不再拨；投屏过、不是用户停的，重新计次（回到界面会再拨）；
      * 拨号没成不改。
+     *
+     * 2026-11-23 起：投屏过、非用户停止（= 连上后中途断掉）时连冷却一起清掉。原设计里拨号起 60 秒冷却，
+     * 连上投屏 40 秒后断线的话，手机蓝牙再连上/回到界面都会被冷却挡到（「xx 秒前刚拨过」），车主只能干等或手动点连接。
+     * 清掉后手机蓝牙再连上（会话结束时手机通常会断开两条蓝牙链路，之后蓝牙回连是常见事件）就立即自动重拨，
+     * 行驶中的掉线能自动恢复。风暴风险有限：只有投屏过的结束才清，拨号失败（没投过屏）仍受冷却约束；
+     * 重拨成功又断，最多按「断→重拨→断」循环，每轮要过完整认证+入网流程（几十秒），不是紧密循环。
      */
     fun onSessionEnded(address: String, projected: Boolean, stoppedByUser: Boolean) {
         val key = key(address)
         when {
             stoppedByUser -> dialedThisConnection += key
-            projected -> dialedThisConnection.remove(key)
+            projected -> {
+                dialedThisConnection.remove(key)
+                lastDialAt.remove(key)
+            }
         }
     }
 

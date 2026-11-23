@@ -589,6 +589,11 @@ class ReceiverSession internal constructor(
                 is DmsdpEvent.DisplayPortAnnounced -> beginHiSight(o.port, out)
                 // 车辆磁贴（"car"）点击：结束整个连接，界面的状态监听会自动回车机桌面（backToLauncherWhenEnded）。
                 is DmsdpEvent.CarDesktopRequested -> finish(EndReason.CarDesktopRequested(o.detail), out)
+                // 显示服务状态（手机端 x1 的 updateDeviceService）。**不能**当成磁贴点击来结束会话——实车日志
+                // （2026-11-23 19:56 会话 6）实锤：投屏开始 10ms 后手机就自发发来 action=202（serviceType=8，
+                // 与 532 ProjectAction Background:true 同时出现，视频正常继续 6 分钟）；磁贴点击发的是同一条
+                // 报文，无法区分。v22 的「202→回桌面」会让每次投屏一开播就自杀，已撤（2026-11-23 深夜）。
+                // 磁贴的真实判别信号待下次车旁取证（点磁贴抓完整报文序列）。
                 is DmsdpEvent -> diag(SessionLayer.DMSDP, o.toString(), out)
             }
         }

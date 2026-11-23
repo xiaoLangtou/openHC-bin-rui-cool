@@ -82,11 +82,8 @@
     -->
     <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
     <!-- 比亚迪车机「选择禁止后台启动项」对话框：安卓 11 起要声明，才查得到车机上有没有它（设置 → 启动）。 -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.BYD_APPSTARTMANAGEMENT" />
-        </intent>
-    </queries>
+    <!-- <queries> 仅 API 30+ 有意义（BYD 应用启动管理），Android 9 的 PackageParser 不认识该元素、
+         会导致整包 INSTALL_FAILED_INVALID_APK，车机（API 28）上所有包本来可见，直接去掉。 -->
 
     <application
         android:name=".OpenHcApp"

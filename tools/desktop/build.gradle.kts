@@ -13,6 +13,7 @@ application {
 dependencies {
     implementation(project(":core:session"))
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.zxing.core)
 }
 
 // `./gradlew :tools:desktop:run --args=…` 时，相对路径按仓库根目录解析。

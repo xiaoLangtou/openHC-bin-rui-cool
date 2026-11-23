@@ -56,4 +56,6 @@ fun DisplaySettings.withClarity(clarity: VideoClarity): DisplaySettings = Displa
     density = density,
     gop = gop,
     bitrate = clarity.bitrate ?: bitrate,
+    maxBitrate = maxBitrate,
+    minBitrate = minBitrate,
 )

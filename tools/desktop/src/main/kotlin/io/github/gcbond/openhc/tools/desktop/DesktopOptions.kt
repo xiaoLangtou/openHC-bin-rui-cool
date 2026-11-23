@@ -30,6 +30,14 @@ internal class DesktopOptions(
     val durationSeconds: Long?,
     /** 声明手机请求的实验服务（1/3/5/9，空属性），观察数据通道（媒体卡片 515 等）是否建立。 */
     val extraServices: Boolean,
+    /**
+     * 首次配对用的固定连接码（6 位数字），写进二维码给手机 HiCar「扫一扫」扫；null 表示每次随机生成。
+     * 手机只在「扫码配对」时才把 CAR_MODE_ID（modelId）写进配对记录，modelId 白名单特性（融合桌面磁贴、
+     * 元数据推送等）都依赖它——PIN 列表配对永远不带 CAR_MODE_ID（见 OpenHC-诊断与补丁-20261122.md）。
+     */
+    val pin: String?,
+    /** 扫码配对二维码 PNG 输出路径；给了就要求 [pin] 也给。 */
+    val qrOut: Path?,
 ) {
     companion object {
         val USAGE = """
@@ -56,13 +64,15 @@ internal class DesktopOptions(
             |  --local-filter on|off    通配监听时是否只接受连到 --ip 的连接，默认 on；筛选误判时可以关掉
             |  --duration <秒>          运行这么久后自动结束，默认一直运行到会话结束或 Ctrl-C
             |  --extra-services on|off  声明手机请求的实验服务（1/3/5/9），观察媒体卡片数据通道是否建立，默认 off
+            |  --pin <6位数字>          首次配对的固定连接码，用于生成扫码配对二维码；缺省每次随机生成
+            |  --qr-out <文件>          把扫码配对二维码写成 PNG（需要 --pin）
             |  -h, --help               显示本说明
             """.trimMargin()
 
         private val FLAGS = setOf(
             "identity", "trust-dir", "ip", "port", "bt", "video-out", "carinfo-out",
             "width", "height", "fps", "dpi", "density", "gop", "bitrate", "bind-ip", "local-filter", "duration",
-            "extra-services",
+            "extra-services", "pin", "qr-out",
         )
 
         /** 支持 `--名字 值` 和 `--名字=值` 两种写法。 */
@@ -138,6 +148,10 @@ internal class DesktopOptions(
                     "off" -> false
                     else -> throw UsageException("--extra-services 只能是 on 或 off：$raw")
                 },
+                pin = values["pin"]?.takeIf { it.isNotEmpty() }?.also {
+                    if (!it.matches(Regex("\\d{6}"))) throw UsageException("--pin 必须是 6 位数字：$it")
+                },
+                qrOut = path("qr-out"),
             )
         }
     }

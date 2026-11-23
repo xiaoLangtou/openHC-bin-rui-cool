@@ -199,9 +199,10 @@ class RfcommServer(
         /** RFCOMM 一帧通常不到 1 KB，读缓冲给足。 */
         const val READ_BUFFER_BYTES = 4096
 
-        /** 开监听瞬时失败（通道/SDP 记录未释放）的重试次数与基础退避：1s、2s、3s、4s。 */
+        /** 开监听瞬时失败（通道/SDP 记录未释放）的重试次数与基础退避：0.5s、1s、1.5s、2s（2026-11-23 收紧：
+         *  上次会话刚收尾就回连时，等满 1+2+3+4 秒太久；失败原因（系统释放记录）一般亚秒级就绪）。 */
         const val LISTEN_RETRY_LIMIT = 4
-        const val LISTEN_RETRY_DELAY_MS = 1_000L
+        const val LISTEN_RETRY_DELAY_MS = 500L
 
         const val PEER_CLOSED_TEXT = "read return: -1"
 

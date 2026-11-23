@@ -26,6 +26,7 @@ import io.github.gcbond.openhc.connection.DisplayPlan
 import io.github.gcbond.openhc.connection.VideoClarity
 import io.github.gcbond.openhc.connection.withClarity
 import io.github.gcbond.openhc.core.common.identity.HostIdentity
+import io.github.gcbond.openhc.core.dmsdp.DmsdpConfig
 import io.github.gcbond.openhc.core.hisight.AccessUnit
 import io.github.gcbond.openhc.core.hisight.AccessUnitSink
 import io.github.gcbond.openhc.core.hisight.HiSightInput
@@ -53,6 +54,7 @@ import io.github.gcbond.openhc.settings.AudioPreferences
 import io.github.gcbond.openhc.settings.ClarityPreferences
 import io.github.gcbond.openhc.settings.MediaKeyPreferences
 import io.github.gcbond.openhc.settings.WirelessNetworkPreferences
+import kotlinx.serialization.json.JsonObject
 import io.github.gcbond.openhc.settings.WirelessPreferences
 import io.github.gcbond.openhc.trust.FileTrustStore
 import io.github.gcbond.openhc.trust.TrustStoreCorruptException
@@ -202,6 +204,9 @@ class WirelessController(
     /** 正在等界面带到前台再拨（那 1.5 秒里别的入口不拨，免得拨成另一台）。 */
     private var waitingForUi = false
     private var autoRetry: Runnable? = null
+
+    /** 连续「投屏没成就自己断掉」的次数（见 [scheduleAutoRetry]），投屏成功清零。 */
+    private var autoRetryCount = 0
     private var lastWiredActive = false
 
     /**
@@ -520,6 +525,9 @@ class WirelessController(
             return blocked(kind, WirelessNotice.StartFailed("发不了 BLE 广播"), AutoHold.ADVERTISING_UNSUPPORTED)
         }
         val config = try {
+            // extra 服务实验结论（v16/v17）：0004CC 下手机静默收下但无任何后续；000489 下疑似导致手机
+            // 在投影协商阶段反复断连（8/9/11 三个会话同点 abort）。磁贴修复实验回归 v14 稳定形状：
+            // 不声明 extra 服务，只保留 514 主动请求与 RawRecord 日志。
             WirelessReceiverConfig(
                 identity = identity,
                 bluetoothAddress = address,
@@ -716,9 +724,12 @@ class WirelessController(
             if (attempt == null) giveUp()
             return
         }
-        Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why；界面带到前台 $SURFACE_WAIT_MS 毫秒后再拨")
+        Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why；界面带到前台就拨（最多等 $SURFACE_WAIT_MS 毫秒）")
         waitingForUi = true
-        handler.postDelayed({
+        // 等界面带到前台：每 150ms 查一次，界面一出来马上拨（活动恢复一般 100~500ms，原来固定等满 1.5 秒白耗）；
+        // 到上限还查一次，行为与原来一致——没出来就这次不拨（开热点要定位权限，界面不在前台不算数）。
+        val deadline = SystemClock.elapsedRealtime() + SURFACE_WAIT_MS
+        fun probe() {
             waitingForUi = false
             when {
                 attempt != null -> Log.i(TAG, "等界面时已经有连接在进行，不拨了")
@@ -733,7 +744,13 @@ class WirelessController(
                 }
             }
             syncHotspotStandby()
-        }, SURFACE_WAIT_MS)
+        }
+        fun tick() {
+            if (uiVisible()) return probe()
+            if (SystemClock.elapsedRealtime() >= deadline) return probe()
+            handler.postDelayed(::tick, SURFACE_POLL_MS)
+        }
+        tick()
     }
 
     private fun uiVisible(): Boolean = (app as? OpenHcApp)?.uiVisibility?.visible != false
@@ -1051,6 +1068,7 @@ class WirelessController(
             // 投屏开始了才算连成功：记下这台手机，之后「自动连接手机」就会拨它。
             is SessionEvent.VideoStarted -> {
                 current.projected = true
+                autoRetryCount = 0
                 current.phoneAddress?.let { address ->
                     if (wirelessPrefs.rememberPhone(address)) Log.i(TAG, "记下连成功的手机（${MacText.mask(address)}），之后会自动连它")
                 }
@@ -1167,7 +1185,39 @@ class WirelessController(
             releaseForeground()
             return
         }
+        scheduleAutoRetry(current)
         refreshIdleStatus("上一次连接结束")
+    }
+
+    /**
+     * 手机侧抽风自愈：投屏没成、会话自己断掉（手机 abort，2026-11-23 实车连着 3 次：第 3 次死在设备会话、
+     * 第 4/5 次死在投屏协商，都是 SocketException abort，第 6 次手动重拨才成）→ 3 秒后自动重拨同一台手机，
+     * 最多连试 [AUTO_RETRY_MAX] 次，投屏成功即清零。用户停的、投屏过的结束、手机蓝牙已断开都不重试——
+     * 投屏过的结束是有意义的（手机主动断开或车主收工），自动回拨会惹人烦；没投过屏的 abort 才是「手机没准备好」。
+     */
+    private fun scheduleAutoRetry(current: Attempt) {
+        if (current.stopReason != null || current.projected) {
+            if (current.projected) autoRetryCount = 0
+            return
+        }
+        if (current.kind == Kind.AUTO) return
+        val address = current.phoneAddress ?: return
+        if (autoRetryCount >= AUTO_RETRY_MAX) {
+            Log.i(TAG, "已经自动重试 $autoRetryCount 次没成，不再重试（手机蓝牙重新连上车机时再拨）")
+            return
+        }
+        val connected = BluetoothStatus.adapter(app)?.let { phoneConnected(it, address) }
+        if (connected == false) return
+        autoRetryCount++
+        Log.i(TAG, "投屏没成就结束了，$AUTO_RETRY_DELAY_MS 毫秒后自动重拨（第 $autoRetryCount/$AUTO_RETRY_MAX 次）")
+        val retry = Runnable {
+            autoRetry = null
+            autoRetryPending = false
+            beginReconnect(address, "上一次投屏没成，自动重试", preemptWired = false)
+        }
+        autoRetry = retry
+        autoRetryPending = true
+        handler.postDelayed(retry, AUTO_RETRY_DELAY_MS)
     }
 
     // ---------------------------------------------------------------- 前台服务
@@ -1250,6 +1300,13 @@ class WirelessController(
 
         /** 车机主动回连时界面不在前台：带到前台后等这么久再拨（界面一般 1 秒内出来；出不来也照拨）。 */
         const val SURFACE_WAIT_MS = 1_500L
+
+        /** 等界面带到前台的轮询间隔（界面一出来就拨，不用等满 [SURFACE_WAIT_MS]）。 */
+        const val SURFACE_POLL_MS = 150L
+
+        /** 投屏没成就自己断掉后的自动重拨：间隔与连续次数上限（实测手机要抽风 2~3 次才肯连）。 */
+        const val AUTO_RETRY_DELAY_MS = 3_000L
+        const val AUTO_RETRY_MAX = 3
 
         const val TAG = "OpenHC-Wireless"
 

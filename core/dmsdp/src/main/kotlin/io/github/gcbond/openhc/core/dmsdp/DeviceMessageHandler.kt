@@ -41,13 +41,13 @@ internal class DeviceMessageHandler(
                 val service = parseService(body)
                 emit(DmsdpEvent.PeerServiceInfo(service.type, service.id, service.json))
             }
-            CMD_SERVICE_STATUS -> {
-                if (body.size <= 4) throw MalformedMessageException("服务状态 103 缺少动作或服务 JSON")
-                val action = readS32Be(body, 0)
-                val service = parseService(body.copyOfRange(4, body.size))
-                if (!service.json.containsKey("deviceName")) throw MalformedMessageException("服务状态 103 缺少 deviceName")
-                emit(DmsdpEvent.ServiceStatusChanged(action, service.type, service.id, service.json))
-            }
+            CMD_SERVICE_STATUS -> onServiceStatus(body, emit)
+            // HiCar 扩展（命令 231/0xE7）：手机端 updateDeviceService 的服务状态通知，报文形状和
+            // 103 相同（4 字节大端状态码 + 服务 JSON）。手机端反汇编实锤（com.huawei.hicar
+            // ConnectionManager.x1，2026-11-23）：HiCar 应用列表「车辆」磁贴点击 → z0() → x1() →
+            // updateDeviceService(display, 202) = 暂停投屏/回车机 UI；203 = 回 HiCar UI。
+            // 状态码不在 JSON 里（properties/status 都是空对象），就在前 4 字节（线上样本 e7 00 00 00 CA）。
+            CMD_SERVICE_STATUS_NOTIFY -> onServiceStatus(body, emit)
             CMD_SERVICE_REQUEST -> {
                 if (body.size != 4) throw MalformedMessageException("服务请求 104 必须是 4 字节掩码")
                 val mask = readS32Be(body, 0).toLong() and 0xFFFF_FFFFL
@@ -66,6 +66,15 @@ internal class DeviceMessageHandler(
             }
             else -> emit(DmsdpEvent.UnsupportedDeviceCommand(MODULE_DEVICE, command.value, body))
         }
+    }
+
+    /** 103/231 共用：4 字节大端动作码 + 服务 JSON。 */
+    private fun onServiceStatus(body: ByteArray, emit: (DmsdpEvent) -> Unit) {
+        if (body.size <= 4) throw MalformedMessageException("服务状态缺少动作或服务 JSON")
+        val action = readS32Be(body, 0)
+        val service = parseService(body.copyOfRange(4, body.size))
+        if (!service.json.containsKey("deviceName")) throw MalformedMessageException("服务状态缺少 deviceName")
+        emit(DmsdpEvent.ServiceStatusChanged(action, service.type, service.id, service.json))
     }
 
     private fun onDeviceInfo(body: ByteArray, reply: (ByteArray) -> Unit, emit: (DmsdpEvent) -> Unit) {
@@ -102,15 +111,30 @@ internal class DeviceMessageHandler(
                 put("1006", d.videoHeight)
                 put("1012", d.width)
                 put("1013", d.height)
+                // 物理宽高（毫米），官方 CarInfoUtils 公式：像素宽 × 25.4 ÷ DPI（INCH_MM）。
+                if (d.dpi > 0) {
+                    put("1018", Math.round(d.width * 25.4 / d.dpi))
+                    put("1019", Math.round(d.height * 25.4 / d.dpi))
+                }
                 put("1011", d.dpi)
                 put("1015", d.fps)
                 put("1014", d.codec)
                 d.gop?.let { put("1016", it) }
                 d.bitrate?.let { put("1017", it) }
+                // 码率上下限（官方 addVideoProperties 的 1028/1029，>0 才声明）。
+                d.maxBitrate?.takeIf { it > 0 }?.let { put("1028", it) }
+                d.minBitrate?.takeIf { it > 0 }?.let { put("1029", it) }
             }
             // 手机按这个值（设备信息 detail 里的 CAR_MODE_ID）比对 ConvergedLauncherController
             // 白名单，决定 HiCar 应用列表"车辆"磁贴是否可点；必须用白名单内的型号（v10 起 00048900）。
             put("2003", config.host.fullModel)
+            // 能力声明（对齐官方车机 addVideoProperties / convertDeviceInfo）：
+            // 5007 = 支持 USB 投屏（官方按实际状态声明，无线版也声明 true）；5042 = 支持媒体按键
+            // （官方 isAllowMediaButton 时声明 true）；5032 = 官方码表是「支持远程控制」且官方从不声明，
+            // 早期按 syu 版本逆向声明 true——保留观察，暂不动。
+            put("5007", true)
+            put("5042", true)
+            put("5032", true)
         })
     }
 
@@ -191,6 +215,9 @@ internal class DeviceMessageHandler(
         const val CMD_SERVICE_STATUS = 103
         const val CMD_SERVICE_REQUEST = 104
         const val CMD_DISCONNECT_TYPE = 105
+
+        /** HiCar 扩展服务状态通知（0xE7），手机「车辆」磁贴点击的暂停投屏 202 走这里。 */
+        const val CMD_SERVICE_STATUS_NOTIFY = 231
 
         /** module 5 里手机交付 HiSight 端口的命令号：`EA(101) ‖ EA(端口)`。 */
         const val CMD_DISPLAY_PORT = 101

@@ -94,6 +94,10 @@ class DmsdpConfig(
         val gop: Int? = null,
         /** 目标码率，bit/s。 */
         val bitrate: Int? = null,
+        /** 码率上限，bit/s；null 不声明（官方 1028）。 */
+        val maxBitrate: Int? = null,
+        /** 码率下限，bit/s；null 不声明（官方 1029）。 */
+        val minBitrate: Int? = null,
     ) {
         init {
             for ((name, value) in listOf(

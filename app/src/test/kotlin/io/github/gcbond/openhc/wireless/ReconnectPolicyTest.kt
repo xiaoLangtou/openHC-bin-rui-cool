@@ -110,14 +110,14 @@ class ReconnectPolicyTest {
     fun projectedSessionEndingByItselfRearmsTheUiDial() {
         val t = ReconnectTriggers(cooldownMillis = 60_000)
         t.dialNow(t.onUiShown(phone, known, 0), 0)
-        // 投屏过、手机那边断了（不是用户停的）：回到界面再拨，冷却照旧。
+        // 投屏过、手机那边断了（不是用户停的）：冷却一起清掉，回到界面立即重拨（2026-11-23：行驶中断连自动恢复，
+        // 原来要等满 60 秒冷却，车主只能干等）。手机蓝牙再连上（700_000 处那步）同样立即拨。
         t.onSessionEnded(phone, projected = true, stoppedByUser = false)
-        assertIs<Decision.Skip>(t.onUiShown(phone, known, 30_000), "冷却还在")
-        assertEquals(Decision.Dial(phone), t.onUiShown(phone, known, 61_000))
-        // 拨号没投屏就失败：不重新计次。
-        t.dialNow(t.onUiShown(phone, known, 61_000), 61_000)
+        assertEquals(Decision.Dial(phone), t.onUiShown(phone, known, 30_000))
+        // 拨号没投屏就失败：不重新计次，冷却照旧（防连环误拨）。
+        t.dialNow(t.onUiShown(phone, known, 30_000), 30_000)
         t.onSessionEnded(phone, projected = false, stoppedByUser = false)
-        assertIs<Decision.Skip>(t.onUiShown(phone, known, 200_000))
+        assertIs<Decision.Skip>(t.onUiShown(phone, known, 200_000), "冷却还在（30_000 拨的，60 秒冷却内）")
     }
 
     @Test

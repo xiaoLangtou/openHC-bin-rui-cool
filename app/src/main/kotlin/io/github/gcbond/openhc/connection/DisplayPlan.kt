@@ -100,6 +100,9 @@ object DisplayPlan {
             dpi = dpi,
             density = dpi / BASE_DPI,
             gop = keyFrameInterval(fps),
+            // 码率上下限（官方 1028/1029）：对齐官方车机 addVideoProperties，随清晰度目标码率（1017）一起声明。
+            maxBitrate = VideoClarity.MAX_BITRATE,
+            minBitrate = VideoClarity.MIN_BITRATE,
         )
     }
 

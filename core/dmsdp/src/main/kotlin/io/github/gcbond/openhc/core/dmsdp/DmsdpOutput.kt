@@ -228,10 +228,33 @@ sealed class DmsdpEvent : DmsdpOutput {
     }
 
     /**
+     * 设备记录（`$` 记录）原始全量转储（调试用）：收到的每条记录在解析/分发之前、发出的每条记录在编码之后
+     * 都原样交出，不经过任何解析分支的过滤——防止数据漏在没实现的 module/type 组合里看不见。
+     * 十六进制永远全量输出，可打印内容额外给 UTF-8 预览。
+     */
+    class RawRecord(val sent: Boolean, val module: Long, val type: Int, val data: ByteArray) : DmsdpEvent() {
+        override fun toString(): String {
+            val text = runCatching { String(data, Charsets.UTF_8) }.getOrDefault("")
+            val printable = text.isNotEmpty() && text.all { it == '\n' || it == '\r' || it == '\t' || it.code >= 0x20 }
+            return "RawRecord(" + (if (sent) "发出" else "收到") + " module=$module type=$type ${data.size} 字节" +
+                (if (printable) "，UTF-8：${text.take(400).replace("\n", " ")}）" else "）hex：${data.toHex()}）")
+        }
+    }
+
+    /**
      * 管理通道（module 1）JSON 消息的解析结果（见 [ManagementMessages]）：只是通知，会话继续。
      */
     class ManagementParsed(val type: Int, val summary: String) : DmsdpEvent() {
         override fun toString() = "ManagementParsed(type=$type, $summary)"
+    }
+
+    /**
+     * 手机推送的音频元数据（管理通道 type 515 的 MediaData，见 [ManagementMessages]）：
+     * 歌名/歌手/专辑/播放状态/进度，HarmonyOS 6.0+ 华为音乐与 QQ 音乐带 Lyric（标准 LRC 文本）。
+     * 上层（桌面 HMI / 未来的 EAS MediaCenter 喂数）从这里取数据。
+     */
+    class MediaDataReceived(val media: JsonObject) : DmsdpEvent() {
+        override fun toString() = "MediaDataReceived(${media.keys.joinToString()})"
     }
 
     /**

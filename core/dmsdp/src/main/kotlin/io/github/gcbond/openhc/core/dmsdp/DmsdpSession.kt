@@ -1,6 +1,7 @@
 package io.github.gcbond.openhc.core.dmsdp
 
 import io.github.gcbond.openhc.core.common.MalformedMessageException
+import io.github.gcbond.openhc.core.common.codec.JsonCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamListener
 import io.github.gcbond.openhc.core.dmsdp.audio.CarAudioFocus
 import io.github.gcbond.openhc.core.dmsdp.audio.MicStreamListener
@@ -55,6 +56,7 @@ class DmsdpSession(
 
     // 扬声器的 2102 要看连上的是哪台手机，所以在回服务声明时才问扬声器（它在下面才建，用到时早已建好）。
     private val devices = DeviceMessageHandler(config) { speaker?.declaredProfile() ?: "" }
+    private var metadataRequested = false
     private val files = config.fileShare?.let { IncomingFileTransfer(config, it) }
     private val speaker = config.speaker?.let {
         SpeakerSession(it, cipher, audioListener, ::sendSpeakerText) { nextCSeq++ }
@@ -503,6 +505,8 @@ class DmsdpSession(
     }
 
     private fun onDeviceRecord(record: DeviceRecord, nowMillis: Long, out: Outputs) {
+        // 原始记录全量转储：在任何解析/分发之前，每条收到的记录都原样打出来（排查未知通道）。
+        out.event(DmsdpEvent.RawRecord(sent = false, module = record.module, type = record.type, data = record.data))
         val deviceData = record.type == DeviceMessageHandler.TYPE_DEVICE_DATA
         when {
             deviceData && record.module == DeviceMessageHandler.MODULE_DEVICE -> devices.handle(
@@ -515,6 +519,18 @@ class DmsdpSession(
                         speaker?.onPeerDevice(event.deviceId, name)
                     }
                     out.event(event)
+                    // 服务请求 104 = 连接协商完成。此刻向手机请求应用元数据（华为官方协议 dataType=514）：
+                    // 手机不会主动推音频元数据/歌词，必须车机先请求（2026-11-23 实弹验证）。
+                    if (event is DmsdpEvent.ServicesRequested && !metadataRequested) {
+                        metadataRequested = true
+                        sendRecord(
+                            MODULE_MANAGEMENT,
+                            ManagementMessages.METADATA_REQUEST_TYPE,
+                            JsonCodec.encodeToUtf8(ManagementMessages.metadataRequest(config.host.fullModel)),
+                            out,
+                        )
+                        out.event(DmsdpEvent.ManagementParsed(ManagementMessages.METADATA_REQUEST_TYPE, "已请求应用元数据（RequestAAData=7，RequestCaller=${config.host.fullModel}）"))
+                    }
                 },
             )
             deviceData && record.module == DeviceMessageHandler.MODULE_DISPLAY -> {
@@ -550,12 +566,16 @@ class DmsdpSession(
             record.module == MODULE_MANAGEMENT && ManagementMessages.accepts(record.type) -> {
                 when (val parsed = ManagementMessages.parse(record.type, record.data)) {
                     null -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
-                    else ->
+                    else -> {
+                        // 515 音频元数据要求回执（{"MediaDataResp":{"RespCode":100000}}），不回手机可能停推。
+                        parsed.reply?.let { sendRecord(MODULE_MANAGEMENT, record.type, JsonCodec.encodeToUtf8(it), out) }
+                        parsed.mediaData?.let { out.event(DmsdpEvent.MediaDataReceived(it)) }
                         if (parsed.carDesktop) {
                             out.event(DmsdpEvent.CarDesktopRequested(parsed.summary))
                         } else {
                             out.event(DmsdpEvent.ManagementParsed(parsed.type, parsed.summary))
                         }
+                    }
                 }
             }
             else -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
@@ -595,6 +615,8 @@ class DmsdpSession(
     }
 
     private fun sendRecord(module: Long, type: Int, data: ByteArray, out: Outputs) {
+        // 发出的记录同样全量转储（自动应答不发日志的话，双向对照就断了）。
+        out.event(DmsdpEvent.RawRecord(sent = true, module = module, type = type, data = data))
         val record = DeviceRecords.encode(module, type, data)
         out.send(DmsdpChannel.CONTROL, ControlFrames.encode(ControlFrames.FLAG_ENCRYPTED, cipher.seal(random, record)))
     }
