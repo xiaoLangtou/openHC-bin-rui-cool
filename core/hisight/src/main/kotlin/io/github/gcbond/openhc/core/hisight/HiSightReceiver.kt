@@ -68,6 +68,7 @@ class HiSightReceiver(
     private var started = false
     private var cryptoReady = false
     private var optionsReceived = false
+    private var optionsSkipNoted = false
     private var lastCseq = 0
     private var setup: MediaSetup? = null
     private var videoConnected = false
@@ -327,7 +328,7 @@ class HiSightReceiver(
 
     /** 能力查询；空正文的 GET 是手机的保活，同样回 200。 */
     private fun handleGetParameter(message: RtspMessage, out: MutableList<HiSightOutput>) {
-        requireNegotiationReady(message)
+        requireNegotiationReady(message, out)
         val body = capabilities.responseBody(message.body)
         out += sendControl(RtspTemplates.getParameterOk(message.cseq, body))
     }
@@ -344,7 +345,7 @@ class HiSightReceiver(
             terminate(HiSightEndReason.PEER_TEARDOWN, out, sendTeardown = true, releaseInputs = true)
             return
         }
-        requireNegotiationReady(message)
+        requireNegotiationReady(message, out)
         if (trigger == null) {
             if (setup != null || SETUP in pending.values) throw MalformedMessageException("SETUP 之后不支持重新协商能力")
             capabilities.select(fields)
@@ -418,8 +419,16 @@ class HiSightReceiver(
         out += HiSightOutput.Ended(reason)
     }
 
-    private fun requireNegotiationReady(message: RtspMessage) {
-        if (!cryptoReady || !optionsReceived) throw MalformedMessageException("能力请求早于加密与 OPTIONS 协商")
+    /**
+     * 能力请求要在加密选择之后。OPTIONS 不强求：有的手机（2026-11 两份报告，鸿蒙 4.2 和 MagicOS）回完加密选择的 200 后
+     * 不发 OPTIONS，直接发能力请求；照常应答，第一次遇到时记一条说明。之后再来的 OPTIONS 仍按正常流程回。
+     */
+    private fun requireNegotiationReady(message: RtspMessage, out: MutableList<HiSightOutput>) {
+        if (!cryptoReady) throw MalformedMessageException("能力请求早于加密协商")
+        if (!optionsReceived && !optionsSkipNoted) {
+            optionsSkipNoted = true
+            out += HiSightOutput.Note("手机没发 OPTIONS，加密选择之后直接发了 ${RtspParser.requestMethod(message.firstLine)}，照常应答")
+        }
         if (message.body.isNotEmpty() && !message.isTextParameters) {
             throw MalformedMessageException("能力正文缺少 text/parameters 类型")
         }
