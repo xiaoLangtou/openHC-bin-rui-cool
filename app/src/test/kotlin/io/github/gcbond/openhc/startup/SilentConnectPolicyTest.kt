@@ -91,23 +91,19 @@ class SilentConnectPolicyTest {
     }
 
     @Test
-    fun wirelessWaitStandsByOnlyForReasonsThatResolveThemselves() {
+    fun wirelessStandsByWhenAutoConnectIsReady() {
         val route = BootRoute.SILENT_WIRELESS
-        assertEquals(SilentCheck.WAITING, SilentConnectPolicy.check(route, snapshot(wirelessWaiting = true), deadlineReached = false))
         assertEquals(SilentCheck.PENDING, SilentConnectPolicy.check(route, snapshot(), deadlineReached = false), "还没判断过")
         assertEquals(SilentCheck.OPEN_UI, SilentConnectPolicy.check(route, snapshot(), deadlineReached = true))
-        // 车机开机时蓝牙常比应用晚：先接着看，到点就待命（本进程收到蓝牙打开会接着进入等待）。
+        // 都准备好了：待命，等手机蓝牙连上时系统把本应用叫起来。
+        assertEquals(SilentCheck.STANDBY, SilentConnectPolicy.check(route, snapshot(hold = AutoHold.READY), deadlineReached = false))
+        // 车机开机时蓝牙常比应用晚：先接着看，到点就待命。
         assertEquals(SilentCheck.PENDING, SilentConnectPolicy.check(route, snapshot(hold = AutoHold.BLUETOOTH_OFF), deadlineReached = false))
         assertEquals(SilentCheck.STANDBY, SilentConnectPolicy.check(route, snapshot(hold = AutoHold.BLUETOOTH_OFF), deadlineReached = true))
-        // 只开了「蓝牙连上自动连接」：等手机蓝牙连上时系统叫醒，不用界面。
-        assertEquals(
-            SilentCheck.STANDBY,
-            SilentConnectPolicy.check(route, snapshot(hold = AutoHold.DISABLED, connectOnBluetooth = true), deadlineReached = false),
-        )
-        assertEquals(SilentCheck.OPEN_UI, SilentConnectPolicy.check(route, snapshot(hold = AutoHold.DISABLED), deadlineReached = false))
+        // 只有界面能补上的：打开界面，由首页说明。
         for (hold in listOf(
-            AutoHold.NO_PAIRED_PHONE, AutoHold.BLUETOOTH_ADDRESS_MISSING, AutoHold.FOREGROUND_UNAVAILABLE,
-            AutoHold.PERMISSIONS_MISSING, AutoHold.ADVERTISING_UNSUPPORTED, AutoHold.IDENTITY_MISSING, AutoHold.START_FAILED,
+            AutoHold.NO_KNOWN_PHONE, AutoHold.OVERLAY_MISSING, AutoHold.DISABLED, AutoHold.BLUETOOTH_ADDRESS_MISSING,
+            AutoHold.PERMISSIONS_MISSING, AutoHold.IDENTITY_MISSING, AutoHold.START_FAILED,
         )) {
             assertEquals(SilentCheck.OPEN_UI, SilentConnectPolicy.check(route, snapshot(hold = hold), deadlineReached = false), "$hold")
         }
@@ -208,8 +204,7 @@ class SilentConnectPolicyTest {
         wiredBlocked: Boolean = false,
         wirelessWaiting: Boolean = false,
         hold: AutoHold? = null,
-        connectOnBluetooth: Boolean = false,
-    ) = SilentSnapshot(wiredWaiting, wiredBlocked, wirelessWaiting, hold, connectOnBluetooth)
+    ) = SilentSnapshot(wiredWaiting, wiredBlocked, wirelessWaiting, hold)
 
     private fun SilentSurfaceTracker.see(
         wired: Phase = Phase.IDLE,

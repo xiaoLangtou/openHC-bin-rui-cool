@@ -2,6 +2,7 @@ package io.github.gcbond.openhc.ui
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -37,9 +41,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -48,6 +54,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.gcbond.openhc.R
 
 // 首页和设置页共用的控件。全部自己画（不用系统开关、单选框），车机主题下样子才可控。
 
@@ -344,6 +351,10 @@ internal fun RowNote(text: String, warn: Boolean = true, onClick: (() -> Unit)? 
     )
 }
 
+/**
+ * 行里的名称和文字：解释性的文字（说明、非警告的附注）收进标题后的「?」，点开才显示；
+ * 警告和可点的附注照常显示，免得车主漏看要处理的事。
+ */
 @Composable
 private fun RowTexts(
     title: String,
@@ -353,10 +364,63 @@ private fun RowTexts(
     onNoteClick: (() -> Unit)?,
     modifier: Modifier,
 ) {
+    val noteInHelp = note != null && !noteWarn && onNoteClick == null
+    val help = listOfNotNull(description, note.takeIf { noteInHelp }).joinToString("\n").ifEmpty { null }
     Column(modifier) {
-        RowTitle(title)
-        if (description != null) RowDescription(description, Modifier.padding(top = 2.dp))
-        if (note != null) RowNote(note, noteWarn, onNoteClick)
+        RowHeader(title, help)
+        if (note != null && !noteInHelp) RowNote(note, noteWarn, onNoteClick)
+    }
+}
+
+/**
+ * 行的名称；有说明时名称后面跟一个「?」：说明平时收起，点「?」展开、再点收起（每行各自记）。
+ * 「?」自己可点，点它不会触发整行的开关或跳转。
+ */
+@Composable
+internal fun RowHeader(title: String, help: String?, modifier: Modifier = Modifier) {
+    var shown by rememberSaveable(help) { mutableStateOf(false) }
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RowTitle(title, Modifier.weight(1f, fill = false))
+            if (help != null) HelpButton(shown) { shown = !shown }
+        }
+        if (help != null && shown) RowDescription(help, Modifier.padding(top = 2.dp))
+    }
+}
+
+/** 「?」按钮：圆圈里一个问号，展开时填蓝。可点区域比圆圈大一圈，车上好点。 */
+@Composable
+private fun HelpButton(shown: Boolean, onClick: () -> Unit) {
+    val compact = LocalCompact.current
+    val label = stringResource(R.string.row_help)
+    val state = stringResource(if (shown) R.string.row_help_shown else R.string.row_help_hidden)
+    Box(
+        Modifier
+            .padding(start = 4.dp)
+            .size(if (compact) 28.dp else 32.dp)
+            .clip(CircleShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = label
+                stateDescription = state
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(if (compact) 18.dp else 20.dp)
+                .clip(CircleShape)
+                .background(if (shown) Palette.On else Color.Transparent)
+                .border(1.dp, if (shown) Palette.On else Palette.Muted, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "?",
+                style = UiType.rowDesc(compact).copy(fontWeight = FontWeight.Bold, lineHeight = UiType.rowDesc(compact).fontSize),
+                color = if (shown) Color.White else Palette.Muted,
+                maxLines = 1,
+            )
+        }
     }
 }
 

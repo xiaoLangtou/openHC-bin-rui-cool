@@ -7,7 +7,7 @@ import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
-import android.util.Log
+import io.github.gcbond.openhc.platform.log.Log
 import java.net.Inet4Address
 
 /**

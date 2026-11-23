@@ -19,8 +19,8 @@ import java.util.UUID
  */
 
 internal interface WirelessLayers {
-    /** 手机连上蓝牙控制通道时创建。 */
-    fun bluetoothNearby(): BluetoothNearbyLayer
+    /** 蓝牙控制通道连上时创建：手机连上来的车机是应答方，车机主动回连时 [initiator] 为 true。 */
+    fun bluetoothNearby(initiator: Boolean): BluetoothNearbyLayer
 
     /** 手机连上认证子通道时创建；[pinCode] 是二维码和屏幕上的连接码。 */
     fun auth(pinCode: String): AuthLayer
@@ -45,6 +45,16 @@ internal sealed class BluetoothOutput {
     class PeerMac(val mac: String) : BluetoothOutput()
     object PeerBusy : BluetoothOutput()
 
+    /** 车机主动回连：手机同意开认证子通道，[port] 是它新开的 RFCOMM 通道号，[uuid] 是它登记的服务 UUID（没带为 null）。 */
+    class AuthChannelReady(val port: Int, val uuid: UUID?) : BluetoothOutput() {
+        override fun toString() = "AuthChannelReady(通道 $port)"
+    }
+
+    /** 车机主动回连：手机没同意开认证子通道。 */
+    class AuthChannelRejected(val status: Int) : BluetoothOutput() {
+        override fun toString() = "AuthChannelRejected(状态 $status)"
+    }
+
     /** 不影响流程的事件，[text] 可以直接写日志。 */
     class Note(val text: String) : BluetoothOutput()
 }
@@ -54,6 +64,9 @@ internal interface BluetoothNearbyLayer {
     fun start(nowMillis: Long): List<BluetoothOutput>
     fun feed(data: ByteArray, offset: Int, length: Int): List<BluetoothOutput>
     fun onTick(nowMillis: Long): List<BluetoothOutput>
+
+    /** 车机主动回连：握手完成后请手机开认证子通道，[tag] 是业务标签（手机设备名的 UTF-8）。 */
+    fun requestAuthChannel(tag: ByteArray): List<BluetoothOutput>
 
     /** 子通道要监听的服务 UUID。 */
     fun rfcommUuid(request: BluetoothOutput.SocketRequest): UUID
@@ -70,10 +83,10 @@ internal class ProductionWirelessLayers(
     private val config: WirelessReceiverConfig,
     private val audio: AudioStreamListener = AudioStreamListener.NONE,
 ) : WirelessLayers {
-    override fun bluetoothNearby(): BluetoothNearbyLayer = BluetoothNearbyAdapter(
+    override fun bluetoothNearby(initiator: Boolean): BluetoothNearbyLayer = BluetoothNearbyAdapter(
         NearbySession(
             config.identity.host, config.identity.nearbyKeys, config.bluetoothAddress, config.random,
-            NearbyLink.BLUETOOTH,
+            NearbyLink.BLUETOOTH, initiator,
         ),
     )
 
@@ -110,6 +123,8 @@ internal class BluetoothNearbyAdapter(private val session: NearbySession) : Blue
 
     override fun onTick(nowMillis: Long) = convert(session.onTick(nowMillis))
 
+    override fun requestAuthChannel(tag: ByteArray) = convert(session.requestAuthChannel(tag))
+
     override fun rfcommUuid(request: BluetoothOutput.SocketRequest): UUID =
         NearbySession.rfcommServiceUuid(request.handle as NearbyEvent.SocketRequested)
 
@@ -142,6 +157,8 @@ internal class BluetoothNearbyAdapter(private val session: NearbySession) : Blue
                 BluetoothOutput.DataChannelResult(action.accepted, action.result, action.frequencyMhz)
             is NearbyEvent.WifiPeerAddress -> BluetoothOutput.PeerMac(action.address)
             NearbyEvent.WifiPeerBusy -> BluetoothOutput.PeerBusy
+            is NearbyEvent.AuthChannelReady -> BluetoothOutput.AuthChannelReady(action.port, action.uuid?.let(::uuidOf))
+            is NearbyEvent.AuthChannelRejected -> BluetoothOutput.AuthChannelRejected(action.status)
             // 其余事件（自动拒绝、未处理条目、丢弃的数据等）的 toString 都不含设备标识。
             is NearbyEvent -> BluetoothOutput.Note(action.toString())
         }
@@ -150,5 +167,14 @@ internal class BluetoothNearbyAdapter(private val session: NearbySession) : Blue
     private companion object {
         /** 建 socket 请求的协议能力位 bit0 = TCP；蓝牙通道上不含 TCP 的请求是要开 RFCOMM 子通道。 */
         const val PROTOCOL_TCP = 1
+
+        /** 16 字节大端 UUID（nearby 层已经保证长度）。 */
+        fun uuidOf(raw: ByteArray): UUID {
+            var high = 0L
+            var low = 0L
+            for (i in 0 until 8) high = (high shl 8) or (raw[i].toLong() and 0xFF)
+            for (i in 8 until 16) low = (low shl 8) or (raw[i].toLong() and 0xFF)
+            return UUID(high, low)
+        }
     }
 }

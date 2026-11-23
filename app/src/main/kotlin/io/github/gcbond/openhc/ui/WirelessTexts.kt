@@ -34,7 +34,7 @@ internal fun wirelessPhaseTitle(state: WirelessUiState): String = stringResource
 
 @Composable
 internal fun wirelessHint(state: WirelessUiState): String {
-    state.step?.let { return stringResource(stepHint(it)) }
+    state.step?.let { return stringResource(stepHint(it, state.direct)) }
     return when (state.phase) {
         WirelessPhase.IDLE -> stringResource(R.string.wireless_hint_idle)
         WirelessPhase.PREPARING -> stringResource(R.string.wireless_hint_preparing)
@@ -56,14 +56,16 @@ internal fun wirelessHint(state: WirelessUiState): String {
     }
 }
 
-private fun stepHint(step: WirelessStep): Int = when (step) {
+/** [direct]：这次手机加入的是 WiFi 直连组，WiFi 那几步换成直连的说法。 */
+private fun stepHint(step: WirelessStep, direct: Boolean): Int = when (step) {
     WirelessStep.BLUETOOTH_HANDSHAKE -> R.string.wireless_hint_bt_handshake
     WirelessStep.WAITING_AUTH -> R.string.wireless_hint_waiting_auth
+    WirelessStep.CONFIRM_ON_PHONE -> R.string.wireless_hint_confirm_on_phone
     WirelessStep.AUTH_PAIRING -> R.string.wireless_hint_auth_pairing
     WirelessStep.AUTH_TRUSTED -> R.string.wireless_hint_auth_trusted
-    WirelessStep.NEGOTIATING_WIFI -> R.string.wireless_hint_negotiating_hotspot
-    WirelessStep.SENDING_NETWORK -> R.string.wireless_hint_sending_hotspot
-    WirelessStep.WAITING_PHONE_JOIN -> R.string.wireless_hint_waiting_join_hotspot
+    WirelessStep.NEGOTIATING_WIFI -> if (direct) R.string.wireless_hint_negotiating_direct else R.string.wireless_hint_negotiating_hotspot
+    WirelessStep.SENDING_NETWORK -> if (direct) R.string.wireless_hint_sending_direct else R.string.wireless_hint_sending_hotspot
+    WirelessStep.WAITING_PHONE_JOIN -> if (direct) R.string.wireless_hint_waiting_join_direct else R.string.wireless_hint_waiting_join_hotspot
     WirelessStep.WIFI_HANDSHAKE -> R.string.wireless_hint_wifi_handshake
     WirelessStep.DEVICE_SESSION -> R.string.wireless_hint_device_session
     WirelessStep.WAITING_PROJECTION -> R.string.wireless_hint_waiting_projection
@@ -88,7 +90,7 @@ internal fun wirelessNoticeText(notice: WirelessNotice): String = when (notice) 
     is WirelessNotice.TrustStoreCorrupt -> stringResource(R.string.notice_trust_corrupt, notice.reason)
     is WirelessNotice.TrustStoreUnavailable -> stringResource(R.string.notice_trust_unavailable, notice.reason)
     is WirelessNotice.StartFailed -> stringResource(R.string.notice_start_failed, notice.reason)
-    is WirelessNotice.Ended -> endedText(notice.cause)
+    is WirelessNotice.Ended -> endedText(notice.cause, notice.direct)
 }
 
 @Composable
@@ -106,21 +108,21 @@ private fun permissionNames(permissions: List<String>): String {
 }
 
 @Composable
-private fun endedText(cause: WirelessEndCause): String {
+private fun endedText(cause: WirelessEndCause, direct: Boolean): String {
     val reason = (cause as? WirelessEndCause.Session)?.reason
     // WiFi 段的结束与有线相同，沿用有线的说法。
     if (reason is WirelessEndReason.Wired) return noticeText(Notice.Ended(EndCause.Session(reason.reason)))
     val text = when (cause) {
         WirelessEndCause.UserStop -> stringResource(R.string.end_user_stop)
         is WirelessEndCause.Failure -> stringResource(R.string.end_failure, cause.message)
-        is WirelessEndCause.Session -> wirelessEndText(cause.reason)
+        is WirelessEndCause.Session -> wirelessEndText(cause.reason, direct)
     }
     return stringResource(R.string.wireless_notice_ended, text)
 }
 
 /** 常见原因给一句好懂的话；会话层自带的说明已经是中文、不含密钥和设备标识，放在括号里。 */
 @Composable
-private fun wirelessEndText(reason: WirelessEndReason): String = when (reason) {
+private fun wirelessEndText(reason: WirelessEndReason, direct: Boolean): String = when (reason) {
     WirelessEndReason.LocalStop -> stringResource(R.string.end_user_stop)
     is WirelessEndReason.Wired -> reason.toString()
     is WirelessEndReason.AuthFailed -> when (reason.failure) {
@@ -133,11 +135,13 @@ private fun wirelessEndText(reason: WirelessEndReason): String = when (reason) {
             SessionStep.BLUETOOTH -> R.string.wireless_end_step_bluetooth
             SessionStep.AUTH -> R.string.wireless_end_step_auth
             SessionStep.NEGOTIATION -> R.string.wireless_end_step_negotiation
-            SessionStep.WIFI_NETWORK -> R.string.wireless_end_step_hotspot
-            SessionStep.PHONE_JOIN -> R.string.wireless_end_step_join_hotspot
+            SessionStep.WIFI_NETWORK -> if (direct) R.string.wireless_end_step_direct else R.string.wireless_end_step_hotspot
+            SessionStep.PHONE_JOIN -> if (direct) R.string.wireless_end_step_join_direct else R.string.wireless_end_step_join_hotspot
         },
         reason.detail,
     )
+    is WirelessEndReason.ReconnectFailed ->
+        if (reason.needsPairing) stringResource(R.string.wireless_end_reconnect_pairing) else stringResource(R.string.wireless_end_reconnect, reason.detail)
     is WirelessEndReason.InternalError -> stringResource(R.string.wireless_end_internal, reason.message)
 }
 
@@ -151,9 +155,13 @@ internal fun wirelessBeaconText(status: BeaconStatus): String? = when (status) {
     BeaconStatus.Stopped -> null
 }
 
-/** 自动回连没在等的原因（无线页空闲时一行说明）；开关关着不说。 */
+/** 「自动连接手机」现在能不能起作用（无线页空闲时一行说明）；开关关着不说。 */
 @Composable
 internal fun wirelessAutoHoldText(hold: AutoHold): String? = when (hold) {
+    AutoHold.READY -> stringResource(R.string.wireless_auto_hold_ready)
+    AutoHold.NO_KNOWN_PHONE -> stringResource(R.string.wireless_auto_hold_no_known)
+    AutoHold.OVERLAY_MISSING -> stringResource(R.string.wireless_auto_hold_overlay)
+    AutoHold.UI_NOT_SHOWN -> stringResource(R.string.wireless_auto_hold_ui_not_shown)
     AutoHold.WIRED_ONLY -> stringResource(R.string.wireless_auto_hold_wired_only)
     AutoHold.DISABLED -> null
     AutoHold.PAUSED_BY_USER -> stringResource(R.string.wireless_auto_hold_paused)

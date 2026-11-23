@@ -268,12 +268,19 @@ class HiSightReceiver(
         }
     }
 
-    /** 手机的 ANNOUNCE 只能选 aes128ctr / version 1；明文回 200 之后两个方向都切到 AES-CTR。 */
+    /**
+     * 手机的 ANNOUNCE 选加密方式：正文里 `encrypt_description` 那一行，`encrypt_list` 里要有 aes128ctr，`version` 写了就得是 1；
+     * 明文回 200 之后两个方向都切到 AES-CTR。
+     *
+     * 纯血鸿蒙发的正好一行：`encrypt_description: encrypt_list=aes128ctr;version=1` 加 CRLF。鸿蒙 4.x 的手机按「正好一行」
+     * 的旧规则会被拒（2026-11 多份报告，原文没拿到），所以行数、换行符、结尾换行、多出来的字段和 `encrypt_list` 写成列表都放宽，
+     * 不是标准格式时把正文交出来写日志（[HiSightOutput.Note]）；仍然拒绝时把正文带进报错（屏幕上的「协议错误」里能看到）。
+     */
     private fun handleAnnounce(message: RtspMessage, out: MutableList<HiSightOutput>, wallClockMillis: Long) {
         if (cryptoReady || !message.isTextParameters) {
             throw MalformedMessageException("ANNOUNCE 重复或类型不是 text/parameters")
         }
-        if (message.body.any { it < 0 }) throw MalformedMessageException("加密选择正文含非 ASCII 字节")
+        if (message.body.any { it < 0 }) throw MalformedMessageException("加密选择正文含非 ASCII 字节（${message.body.size} 字节）")
         val text = String(message.body, Charsets.US_ASCII)
         // 容错（见 issue #4/#10/#11）：部分手机只发 LF、或正文末尾多一个空行。
         // 14.2.0.355 实测还会在正文里夹带别的参数行（曾致「加密选择必须是单独一行」断连）。
@@ -283,21 +290,25 @@ class HiSightReceiver(
             val colon = it.indexOf(':')
             colon >= 0 && ParameterText.trimSpaceTab(it.substring(0, colon)) == "encrypt_description"
         }
-        if (candidates.isEmpty()) throw MalformedMessageException("加密选择缺少 encrypt_description")
-        if (candidates.size > 1) throw MalformedMessageException("加密选择出现多行 encrypt_description")
+        if (candidates.isEmpty()) throw MalformedMessageException("加密选择缺少 encrypt_description：${visible(text)}")
+        if (candidates.size > 1) throw MalformedMessageException("加密选择出现多行 encrypt_description：${visible(text)}")
         val line = candidates[0]
         val fields = HashMap<String, String>()
         for (item in ParameterText.trimSpaceTab(line.substring(line.indexOf(':') + 1)).split(";")) {
             val eq = item.indexOf('=')
-            val name = if (eq >= 0) item.substring(0, eq) else item
-            if (eq < 0 || name in fields) throw MalformedMessageException("加密选择字段缺失或重复")
-            fields[name] = item.substring(eq + 1)
+            if (eq < 0) continue
+            val name = ParameterText.trimSpaceTab(item.substring(0, eq))
+            // 不用 putIfAbsent：低版本安卓没有。同名字段取第一个。
+            if (name !in fields) fields[name] = ParameterText.trimSpaceTab(item.substring(eq + 1))
         }
-        if (fields.keys != setOf("encrypt_list", "version") ||
-            fields.getValue("encrypt_list").lowercase() != "aes128ctr" || fields["version"] != "1"
-        ) {
-            throw MalformedMessageException("只支持 aes128ctr / version 1 的加密选择")
+        val ciphers = fields["encrypt_list"].orEmpty().split(',').map { ParameterText.trimSpaceTab(it).lowercase() }
+        val version = fields["version"]
+        if (AES128CTR !in ciphers || (version != null && version != "1")) {
+            throw MalformedMessageException("只支持 aes128ctr / version 1 的加密选择：${visible(text)}")
         }
+        val standard = lines.size == 1 && text.endsWith("\r\n") && countCrlf(text) == 1 &&
+            fields.keys == setOf("encrypt_list", "version") && ciphers == listOf(AES128CTR)
+        if (!standard) out += HiSightOutput.Note("手机的加密选择不是标准的一行格式，已按宽松规则接受：${visible(text)}")
         out += sendControl(RtspTemplates.ok(message.cseq, date(wallClockMillis)))
         cryptoReady = true
     }
@@ -430,11 +441,36 @@ class HiSightReceiver(
 
     private fun date(wallClockMillis: Long) = RtspTemplates.date(wallClockMillis, timeZone)
 
+    /** 写日志用：回车、换行写成可见的转义，过长截断（正文只是加密方式的说明，不含密钥）。 */
+    /**
+     * 消息原文的可读形式（进日志和报错说明）：换行写成 \r \n，太长截断；20 个以上连续字母数字的长串
+     * （可能是密钥、随机数之类）只写长度。标准格式里只有算法名和版本号，没有长串。
+     */
+    private fun visible(text: String): String {
+        val shown = text.replace(LONG_TOKEN) { "<隐去 ${it.value.length} 字符>" }.replace("\r", "\\r").replace("\n", "\\n")
+        return if (shown.length <= NOTE_MAX_CHARS) shown else shown.take(NOTE_MAX_CHARS) + "…（共 ${text.length} 字符）"
+    }
+
+    private fun countCrlf(text: String): Int {
+        var count = 0
+        var i = text.indexOf("\r\n")
+        while (i >= 0) {
+            count++
+            i = text.indexOf("\r\n", i + 2)
+        }
+        return count
+    }
+
     private fun checkRange(data: ByteArray, offset: Int, length: Int) {
         require(offset >= 0 && length >= 0 && offset + length <= data.size) { "范围非法" }
     }
 
     private companion object {
+        const val AES128CTR = "aes128ctr"
+        const val NOTE_MAX_CHARS = 200
+
+        /** [visible] 里只写长度的长串。 */
+        private val LONG_TOKEN = Regex("[0-9A-Za-z+/]{20,}")
         const val ANNOUNCE = "ANNOUNCE"
         const val OPTIONS = "OPTIONS"
         const val SETUP = "SETUP"

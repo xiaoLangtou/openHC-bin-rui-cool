@@ -13,5 +13,12 @@
             android:exported="true"
             android:label="@string/demo_label">
         </activity>
+
+        <!-- 仅调试构建：让无线调度马上走一次车机主动回连（adb am start 启动；见 ReconnectNowActivity）。 -->
+        <activity
+            android:name=".demo.ReconnectNowActivity"
+            android:exported="true"
+            android:label="主动回连（调试）" />
+
     </application>
 </manifest>

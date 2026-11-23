@@ -14,8 +14,8 @@ import io.github.gcbond.openhc.connection.ConnectionUiState
 import io.github.gcbond.openhc.connection.Notice
 
 /**
- * 首页顶上的兜底提示：安装包里的身份参数缺少或不能用（例如有人把仓库里的文件改坏了）时一张醒目的卡片，
- * 正常时不显示。身份参数固定在仓库里，软件里没有地方填写。
+ * 首页顶上的兜底提示：安装包里的连接参数缺少或不能用时一张醒目的卡片，正常时不显示。
+ * 连接参数不进仓库，构建时打进安装包（见 app/build.gradle.kts），软件里没有地方填写。
  */
 @Composable
 internal fun IdentityHomeNotice(identity: IdentityLoader.Result, modifier: Modifier = Modifier) {
@@ -30,13 +30,6 @@ internal fun IdentityHomeNotice(identity: IdentityLoader.Result, modifier: Modif
             Text(text, style = UiType.hint, color = Palette.Text, modifier = Modifier.padding(top = 4.dp))
         }
     }
-}
-
-/** 页脚里的一行：车型编号；缺少或不能用时为 null（顶上有提示卡片）。 */
-@Composable
-internal fun identityFooterLine(identity: IdentityLoader.Result): String? {
-    val loaded = identity as? IdentityLoader.Result.Loaded ?: return null
-    return stringResource(R.string.home_identity_model, loaded.assets.host.fullModel)
 }
 
 /** 提示卡片的底色：提醒色叠一层淡的。 */

@@ -34,12 +34,18 @@ import java.util.UUID
  *   再用 [sendWifiConnectionInfo] 发连接串。
  * - WiFi 控制通道（[NearbyLink.WIFI]）：[start] 发完 connectId 后，车机再发一帧明文的版本、deviceId、加密请求
  *   （车机在这条通道上先当一次发起方）；不报 TLV7；之后与有线相同，手机请求业务 20。
+ * - 车机主动回连（蓝牙控制通道、[initiator] 为 true，车机是 RFCOMM 客户端）：[start] 和 WiFi 通道一样先当发起方；
+ *   握手完成后车机用 [requestAuthChannel] 请手机为认证新开 RFCOMM 子通道（命令 3），手机回命令 4
+ *   （[NearbyEvent.AuthChannelReady] 带通道号，或 [NearbyEvent.AuthChannelRejected]），车机按通道号连过去；
+ *   认证之后的数据通道协商、要 MAC、发连接串与手机连上来时完全相同。
  *
  * @param bluetoothAddress 车机蓝牙地址 `AA:BB:CC:DD:EE:FF`；取不到传 null。
  *   取不到或是 `02:00:00:00:00:00` 时 deviceId 按退化规则算，见 [deviceId]。
  *   [carInfo]、[deviceId] 和这里必须传同一个地址，三处的 deviceId 才同源。
  * @param random 生成 connectId 和每帧加密种子；测试里可以传固定序列的实现。只会调用它的 `nextBytes`。
  * @param link 控制通道的承载，默认有线，见 [NearbyLink]。
+ * @param initiator 车机是不是这条控制通道的发起方（握手里先发版本、deviceId、加密请求）。WiFi 通道总是；
+ *   蓝牙通道只有车机主动回连时是；有线不会是。
  */
 class NearbySession(
     host: HostIdentity,
@@ -47,7 +53,13 @@ class NearbySession(
     bluetoothAddress: String?,
     private val random: SecureRandom,
     val link: NearbyLink = NearbyLink.USB,
+    val initiator: Boolean = link == NearbyLink.WIFI,
 ) {
+    init {
+        require(link != NearbyLink.USB || !initiator) { "有线控制通道上车机只当应答方" }
+        require(link != NearbyLink.WIFI || initiator) { "WiFi 控制通道上车机总是发起方" }
+    }
+
     private val identity = NearbyIdentity(host, bluetoothAddress)
     private val cipher = NearbyFrameCipher(keys)
     private val decoder = NearbyFrameDecoder()
@@ -70,6 +82,10 @@ class NearbySession(
     private var peerBluetooth: String? = null
     private var sentBluetoothRequest = false
 
+    /** 车机发出的认证子通道请求的业务标签（[requestAuthChannel]）；还没发为 null。 */
+    private var authRequestTag: ByteArray? = null
+    private var authAnswered = false
+
     /** 本机 deviceId 的 64 位大写十六进制文本，与 [Companion.deviceId] 相同。 */
     val deviceId: String get() = identity.deviceIdHex
 
@@ -78,8 +94,9 @@ class NearbySession(
 
     /**
      * 控制连接建立后立刻调用：发明文的 connectId（tag 15），并开始握手计时。
-     * 有线和蓝牙通道上车机只当应答方，不主动发版本、摘要、加密请求，等手机发。
-     * WiFi 通道是车机发起建立的：紧接着再发一帧明文 `TLV1{02} TLV3(deviceId) TLV5{01}`，之后照常应答手机的请求。
+     * 车机是应答方时（有线、手机连上来的蓝牙通道）不主动发版本、摘要、加密请求，等手机发。
+     * 车机是发起方时（[initiator]：WiFi 通道、车机主动回连的蓝牙通道）紧接着再发一帧明文
+     * `TLV1{02} TLV3(deviceId) TLV5{01}`，之后照常应答手机的请求。
      */
     fun start(nowMillis: Long): List<NearbyAction> {
         check(!started) { "start 只能调用一次" }
@@ -88,7 +105,7 @@ class NearbySession(
         val out = ArrayList<NearbyAction>(2)
         val payload = encodeTlv(ChannelManagement.TAG_CONNECT_ID, ChannelManagement.connectIdValue(nextConnectId()))
         send(ChannelManagement.OUTER_TYPE, payload, out)
-        if (link == NearbyLink.WIFI) {
+        if (initiator) {
             val request = ByteWriter()
                 .tlv(ChannelManagement.TAG_VERSION_REQUEST, LOCAL_VERSION_VALUE)
                 .tlv(ChannelManagement.TAG_SUMMARY_REQUEST, ownDeviceIdText)
@@ -160,6 +177,24 @@ class NearbySession(
     }
 
     /**
+     * 车机主动回连时，握手完成后调用：在消息层发命令 3，请手机为认证新开一条 RFCOMM 子通道
+     * （通道 = 蓝牙通道、业务 [BUSINESS_AUTH]、协议 0、不带 UUID）。[tag] 是业务标签（手机的设备名，UTF-8），
+     * 手机在命令 4 里原样回送，车机按业务号和它认出应答。只能调用一次。
+     */
+    fun requestAuthChannel(tag: ByteArray): List<NearbyAction> {
+        check(!closed) { "控制通道已作废" }
+        check(link == NearbyLink.BLUETOOTH && initiator) { "只有车机主动连上的蓝牙控制通道才请求认证子通道" }
+        check(handshakeComplete) { "控制通道握手还没完成" }
+        check(authRequestTag == null) { "认证子通道只请求一次" }
+        require(tag.isNotEmpty()) { "业务标签不能为空" }
+        authRequestTag = tag.copyOf()
+        val request = SocketMessages.Request(NearbyLink.BLUETOOTH.channel, BUSINESS_AUTH, tag.copyOf(), 0, null)
+        val out = ArrayList<NearbyAction>(1)
+        send(SocketMessages.OUTER_TYPE_MESSAGE, encodeTlv(SocketMessages.CMD_CREATE_REQUEST, SocketMessages.encodeRequest(request)), out)
+        return out
+    }
+
+    /**
      * 接受数据通道协商（回资源层命令 2）：车机当组主，[frequencyMhz] 是车机马上要建（或已经开着）的网络的真实频率，
      * 手机会照抄它去找网。
      */
@@ -213,7 +248,8 @@ class NearbySession(
                 else -> handleUnknownLayer(frame.outerType, payload, out)
             }
         } catch (e: MalformedMessageException) {
-            out.add(NearbyEvent.InputDiscarded(e.message ?: "载荷不合法", frame.payloadView().size))
+            // 写明是哪一层，方便看诊断日志时对上是哪条消息。
+            out.add(NearbyEvent.InputDiscarded("外层类型 ${frame.outerType}：${e.message ?: "载荷不合法"}", frame.payloadView().size))
         }
     }
 
@@ -276,6 +312,7 @@ class NearbySession(
     /** 资源层和消息层的一条，先整帧解完再动作。 */
     private sealed class LayerItem {
         class Socket(val request: SocketMessages.Request) : LayerItem()
+        class SocketResponse(val response: SocketMessages.Response, val tlv: Tlv) : LayerItem()
         class DataChannel(val request: DataChannelMessages.Request) : LayerItem()
         class Result(val result: DataChannelMessages.Result) : LayerItem()
         object Probe : LayerItem()
@@ -293,6 +330,7 @@ class NearbySession(
         for (item in items) {
             when (item) {
                 is LayerItem.Socket -> onSocketRequest(outerType, item.request, out)
+                is LayerItem.SocketResponse -> onSocketResponse(item, out)
                 is LayerItem.DataChannel ->
                     out.add(NearbyEvent.DataChannelRequested(item.request.dataChannel, item.request.capability))
                 is LayerItem.Result -> {
@@ -305,16 +343,48 @@ class NearbySession(
         }
     }
 
-    private fun parseLayerItem(outerType: Int, t: Tlv): LayerItem {
+    private fun parseLayerItem(outerType: Int, t: Tlv): LayerItem =
+        try {
+            parseLayerItemValue(outerType, t)
+        } catch (e: MalformedMessageException) {
+            throw MalformedMessageException("命令 ${t.tag}（${t.length} 字节）：${e.message}", e)
+        }
+
+    private fun parseLayerItemValue(outerType: Int, t: Tlv): LayerItem {
         val bluetooth = link == NearbyLink.BLUETOOTH
         return when {
             t.tag == SocketMessages.CMD_CREATE_REQUEST -> LayerItem.Socket(SocketMessages.parseRequest(t.valueView()))
+            bluetooth && initiator && outerType == SocketMessages.OUTER_TYPE_MESSAGE && t.tag == SocketMessages.CMD_CREATE_RESPONSE ->
+                LayerItem.SocketResponse(SocketMessages.parseResponse(t.valueView()), t)
             bluetooth && outerType == SocketMessages.OUTER_TYPE_MESSAGE && t.tag == MESSAGE_PROBE -> LayerItem.Probe
             bluetooth && outerType == SocketMessages.OUTER_TYPE_RESOURCE && t.tag == DataChannelMessages.CMD_REQUEST ->
                 LayerItem.DataChannel(DataChannelMessages.parseRequest(t.valueView()))
             bluetooth && outerType == SocketMessages.OUTER_TYPE_RESOURCE && t.tag == DataChannelMessages.CMD_RESULT ->
                 LayerItem.Result(DataChannelMessages.parseResult(t.valueView()))
             else -> LayerItem.Other(t)
+        }
+    }
+
+    /**
+     * 命令 4：车机发出的认证子通道请求（[requestAuthChannel]）的应答。按业务号和标签认出是自己发的那条，
+     * 只认第一条；认不出、没发过请求或已经回过的原样交出（[NearbyEvent.Unhandled]）。
+     * 同意但通道号不在 1～[MAX_RFCOMM_CHANNEL] 的按拒绝算；UUID 不是 16 字节的不要。
+     */
+    private fun onSocketResponse(item: LayerItem.SocketResponse, out: MutableList<NearbyAction>) {
+        val r = item.response
+        val pending = authRequestTag
+        if (pending == null || authAnswered || r.businessId != BUSINESS_AUTH || !r.tag.contentEquals(pending)) {
+            out.add(NearbyEvent.Unhandled(SocketMessages.OUTER_TYPE_MESSAGE, item.tlv.tag, item.tlv.valueView()))
+            return
+        }
+        authAnswered = true
+        when {
+            r.status != SocketMessages.STATUS_ACCEPTED -> out.add(NearbyEvent.AuthChannelRejected(r.status))
+            r.port !in 1..MAX_RFCOMM_CHANNEL -> {
+                out.add(NearbyEvent.InputDiscarded("认证子通道应答里的通道号 ${r.port} 不在 1～$MAX_RFCOMM_CHANNEL", 0))
+                out.add(NearbyEvent.AuthChannelRejected(SocketMessages.STATUS_REJECTED))
+            }
+            else -> out.add(NearbyEvent.AuthChannelReady(r.port, r.uuid?.takeIf { it.size == UUID_BYTES }))
         }
     }
 

@@ -8,10 +8,10 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.WirelessPreferences
 

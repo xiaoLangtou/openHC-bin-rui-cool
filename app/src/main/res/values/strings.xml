@@ -9,6 +9,10 @@
     <string name="action_stop">停止</string>
     <string name="action_settings">设置</string>
     <string name="action_back">返回</string>
+    <!-- 设置项标题旁的「?」：点开看说明（读屏用） -->
+    <string name="row_help">说明</string>
+    <string name="row_help_shown">已展开</string>
+    <string name="row_help_hidden">已收起</string>
     <string name="action_show_projection">回到投屏画面</string>
     <string name="action_retry_now">立即重试</string>
     <string name="action_grant_vpn">去授权</string>
@@ -110,6 +114,9 @@
     <string name="settings_fps_auto">自动：按屏幕刷新率（%1$d fps）</string>
     <string name="settings_fps_fixed">%1$d 帧</string>
     <string name="settings_fps_hint">帧率高于屏幕刷新率时，画面会隔几秒跳一下。</string>
+    <string name="settings_ui_scale">界面大小</string>
+    <string name="settings_ui_scale_default">标准</string>
+    <string name="settings_ui_scale_hint">手机界面在车机屏上显得太大（图标、文字偏大，一屏放不下多少内容）时调小。只影响投屏画面，不改车机自己的界面，清晰度和流畅度不变。75% 和 65% 还没在车上试过，排版不对就调回来。下次连接生效。</string>
     <string name="settings_bt">车机蓝牙地址</string>
     <string name="settings_bt_current_property">当前使用：%1$s（读自车机系统）</string>
     <string name="settings_bt_current_manual">当前使用：%1$s（手动填写）</string>

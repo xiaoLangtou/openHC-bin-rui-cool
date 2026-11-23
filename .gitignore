@@ -37,3 +37,5 @@ captures/
 
 # Kotlinc 直接编译产物
 bin/
+# 连接参数不进仓库：构建时从本机目录注入（见 app/build.gradle.kts）
+/app/src/main/assets/openhc-identity.json

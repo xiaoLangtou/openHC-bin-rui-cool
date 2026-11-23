@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.util.Log
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.net.EthernetEndpoint
 import io.github.gcbond.openhc.platform.net.NcmDataPath
 import io.github.gcbond.openhc.platform.net.TunSpec

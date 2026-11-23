@@ -148,6 +148,14 @@ class WirelessSessionTest {
     }
 
     @Test
+    fun discardedFramesNameTheLayerAndCommand() {
+        val s = bluetoothHandshaken(Vectors.SEED_B, Vectors.SEED_C)
+        // 命令 1 的能力串 TLV 声明的长度比实际长：整帧丢掉，原因里写明外层类型和命令号。
+        val bad = assertIs<NearbyEvent.InputDiscarded>(s.feed(phoneEncrypted(4, encodeTlv(1, hex("838385")), Vectors.SEED_D)).single())
+        assertTrue(bad.reason.startsWith("外层类型 4：命令 1（3 字节）："), bad.reason)
+    }
+
+    @Test
     fun wifiLinkMessagesOnBluetooth() {
         val s = bluetoothHandshaken(Vectors.SEED_B, Vectors.SEED_C)
         val (outer, encrypted, ask) = open(sends(s.requestWifiPeerAddress()).single())

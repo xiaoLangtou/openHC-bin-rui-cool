@@ -6,9 +6,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.util.Log
 import androidx.core.content.IntentCompat
 import io.github.gcbond.openhc.OpenHcApp
+import io.github.gcbond.openhc.platform.log.Log
 
 /**
  * 「蓝牙连上自动连接」的入口：手机的经典蓝牙连上 / 断开车机时（系统广播 ACL_CONNECTED / ACL_DISCONNECTED），

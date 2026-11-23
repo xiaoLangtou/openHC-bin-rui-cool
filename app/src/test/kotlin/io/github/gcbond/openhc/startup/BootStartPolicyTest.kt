@@ -37,24 +37,21 @@ class BootStartPolicyTest {
     }
 
     @Test
-    fun bootWaitsForTheCableUnlessWirelessCanGoFirst() {
-        // 不做无线：照常进入等插线。
-        assertTrue(BootStartPolicy.waitForCable(phonePlugged = false, usbAutoConnect = true, wirelessWanted = false))
-        assertTrue(BootStartPolicy.waitForCable(phonePlugged = false, usbAutoConnect = false, wirelessWanted = false))
-        // 要做无线、插线又能自己把有线带起来：让无线先等手机回连。
-        assertFalse(BootStartPolicy.waitForCable(phonePlugged = false, usbAutoConnect = true, wirelessWanted = true))
-        // 要做无线、但插线不会自己开始有线：只能进入等插线。
-        assertTrue(BootStartPolicy.waitForCable(phonePlugged = false, usbAutoConnect = false, wirelessWanted = true))
-        // 开机时已经插着手机：不会再有一次接入，直接走有线。
-        assertTrue(BootStartPolicy.waitForCable(phonePlugged = true, usbAutoConnect = true, wirelessWanted = true))
+    fun bootWaitsForTheCableUnlessPluggingStartsWiredByItself() {
+        fun wait(plugged: Boolean, usbAuto: Boolean, wireless: Boolean) =
+            BootStartPolicy.waitForCable(phonePlugged = plugged, usbAutoConnect = usbAuto, wirelessWanted = wireless)
+        assertTrue(wait(plugged = true, usbAuto = true, wireless = true), "插着手机：等插线")
+        assertTrue(wait(plugged = false, usbAuto = true, wireless = false), "不做无线：等插线")
+        assertFalse(wait(plugged = false, usbAuto = true, wireless = true), "插线时系统会拉起本应用：不用等")
+        // 没开「插线时不再弹窗」就等插线；手机蓝牙连上时无线会请有线让出，所以和无线不冲突。
+        assertTrue(wait(plugged = false, usbAuto = false, wireless = true))
     }
 
     @Test
-    fun wirelessIsWantedOnlyWhenNotWiredOnly() {
-        assertTrue(BootStartPolicy.wirelessWanted(wiredOnly = false, autoReconnect = true, connectOnBluetooth = false))
-        assertTrue(BootStartPolicy.wirelessWanted(wiredOnly = false, autoReconnect = false, connectOnBluetooth = true))
-        assertFalse(BootStartPolicy.wirelessWanted(wiredOnly = false, autoReconnect = false, connectOnBluetooth = false))
-        assertFalse(BootStartPolicy.wirelessWanted(wiredOnly = true, autoReconnect = true, connectOnBluetooth = true), "只用数据线连接")
+    fun wirelessIsWantedOnlyWhenAutoConnectIsOnAndNotWiredOnly() {
+        assertTrue(BootStartPolicy.wirelessWanted(wiredOnly = false, connectOnBluetooth = true))
+        assertFalse(BootStartPolicy.wirelessWanted(wiredOnly = false, connectOnBluetooth = false))
+        assertFalse(BootStartPolicy.wirelessWanted(wiredOnly = true, connectOnBluetooth = true), "只用数据线连接")
     }
 
     @Test

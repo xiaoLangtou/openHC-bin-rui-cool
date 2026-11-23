@@ -27,6 +27,8 @@ import java.util.ArrayDeque
  */
 class WirelessRunnerBridge(
     private val session: WirelessReceiverSession,
+    /** 会话怎么开始：默认开蓝牙控制监听等手机（[WirelessReceiverSession.start]）；车机主动回连时传它的 startReconnect。 */
+    private val begin: (Long) -> List<WirelessOutput> = session::start,
     private val platform: (WirelessOutput) -> Unit,
 ) : SessionLogic {
     private var submit: ((Long) -> List<SessionOutput>) -> Unit = { throw IllegalStateException("先调用 attach") }
@@ -50,7 +52,7 @@ class WirelessRunnerBridge(
     /** 会话结束、而且最后一批输出都交出去了，执行器才收工。 */
     override val isEnded: Boolean get() = session.isEnded && backlog.isEmpty() && !drainScheduled
 
-    override fun start(nowMillis: Long) = route(session.start(nowMillis))
+    override fun start(nowMillis: Long) = route(begin(nowMillis))
 
     override fun onListening(id: Int, port: Int, nowMillis: Long) = route(session.onListening(id, port, nowMillis))
 

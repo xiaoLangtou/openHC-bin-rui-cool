@@ -36,7 +36,7 @@ internal class DesktopOptions(
             |用法：openhc-desktop [参数]
             |
             |必填：
-            |  --identity <文件>        身份资产 JSON（仓库里的 app/src/main/assets/openhc-identity.json）
+            |  --identity <文件>        连接参数 JSON（构建安装包用的同一份 openhc-identity.json，格式见 docs/identity.example.json）
             |  --trust-dir <目录>       信任库目录；不存在会以 0700 新建，首次配对后写入，下次免码回连
             |  --ip <IPv4>              车机在 USB 网卡上的地址，正好 14 个字符（例如 192.168.66.150），写进 carInfo
             |  --port <端口>            控制监听端口，写进 carInfo

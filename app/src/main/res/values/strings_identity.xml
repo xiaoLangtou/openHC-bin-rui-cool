@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 首页：安装包不完整时的兜底提示，页脚的车型编号 -->
+    <!-- 首页：安装包不完整时的兜底提示 -->
     <string name="home_identity_title">安装包不完整，连不了手机</string>
-    <string name="home_identity_missing">安装包里缺少 openhc-identity.json，请重新安装。</string>
+    <string name="home_identity_missing">安装包里缺少 openhc-identity.json：请安装正式发布的安装包；自己从源码构建的，见 README「构建」。</string>
     <string name="home_identity_invalid">安装包里的 openhc-identity.json 不能用（%1$s），请重新安装。</string>
-    <string name="home_identity_model">车型编号 %1$s</string>
 </resources>

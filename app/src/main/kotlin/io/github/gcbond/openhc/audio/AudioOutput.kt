@@ -1,7 +1,6 @@
 package io.github.gcbond.openhc.audio
 
 import android.content.Context
-import android.util.Log
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEndReason
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEvent
@@ -13,6 +12,7 @@ import io.github.gcbond.openhc.core.dmsdp.audio.CarAudioFocus
 import io.github.gcbond.openhc.core.dmsdp.audio.PcmByteOrder
 import io.github.gcbond.openhc.core.dmsdp.audio.PhoneAudioFocus
 import io.github.gcbond.openhc.core.dmsdp.audio.PhoneCallPhase
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.AudioFocusController
 import io.github.gcbond.openhc.platform.media.AudioFocusPolicy
 import io.github.gcbond.openhc.platform.media.AudioPlayer

@@ -32,12 +32,13 @@ WiFi 数据通道协商都在蓝牙上做；车机在手机认证通过后开热
 交接顺序由 `core.session` 的 `WirelessReceiverSession` 串起来，
 见 [`core/session/README.md`「无线连接」](../core/session/README.md#无线连接)。
 
-配对过的手机回连不用再扫码（无线自动回连，默认开）：车机空闲时自动开一次同样的无线会话，蓝牙控制监听开好后再挂 GATT
-服务、发 BLE 广播（载荷和布局见 [`core/nearby/README.md`「BLE 广播与回连」](../core/nearby/README.md#ble-广播与回连)）；
-手机按广播的发送地址经经典蓝牙连上来，之后与扫码相同，认证按手机报的 `has_pin` 走免码回连。会话结束回到等待；
-等待时手机还没连上就不挡有线，有线开始时让出、结束后再回来。调度在 `app` 的 `WirelessController`。
-车机系统蓝牙开了 LE 隐私时广播的发送地址是随机的，只做过经典蓝牙配对的手机认不出来；设置「补全手机蓝牙配对」临时开一个
-LE 配对入口（`platform.bluetooth.LePairingPeripheral`），让手机配一次、拿到车机的身份解析密钥。
+连成功过的手机回连不用再扫码（自动连接手机，默认开）：手机蓝牙连上车机、或界面回到前台时，车机按 SDP 主动连手机的
+蓝牙控制服务，控制握手后请手机为认证开 RFCOMM 子通道，再按手机给的通道号连上（拿不到系统接口时按 SDP 查），之后与扫码
+相同，认证按手机报的 `has_pin` 走免码回连；热点等连上手机的蓝牙控制通道后才开。只拨用无线连成功过的手机，一次蓝牙连接里
+回到界面只拨一次。调度和触发规则在 `app` 的 `WirelessController`、`ReconnectPolicy`；会话一侧是 `core.session` 的
+`WirelessReceiverSession.startReconnect` 和 `core.nearby` 里车机作为发起方的控制通道。
+早先的被动等待（车机发 BLE 广播、等手机连上来，载荷见 [`core/nearby/README.md`「BLE 广播与回连」](../core/nearby/README.md#ble-广播与回连)，
+以及配合它的「补全手机蓝牙配对」）代码还在，已不再自动进入，之后删掉。
 
 ## 模块与依赖
 
@@ -192,5 +193,5 @@ tools:desktop ─▶ core:session        （开发工具，不进安装包）
 
 ## 车机固定参数
 
-车型编号、品牌、名称、帧加密用的密钥材料和认证服务身份固定在 `app/src/main/assets/openhc-identity.json`，
-所有安装包都一样，应用每次开始连接时读它。改了车型编号，手机会把车机当成另一台车，要重新配对一次。
+车型编号、品牌、名称等连接参数放在 `openhc-identity.json` 里。它不进仓库，
+构建时从本机目录打进安装包（见 `app/build.gradle.kts`，格式见 `docs/identity.example.json`），应用每次开始连接时读它。改了车型编号，手机会把车机当成另一台车，要重新配对一次。

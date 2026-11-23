@@ -303,12 +303,14 @@ class HotspotRequestMachine(
 /** 热点的 BSSID（写进连接串）取自哪里。 */
 enum class HotspotMacSource(val label: String) {
     CONFIG("系统给的热点配置"),
+    REPORTED("系统回报的热点信息"),
     INTERFACE("热点网卡的硬件地址"),
     PLACEHOLDER("读不到真实地址，用占位值"),
 }
 
 /** 热点的频率（协商和连接串里报给手机）取自哪里。只有 [CONFIGURED] 不是推测。 */
 enum class HotspotFrequencySource(val label: String, val verified: Boolean) {
+    REPORTED("系统回报的热点实际频率", true),
     CONFIGURED("系统的热点配置里写明了信道", true),
     ASSUMED_BAND("推测：系统只说了频段、没说信道，按这个频段的常用信道", false),
     ASSUMED_DEFAULT("推测：读不到频段和信道，按 2.4 GHz 第 6 信道（本地热点默认开在 2.4 GHz）", false),
@@ -360,23 +362,32 @@ object LocalHotspotRules {
      * 2. 新地址有好几个时按网卡名排：ap / softap / swlan / uap 开头的最像，其次 wlan / wifi，其余最后；
      * 3. 没有新地址（热点被本机别的应用先开着，或者地址比回调先出现、两次快照之间没变化）：
      *    在名字最像热点的网卡里找；只有 wlan 一类网卡时，只在恰好一个地址的情况下用它。
+     * 车机自己作为终端连着 WiFi 时的地址（[stationIp]）一律不算：能一边连 WiFi 一边开热点的车机上，
+     * 这个地址可能恰好在开热点时重新拿到、被当成新地址（有车主在安卓 13 车机上遇到，手机连不上车机的端口）。
+     * [wlanFallback] 为 false 时第 3 步里「只有一个 wlan 地址就用它」先不用（车机 WiFi 还开着、热点网卡的地址可能还没出现）。
      *
      * 返回 网卡名 to 地址；认不出返回 null。
      */
-    fun pickInterface(before: Map<String, Set<String>>, after: Map<String, Set<String>>): Pair<String, String>? {
+    fun pickInterface(
+        before: Map<String, Set<String>>,
+        after: Map<String, Set<String>>,
+        stationIp: String? = null,
+        wlanFallback: Boolean = true,
+    ): Pair<String, String>? {
         val fresh = ArrayList<Triple<Int, String, String>>()
         for ((name, addresses) in after) {
             val rank = rankOf(name) ?: continue
             val old = before[name].orEmpty()
-            for (ip in addresses) if (ip !in old && usableIpv4(ip)) fresh += Triple(rank, name, ip)
+            for (ip in addresses) if (ip !in old && ip != stationIp && usableIpv4(ip)) fresh += Triple(rank, name, ip)
         }
         best(fresh)?.let { return it }
         val existing = ArrayList<Triple<Int, String, String>>()
         for ((name, addresses) in after) {
             val rank = rankOf(name) ?: continue
-            for (ip in addresses) if (usableIpv4(ip)) existing += Triple(rank, name, ip)
+            for (ip in addresses) if (ip != stationIp && usableIpv4(ip)) existing += Triple(rank, name, ip)
         }
         best(existing.filter { it.first == RANK_AP })?.let { return it }
+        if (!wlanFallback) return null
         val wlan = existing.filter { it.first == RANK_WLAN }
         return if (wlan.size == 1) wlan[0].second to wlan[0].third else null
     }
@@ -412,10 +423,12 @@ object LocalHotspotRules {
      * - 系统配置里写明了信道（少见，一般是 0 = 由系统自己挑）：用它；
      * - 只知道频段：2.4 GHz 报第 6 信道、5 GHz 报第 149 信道；
      * - 什么都不知道：按 2.4 GHz 第 6 信道（本地热点默认开在 2.4 GHz）。
+     * 系统回报了实际频率（安卓 13 起的热点信息回调，[reportedMhz]，2.4 / 5 GHz 才算）就用它，不再推测。
      *
      * 推测的频段对、信道不对时手机能不能照样连上，没有实测对照；频段报错了手机多半找不到网。
      */
-    fun estimateFrequency(hint: HotspotBandHint?): Pair<Int, HotspotFrequencySource> {
+    fun estimateFrequency(hint: HotspotBandHint?, reportedMhz: Int = 0): Pair<Int, HotspotFrequencySource> {
+        if (isWifiChannelFrequency(reportedMhz)) return reportedMhz to HotspotFrequencySource.REPORTED
         val band = hint?.band
         if (hint != null && band != null && hint.channel > 0) {
             val mhz = frequencyOf(hint.channel, band)
@@ -427,6 +440,10 @@ object LocalHotspotRules {
             null -> DEFAULT_2G_MHZ to HotspotFrequencySource.ASSUMED_DEFAULT
         }
     }
+
+    /** 2.4 GHz 或 5 GHz 的信道中心频率（连接串只认这两个频段）。 */
+    fun isWifiChannelFrequency(mhz: Int): Boolean = mhz == 2484 || (mhz in 2412..2472 && (mhz - 2407) % 5 == 0) ||
+        (mhz in 5160..5885 && (mhz - 5000) % 5 == 0)
 
     /** 信道号在给定频段里的中心频率；不是该频段的信道返回 null。 */
     fun frequencyOf(channel: Int, band: WifiBand): Int? = when (band) {
@@ -487,11 +504,13 @@ object LocalHotspotRules {
     }
 
     /**
-     * 写进连接串的 BSSID：系统热点配置里给了就用（多数系统不给），其次热点网卡的硬件地址（新系统对普通应用常常给不出）；
-     * 都没有用占位值 [MacText.PLACEHOLDER]（格式合法，手机按它找不找得到网没有验证过）。
+     * 写进连接串的 BSSID：系统热点配置里给了就用（多数系统不给），其次系统回报的热点信息（安卓 13 起，[reportedBssid]），
+     * 再次热点网卡的硬件地址（新系统对普通应用常常给不出）；都没有用占位值 [MacText.PLACEHOLDER]。
+     * 有车主在安卓 13 车机上实测：手机按 BSSID 精确找网，占位值找不到。
      */
-    fun pickBssid(configBssid: String?, interfaceMac: ByteArray?): Pair<String, HotspotMacSource> {
+    fun pickBssid(configBssid: String?, interfaceMac: ByteArray?, reportedBssid: String? = null): Pair<String, HotspotMacSource> {
         MacText.normalize(configBssid)?.let { return it to HotspotMacSource.CONFIG }
+        MacText.normalize(reportedBssid)?.let { return it to HotspotMacSource.REPORTED }
         MacText.of(interfaceMac)?.let { return it to HotspotMacSource.INTERFACE }
         return MacText.PLACEHOLDER to HotspotMacSource.PLACEHOLDER
     }

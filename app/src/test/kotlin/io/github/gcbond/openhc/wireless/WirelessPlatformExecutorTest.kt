@@ -4,6 +4,7 @@ import io.github.gcbond.openhc.core.session.WifiNetwork
 import io.github.gcbond.openhc.core.session.WirelessAction
 import io.github.gcbond.openhc.core.session.WirelessChannel
 import io.github.gcbond.openhc.core.session.WirelessEvent
+import io.github.gcbond.openhc.platform.bluetooth.RfcommClient
 import io.github.gcbond.openhc.platform.bluetooth.RfcommEndpoint
 import io.github.gcbond.openhc.platform.bluetooth.RfcommEvents
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotEvents
@@ -24,6 +25,28 @@ class WirelessPlatformExecutorTest {
     private val authUuid = UUID.fromString("0000FE36-0000-1000-8000-00805F9B34FB")
 
     private class FakeEndpoint(val name: String, val uuid: UUID, val events: RfcommEvents) : RfcommEndpoint {
+        val calls = ArrayList<String>()
+        val writes = ArrayList<ByteArray>()
+
+        override fun start() {
+            calls += "start"
+        }
+
+        override fun write(bytes: ByteArray) {
+            writes += bytes
+        }
+
+        override fun closeListener() {
+            calls += "closeListener"
+        }
+
+        override fun closeConnection() {
+            calls += "closeConnection"
+        }
+    }
+
+    /** 车机主动连手机（车机主动回连）的假连接：记下地址、UUID、通道号和调用。 */
+    private class FakeDial(val address: String, val uuid: UUID, val channel: Int?, val events: RfcommClient.Events) : RfcommEndpoint {
         val calls = ArrayList<String>()
         val writes = ArrayList<ByteArray>()
 
@@ -69,6 +92,10 @@ class WirelessPlatformExecutorTest {
             lines += "accepted $id $remote"
         }
 
+        override fun onConnected(id: Int) {
+            lines += "connected $id"
+        }
+
         override fun onData(id: Int, data: ByteArray) {
             lines += "data $id ${String(data, Charsets.US_ASCII)}"
         }
@@ -89,12 +116,14 @@ class WirelessPlatformExecutorTest {
 
     private class Harness {
         val endpoints = ArrayList<FakeEndpoint>()
+        val dials = ArrayList<FakeDial>()
         val hotspots = ArrayList<FakeHotspot>()
         val results = Results()
         val events = ArrayList<WirelessEvent>()
         val logs = ArrayList<String>()
         val executor = WirelessPlatformExecutor(
             openRfcomm = { name, uuid, events -> FakeEndpoint(name, uuid, events).also { endpoints += it } },
+            dialRfcomm = { address, uuid, channel, events -> FakeDial(address, uuid, channel, events).also { dials += it } },
             startHotspot = { events -> FakeHotspot(events).also { hotspots += it } },
             results = results,
             onEvent = { events += it },
@@ -104,6 +133,46 @@ class WirelessPlatformExecutorTest {
 
     private fun listen(id: Int, accept: Int, channel: WirelessChannel, uuid: UUID, needChannel: Boolean) =
         WirelessAction.ListenRfcomm(id, channel, uuid, accept, needChannel)
+
+    @Test
+    fun dialedConnectionsUseTheSessionsIdAndParameters() {
+        val h = Harness()
+        h.executor.execute(WirelessAction.ConnectRfcomm(7, WirelessChannel.BLUETOOTH_CONTROL, "02:66:77:88:99:AA", controlUuid, null))
+        h.executor.execute(WirelessAction.ConnectRfcomm(8, WirelessChannel.BLUETOOTH_AUTH, "02:66:77:88:99:AA", authUuid, 8))
+        val (control, auth) = h.dials
+        assertEquals(listOf("02:66:77:88:99:AA", "02:66:77:88:99:AA"), h.dials.map { it.address })
+        assertEquals(listOf(controlUuid, authUuid), h.dials.map { it.uuid })
+        assertEquals(listOf(null, 8), h.dials.map { it.channel })
+        assertEquals(listOf("start"), control.calls)
+        assertTrue(h.endpoints.isEmpty(), "主动连不开监听")
+
+        control.events.onConnected()
+        control.events.onData("hs".toByteArray())
+        auth.events.onConnectFailed("合成：连不上")
+        control.events.onNote("合成：说明")
+        assertEquals(listOf("connected 7", "data 7 hs", "error 8"), h.results.lines)
+        assertTrue(h.logs.any { "合成：说明" in it })
+        assertTrue(h.logs.none { "02:66:77:88:99:AA" in it }, "日志里地址要打码")
+
+        // 写和关按连接 id 走；关掉之后迟到的回调丢掉。
+        h.executor.execute(WirelessAction.RfcommWrite(7, byteArrayOf(1, 2)))
+        assertEquals(1, control.writes.size)
+        h.executor.execute(WirelessAction.RfcommClose(7))
+        assertEquals(listOf("start", "closeConnection"), control.calls)
+        control.events.onData("late".toByteArray())
+        control.events.onClosed()
+        assertEquals("error 8", h.results.lines.last())
+    }
+
+    @Test
+    fun closeAllClosesDialedConnectionsAndLaterDialsDoNotStart() {
+        val h = Harness()
+        h.executor.execute(WirelessAction.ConnectRfcomm(7, WirelessChannel.BLUETOOTH_CONTROL, "02:66:77:88:99:AA", controlUuid, null))
+        h.executor.closeAll()
+        assertEquals(listOf("start", "closeListener", "closeConnection"), h.dials.single().calls)
+        h.executor.execute(WirelessAction.ConnectRfcomm(9, WirelessChannel.BLUETOOTH_AUTH, "02:66:77:88:99:AA", authUuid, 8))
+        assertEquals(listOf("closeConnection"), h.dials.last().calls, "收尾之后来的不再开始")
+    }
 
     @Test
     fun rfcommListenerResultsComeBackUnderTheSessionsIds() {

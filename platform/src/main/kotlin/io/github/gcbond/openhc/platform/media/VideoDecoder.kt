@@ -8,12 +8,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
 import io.github.gcbond.openhc.core.common.MalformedMessageException
 import io.github.gcbond.openhc.core.hisight.AccessUnit
 import io.github.gcbond.openhc.core.hisight.AccessUnitSink
+import io.github.gcbond.openhc.platform.log.Log
 import java.io.Closeable
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -182,6 +182,12 @@ class VideoDecoder @JvmOverloads constructor(
 
         /** 帧或参数集格式不对。 */
         BAD_STREAM,
+
+        /**
+         * 手机丢了帧（视频断档：RTP 序号跳变，发送端拥塞时会整批丢掉普通帧）：之后的帧缺参考帧，接着解会花屏。
+         * 解码器不释放（画面停在最后一帧），等关键帧接上；手机丢完普通帧紧接着就发关键帧。
+         */
+        STREAM_GAP,
     }
 
     private val lock = ReentrantLock()
@@ -379,7 +385,7 @@ class VideoDecoder @JvmOverloads constructor(
 
     /** HiSight 视频回调：在调用 feedVideo 的线程上同步执行，帧数据只在回调期间有效。 */
     override fun onAccessUnit(unit: AccessUnit) {
-        queueAccessUnit(unit.data, unit.offset, unit.length, unit.presentationTimeUs)
+        queueAccessUnit(unit.data, unit.offset, unit.length, unit.presentationTimeUs, afterGap = unit.gapBefore != null)
     }
 
     /**
@@ -387,9 +393,10 @@ class VideoDecoder @JvmOverloads constructor(
      * 返回 true 表示收下了：已经送进解码器，或者在缓存里排队等输入缓冲。不等输入缓冲，除了参数越界不会抛异常：
      * 解码器出的问题都在内部恢复，不打断送帧线程。
      * [streamPtsUs] 是码流里的显示时间戳（微秒），只在 [Options.useStreamTimestamps] 打开时使用，负数表示没有。
+     * [afterGap]：这一帧之前码流断过档（[ResyncReason.STREAM_GAP]）。
      */
     @JvmOverloads
-    fun queueAccessUnit(data: ByteArray, offset: Int, length: Int, streamPtsUs: Long = -1): Boolean {
+    fun queueAccessUnit(data: ByteArray, offset: Int, length: Int, streamPtsUs: Long = -1, afterGap: Boolean = false): Boolean {
         require(offset >= 0 && length >= 0 && offset + length <= data.size) { "范围非法" }
         if (closed) return false
         lastArrivalMs = now()
@@ -397,7 +404,7 @@ class VideoDecoder @JvmOverloads constructor(
         scan.scan(data, offset, length)
         if (scan.sliceCount > 0) stats.onArrival(System.nanoTime(), streamPtsUs)
         return try {
-            lock.withLock { !closed && feedLocked(data, offset, length, streamPtsUs) }
+            lock.withLock { !closed && feedLocked(data, offset, length, streamPtsUs, afterGap) }
         } catch (e: RuntimeException) {
             Log.w(TAG, "送帧时出现意外异常，释放解码器", e)
             lock.withLock { if (!closed) teardownLocked(ResyncReason.DECODER_ERROR) }
@@ -435,7 +442,9 @@ class VideoDecoder @JvmOverloads constructor(
 
     // ---------------------------------------------------------------- 送帧
 
-    private fun feedLocked(data: ByteArray, offset: Int, length: Int, streamPtsUs: Long): Boolean {
+    private fun feedLocked(data: ByteArray, offset: Int, length: Int, streamPtsUs: Long, afterGap: Boolean): Boolean {
+        // 断档后的第一帧不是关键帧就等关键帧（不释放解码器）。放在最前面：这一帧哪怕被下面的提前返回挡掉，也已经开始等了。
+        if (afterGap && !scan.isSyncPoint) requireSyncLocked(ResyncReason.STREAM_GAP)
         if (scan.nalCount == 0) return drop(ResyncReason.BAD_STREAM)
         try {
             if (scan.spsStart >= 0) params.updateSps(data, scan.spsStart, scan.spsEnd)

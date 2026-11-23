@@ -248,6 +248,19 @@ class WirelessReducerTest {
     }
 
     @Test
+    fun theDirectModeOfAnAttemptCarriesIntoItsEndedNotice() {
+        val failed = WirelessEndCause.Session(WirelessEndReason.Failed(SessionStep.WIFI_NETWORK, "车机 WiFi 关着"))
+        val during = run(WirelessSignal.AttemptStarted(1, direct = true))
+        assertTrue(during.direct)
+        val ended = run(WirelessSignal.AttemptFinished(failed), from = during)
+        assertEquals(WirelessNotice.Ended(failed, direct = true), ended.notice)
+        assertFalse(ended.direct, "空闲时首页按设置说，不沿用上一次的方式")
+
+        val hotspot = run(WirelessSignal.AttemptStarted(2), WirelessSignal.AttemptFinished(failed))
+        assertEquals(WirelessNotice.Ended(failed, direct = false), hotspot.notice)
+    }
+
+    @Test
     fun toStringHidesTheQrCodeAndPin() {
         val text = run(*untilScan).toString()
         assertFalse(text.contains("135790"))

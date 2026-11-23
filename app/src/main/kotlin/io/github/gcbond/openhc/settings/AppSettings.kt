@@ -2,6 +2,7 @@ package io.github.gcbond.openhc.settings
 
 import android.content.Context
 import androidx.core.content.edit
+import io.github.gcbond.openhc.connection.DisplayPlan
 
 /**
  * 应用设置（SharedPreferences）。改动在下一次连接时生效。任意线程可读写。
@@ -13,6 +14,12 @@ class AppSettings(context: Context) {
     var fps: Int
         get() = prefs.getInt(KEY_FPS, 0).coerceAtLeast(0)
         set(value) = prefs.edit { putInt(KEY_FPS, value.coerceAtLeast(0)) }
+
+    /** 「界面大小」：声明给手机的 DPI 按这个百分比缩小，只认设置页列出的档位，别的值按默认。下次连接生效。 */
+    var uiScalePercent: Int
+        get() = prefs.getInt(KEY_UI_SCALE, DisplayPlan.DEFAULT_UI_SCALE).takeIf { it in DisplayPlan.UI_SCALE_CHOICES }
+            ?: DisplayPlan.DEFAULT_UI_SCALE
+        set(value) = prefs.edit { putInt(KEY_UI_SCALE, value) }
 
     /** 用户手填的车机蓝牙地址（原样保存，用的时候再校验）；没填为 null。 */
     var manualBluetoothAddress: String?
@@ -45,6 +52,7 @@ class AppSettings(context: Context) {
     private companion object {
         const val FILE = "openhc-settings"
         const val KEY_FPS = "fps"
+        const val KEY_UI_SCALE = "ui_scale_percent"
         const val KEY_MANUAL_BT = "manual_bluetooth_address"
         const val KEY_USB_ATTACH_ACCEPTED = "usb_attach_accepted"
         const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"

@@ -9,7 +9,7 @@
 ## 准备
 
 - JDK 17。
-- 身份资产 JSON：用仓库里的 `app/src/main/assets/openhc-identity.json`。
+- 连接参数 JSON：和构建安装包用的是同一份 `openhc-identity.json`（不在仓库里，格式见 `docs/identity.example.json`）。
 - 一个放信任库的目录（不存在会自动以 0700 新建）。
 
 ## 运行
@@ -20,7 +20,7 @@
 ./gradlew :tools:desktop:installDist
 
 tools/desktop/build/install/openhc-desktop/bin/openhc-desktop \
-  --identity app/src/main/assets/openhc-identity.json \
+  --identity <你的 openhc-identity.json> \
   --trust-dir ~/.openhc-desktop/trust \
   --ip 192.168.66.150 --port 32400 \
   --bt 02:12:34:56:78:9A \

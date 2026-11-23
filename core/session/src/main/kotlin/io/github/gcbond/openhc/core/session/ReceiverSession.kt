@@ -10,6 +10,7 @@ import io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamListener
 import io.github.gcbond.openhc.core.dmsdp.audio.CarAudioFocus
 import io.github.gcbond.openhc.core.dmsdp.audio.MicStreamListener
 import io.github.gcbond.openhc.core.hisight.AccessUnitSink
+import io.github.gcbond.openhc.core.hisight.VideoGap
 import io.github.gcbond.openhc.core.hisight.HiSightChannel
 import io.github.gcbond.openhc.core.hisight.HiSightInput
 import io.github.gcbond.openhc.core.hisight.HiSightOutput
@@ -145,8 +146,12 @@ class ReceiverSession internal constructor(
     private var videoParameters: VideoParameters? = null
     private var framesDelivered = 0L
 
+    /** 这一轮喂视频时交出的帧带的断档情况，喂完各写一条诊断。 */
+    private val videoGaps = ArrayList<VideoGap>()
+
     private val sinkAdapter = AccessUnitSink { unit ->
         framesDelivered++
+        unit.gapBefore?.let { videoGaps += it }
         try {
             videoSink.onAccessUnit(unit)
         } catch (e: Exception) {
@@ -755,6 +760,7 @@ class ReceiverSession internal constructor(
                     close(video, out)
                     close(remote, out)
                 }
+                is HiSightOutput.Note -> diag(SessionLayer.HISIGHT, o.text, out)
                 is HiSightOutput.Ended -> {
                     hisightEnded = true
                     finish(EndReason.ProjectionEnded(o.reason), out)
@@ -767,6 +773,10 @@ class ReceiverSession internal constructor(
         val hs = checkNotNull(hisight)
         val before = framesDelivered
         call(SessionLayer.HISIGHT) { hs.feedVideo(data, offset, length) }
+        for (gap in videoGaps) {
+            diag(SessionLayer.HISIGHT, "视频断档：$gap（手机发送端拥塞时会整批丢掉普通帧），从下一帧接上，解码等关键帧", out)
+        }
+        videoGaps.clear()
         if (before == 0L && framesDelivered > 0L) out.add(SessionEvent.VideoStarted(videoParameters))
     }
 

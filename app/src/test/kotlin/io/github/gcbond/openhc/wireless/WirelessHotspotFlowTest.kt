@@ -96,6 +96,10 @@ class WirelessHotspotFlowTest {
             lines += "accepted $id"
         }
 
+        override fun onConnected(id: Int) {
+            lines += "connected $id"
+        }
+
         override fun onData(id: Int, data: ByteArray) {
             lines += "data $id"
         }
@@ -120,6 +124,7 @@ class WirelessHotspotFlowTest {
         val logs = ArrayList<String>()
         val executor = WirelessPlatformExecutor(
             openRfcomm = { _, _, _ -> error("这些测试不开蓝牙") },
+            dialRfcomm = { _, _, _, _ -> error("这些测试不开蓝牙") },
             startHotspot = { events -> FakeHotspot(events).also { hotspots += it } },
             results = results,
             onEvent = { },

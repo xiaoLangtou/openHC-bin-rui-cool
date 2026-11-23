@@ -1,8 +1,10 @@
 package io.github.gcbond.openhc.core.session
 
+import io.github.gcbond.openhc.core.auth.AuthMode
 import io.github.gcbond.openhc.core.auth.HiCarAuthAction
 import io.github.gcbond.openhc.core.auth.PinCodes
 import io.github.gcbond.openhc.core.common.MalformedMessageException
+import io.github.gcbond.openhc.core.common.identity.BluetoothAddress
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamListener
 import io.github.gcbond.openhc.core.dmsdp.audio.CarAudioFocus
 import io.github.gcbond.openhc.core.hisight.AccessUnitSink
@@ -31,6 +33,10 @@ import java.util.UUID
  * 后半段复用 [ReceiverSession]：第 5 步建一个内嵌实例（控制通道是通道 3、认证已完成），手机连上 WiFi 上的 TCP 后，
  * 车机在这条控制连接上先当一次握手发起方，之后的设备会话和投屏与有线完全相同。WiFi 控制连接接上之后，
  * 手机会关掉两条蓝牙连接，这是正常的。
+ *
+ * 车机主动回连（[startReconnect]，和 [start] 二选一）只换前 3 步：车机连手机的蓝牙控制服务（不开监听、不出二维码），
+ * 车机当握手发起方；握手完成后车机请手机开认证子通道，手机同意后车机按它给的通道号连过去，手机在上面先发认证握手。
+ * 认证之后（第 4 步起）与手机连上来时完全相同（2026-11-22 实车：认证后手机发的就是同一条数据通道协商）。
  *
  * 结束时（任何原因）：先让内嵌的有线编排器按它的顺序收尾，再关蓝牙认证子通道、蓝牙控制通道，关掉热点，
  * 最后输出 [WirelessEvent.Ended]。之后所有方法都返回空列表。
@@ -74,6 +80,9 @@ class WirelessReceiverSession internal constructor(
         }
     }
 
+    /** 主动回连的目标：手机的蓝牙地址（规范格式）和业务标签。 */
+    private class ReconnectTarget(val address: String, val tag: ByteArray)
+
     private val ids = IdSource()
     private val endpoints = HashMap<Int, Endpoint>()
 
@@ -98,6 +107,15 @@ class WirelessReceiverSession internal constructor(
 
     /** 认证给的 16 字节会话密钥：交给内嵌的有线编排器（它自己复制）后清零。 */
     private var sessionKey: ByteArray? = null
+
+    /** 车机主动回连的目标手机（[startReconnect]）；手机连上来的连接为 null。 */
+    private var reconnect: ReconnectTarget? = null
+
+    /** 主动回连：等手机应答（或等手机上的确认）的截止时间。 */
+    private var reconnectDeadline: Long? = null
+
+    /** 主动回连：手机暂时拒绝过、正在等手机上的确认。 */
+    private var awaitingPhone = false
 
     /** 等认证子通道监听开好的请求。 */
     private val pendingAuthRequests = ArrayList<BluetoothOutput.SocketRequest>()
@@ -132,7 +150,7 @@ class WirelessReceiverSession internal constructor(
             if (ended) return null
             val handshake = nearby?.takeIf { control?.state == State.OPEN }?.nextTickAtMillis
             return listOfNotNull(
-                handshake, authAcceptDeadline, authDeadline, networkDeadline, joinDeadline, wired?.nextTickAtMillis,
+                handshake, reconnectDeadline, authAcceptDeadline, authDeadline, networkDeadline, joinDeadline, wired?.nextTickAtMillis,
             ).minOrNull()
         }
 
@@ -147,6 +165,26 @@ class WirelessReceiverSession internal constructor(
             val listener = listenRfcomm(WirelessChannel.BLUETOOTH_CONTROL, NearbySession.BLUETOOTH_SERVICE_UUID, false, out)
             controlListener = listener
             control = listener.accept
+        }
+    }
+
+    /**
+     * 车机主动回连：连手机 [phoneAddress] 的蓝牙控制服务，不开监听、不出二维码。只能调用一次（和 [start] 二选一）。
+     * [phoneName] 是请手机开认证子通道时的业务标签（手机的设备名；实车只验证过和手机蓝牙名一致的情况）。
+     * 认证要输码（手机不认这台车了）就以 [WirelessEndReason.ReconnectFailed]（要重新配对）结束，因为这时没有二维码可显示。
+     */
+    fun startReconnect(phoneAddress: String, phoneName: String, nowMillis: Long): List<WirelessOutput> {
+        check(!started) { "start 只能调用一次" }
+        require(phoneName.isNotBlank()) { "手机名不能为空" }
+        val address = BluetoothAddress.format(BluetoothAddress.parse(phoneAddress))
+        started = true
+        reconnect = ReconnectTarget(address, phoneName.toByteArray(Charsets.UTF_8))
+        return session(nowMillis) { out ->
+            val ep = newEndpoint(WirelessChannel.BLUETOOTH_CONTROL, listener = false)
+            control = ep
+            out.add(
+                WirelessAction.ConnectRfcomm(ep.id, WirelessChannel.BLUETOOTH_CONTROL, address, NearbySession.BLUETOOTH_SERVICE_UUID, null),
+            )
         }
     }
 
@@ -181,7 +219,7 @@ class WirelessReceiverSession internal constructor(
                 // 控制通道的监听先不关：它一关，它占的 RFCOMM 通道号就空出来，接着开的认证子通道监听会分到同一个号。
                 // 手机和车机之间控制通道正占着这个号的连接，同一对设备同一个通道号不能再开第二条，手机连认证子通道必失败。
                 // 等认证子通道连上再一起关（监听本身只接受一条连接，开着也不会接第二部手机）。
-                val layer = layers.bluetoothNearby()
+                val layer = layers.bluetoothNearby(initiator = false)
                 nearby = layer
                 handleBluetooth(call(WirelessStep.BLUETOOTH) { layer.start(nowMillis) }, nowMillis, out)
             }
@@ -196,9 +234,30 @@ class WirelessReceiverSession internal constructor(
         }
     }
 
-    /** 主动发起的 TCP 连接已连上（只有 WiFi 阶段的投屏连接）。 */
+    /** 主动发起的连接已连上：车机主动回连时的蓝牙控制通道、认证子通道，以及 WiFi 阶段的投屏连接（TCP）。 */
     fun onConnected(id: Int, nowMillis: Long): List<WirelessOutput> = session(nowMillis) { out ->
-        routeWired(nowMillis, out) { it.onConnected(id, nowMillis) }
+        val ep = endpoints[id]
+        if (ep == null) {
+            routeWired(nowMillis, out) { it.onConnected(id, nowMillis) }
+            return@session
+        }
+        val target = reconnect
+        if (target == null || ep.listener || ep.state != State.OPENING) return@session
+        ep.state = State.OPEN
+        when (ep) {
+            control -> {
+                out.add(WirelessEvent.PhoneBluetoothConnected(target.address))
+                val layer = layers.bluetoothNearby(initiator = true)
+                nearby = layer
+                handleBluetooth(call(WirelessStep.BLUETOOTH) { layer.start(nowMillis) }, nowMillis, out)
+            }
+            authConn -> {
+                // 手机在认证子通道上先发认证握手，车机只应答。
+                authAcceptDeadline = null
+                authDeadline = nowMillis + config.timeouts.authMillis
+                auth = layers.auth(pinCode)
+            }
+        }
     }
 
     /** 连接 [id]（TCP 或 RFCOMM）收到的字节。调用返回后 [data] 可以被调用方复用。 */
@@ -239,10 +298,13 @@ class WirelessReceiverSession internal constructor(
         when (ep) {
             control -> {
                 close(ep, out)
-                if (phoneOnWifi) {
-                    diag(SessionLayer.SESSION, "蓝牙控制通道被手机关闭（WiFi 已接上，会话继续）", out)
-                } else {
-                    finish(WirelessEndReason.Failed(WirelessStep.BLUETOOTH, "WiFi 数据通道接上之前手机关闭了蓝牙控制通道"), nowMillis, out)
+                when {
+                    phoneOnWifi -> diag(SessionLayer.SESSION, "蓝牙控制通道被手机关闭（WiFi 已接上，会话继续）", out)
+                    reconnect != null && !authSucceeded -> finish(
+                        WirelessEndReason.ReconnectFailed(if (awaitingPhone) "手机上没确认（关了连接）" else "手机关了蓝牙控制通道"),
+                        nowMillis, out,
+                    )
+                    else -> finish(WirelessEndReason.Failed(WirelessStep.BLUETOOTH, "WiFi 数据通道接上之前手机关闭了蓝牙控制通道"), nowMillis, out)
                 }
             }
             authConn -> {
@@ -274,6 +336,10 @@ class WirelessReceiverSession internal constructor(
             settled -> {
                 close(ep, out)
                 diag(SessionLayer.SESSION, "${ep.channel.label}出错，已经用不到了，会话继续（$message）", out)
+            }
+            ep === control && reconnect != null && !authSucceeded -> {
+                val what = if (ep.state == State.OPENING) "连不上手机" else "蓝牙控制通道出错"
+                finish(WirelessEndReason.ReconnectFailed("$what：$message"), nowMillis, out)
             }
             ep === network -> {
                 val what = if (ep.state == State.OPENING) "建网失败" else "网络出错"
@@ -311,10 +377,17 @@ class WirelessReceiverSession internal constructor(
         if (n != null && control?.state == State.OPEN) {
             handleBluetooth(call(WirelessStep.BLUETOOTH) { n.onTick(nowMillis) }, nowMillis, out)
         }
+        if (due(reconnectDeadline, nowMillis)) {
+            finish(WirelessEndReason.ReconnectFailed(if (awaitingPhone) "手机上一直没确认" else "手机一直没回应"), nowMillis, out)
+        }
         if (due(authAcceptDeadline, nowMillis)) {
+            val detail = if (authListener == null) {
+                "车机 ${config.timeouts.reconnectAuthConnectMillis} 毫秒内没连上手机的认证子通道"
+            } else {
+                "手机 ${config.timeouts.authChannelAcceptMillis} 毫秒内没连上认证子通道"
+            }
             close(authListener, out)
-            val limit = config.timeouts.authChannelAcceptMillis
-            finish(WirelessEndReason.Failed(WirelessStep.AUTH, "手机 $limit 毫秒内没连上认证子通道"), nowMillis, out)
+            finish(WirelessEndReason.Failed(WirelessStep.AUTH, detail), nowMillis, out)
         }
         if (due(authDeadline, nowMillis)) finish(WirelessEndReason.Failed(WirelessStep.AUTH, "认证超时"), nowMillis, out)
         if (due(networkDeadline, nowMillis)) finish(WirelessEndReason.Failed(WirelessStep.WIFI_NETWORK, "建网超时"), nowMillis, out)
@@ -348,7 +421,10 @@ class WirelessReceiverSession internal constructor(
             if (ended) return
             when (o) {
                 is BluetoothOutput.Send -> write(control, o.bytes, out)
-                is BluetoothOutput.HandshakeCompleted -> out.add(WirelessEvent.BluetoothHandshakeCompleted(o.encrypted))
+                is BluetoothOutput.HandshakeCompleted -> {
+                    out.add(WirelessEvent.BluetoothHandshakeCompleted(o.encrypted))
+                    if (reconnect != null) requestAuthChannel(nowMillis, out)
+                }
                 BluetoothOutput.HandshakeTimedOut -> finish(
                     WirelessEndReason.Failed(WirelessStep.BLUETOOTH, "连上后 ${NearbySession.HANDSHAKE_TIMEOUT_MILLIS / 1000} 秒内握手没完成"),
                     nowMillis, out,
@@ -357,6 +433,8 @@ class WirelessReceiverSession internal constructor(
                 is BluetoothOutput.DataChannelRequest -> onDataChannelRequest(o, nowMillis, out)
                 is BluetoothOutput.DataChannelResult -> onDataChannelResult(o, nowMillis, out)
                 is BluetoothOutput.PeerMac -> onPeerMac(o.mac, nowMillis, out)
+                is BluetoothOutput.AuthChannelReady -> onAuthChannelReady(o, nowMillis, out)
+                is BluetoothOutput.AuthChannelRejected -> onReconnectDeclined(o.status, nowMillis, out)
                 BluetoothOutput.PeerBusy ->
                     finish(WirelessEndReason.Failed(WirelessStep.PHONE_JOIN, "手机回了忙"), nowMillis, out)
                 is BluetoothOutput.Note -> diag(SessionLayer.NEARBY, o.text, out)
@@ -372,6 +450,14 @@ class WirelessReceiverSession internal constructor(
         if (request.businessId != NearbySession.BUSINESS_AUTH || !request.rfcomm) {
             rejectSubchannel(request, "蓝牙控制通道上只开认证子通道", nowMillis, out)
             return
+        }
+        if (reconnect != null) {
+            // 主动回连时手机自己来请求（例如手机上确认之后）：车机还没按手机给的通道号去连，就照手机连上来时的做法接受。
+            if (authConn != null && authListener == null) {
+                rejectSubchannel(request, "车机已经在按手机给的通道号连认证子通道", nowMillis, out)
+                return
+            }
+            reconnectDeadline = null
         }
         val listener = authListener
         when {
@@ -415,6 +501,51 @@ class WirelessReceiverSession internal constructor(
         handleBluetooth(call(WirelessStep.BLUETOOTH) { layer.reject(request) }, nowMillis, out)
     }
 
+    // ---------------- 车机主动回连 ----------------
+
+    private fun requestAuthChannel(nowMillis: Long, out: Out) {
+        val target = checkNotNull(reconnect)
+        val layer = checkNotNull(nearby)
+        reconnectDeadline = nowMillis + config.timeouts.reconnectAnswerMillis
+        handleBluetooth(call(WirelessStep.BLUETOOTH) { layer.requestAuthChannel(target.tag) }, nowMillis, out)
+    }
+
+    /** 手机同意开认证子通道：按它给的通道号连过去（平台拿不到直连接口时按它给的 UUID 查 SDP）。手机只等约 10 秒。 */
+    private fun onAuthChannelReady(ready: BluetoothOutput.AuthChannelReady, nowMillis: Long, out: Out) {
+        val target = reconnect
+        if (target == null || authConn != null) {
+            diag(SessionLayer.SESSION, "认证子通道已经有了，不理手机的应答（$ready）", out)
+            return
+        }
+        reconnectDeadline = null
+        val ep = newEndpoint(WirelessChannel.BLUETOOTH_AUTH, listener = false)
+        authConn = ep
+        authAcceptDeadline = nowMillis + config.timeouts.reconnectAuthConnectMillis
+        out.add(
+            WirelessAction.ConnectRfcomm(
+                ep.id, WirelessChannel.BLUETOOTH_AUTH, target.address, ready.uuid ?: NearbySession.DEFAULT_SUBCHANNEL_UUID, ready.port,
+            ),
+        )
+    }
+
+    /**
+     * 手机暂时没同意开认证子通道。被拒之后怎么办只在这里定。
+     *
+     * 实车（2026-11-22）：手机开着热点时会弹「连接要关热点」的确认框，约 10 秒后先回拒绝，控制通道却一直留着，
+     * 用户点了取消才关；原厂车机拨通后也是留着连接等 120 秒。所以这里不结束：控制通道留着等手机上的确认，
+     * 手机自己再来请求开认证子通道时照常接受（[onSocketRequest]），手机关掉连接或到时没等到就结束。
+     * 用户在手机上点了连接之后手机具体怎么走（自己发请求，还是等车机再请求），待实车验证。
+     */
+    private fun onReconnectDeclined(status: Int, nowMillis: Long, out: Out) {
+        if (reconnect == null || authConn != null) {
+            diag(SessionLayer.SESSION, "认证子通道已经有了，不理手机的拒绝（状态 $status）", out)
+            return
+        }
+        awaitingPhone = true
+        reconnectDeadline = nowMillis + config.timeouts.reconnectConfirmMillis
+        out.add(WirelessEvent.ReconnectAwaitingPhone(status))
+    }
+
     // ---------------- 认证 ----------------
 
     private fun handleAuth(actions: List<HiCarAuthAction>, nowMillis: Long, out: Out) {
@@ -422,8 +553,14 @@ class WirelessReceiverSession internal constructor(
             if (ended) return
             when (a) {
                 is HiCarAuthAction.Send -> write(authConn, a.bytes, out)
-                // 连接码早已和二维码一起显示，这里不再单独给。
-                is HiCarAuthAction.HandshakeAnswered -> out.common(SessionEvent.AuthStarted(a.mode))
+                // 连接码早已和二维码一起显示，这里不再单独给。主动回连时没有二维码：要输码就结束，请用户重新扫码。
+                is HiCarAuthAction.HandshakeAnswered -> {
+                    if (reconnect != null && a.mode == AuthMode.PIN_PAIRING) {
+                        finish(WirelessEndReason.ReconnectFailed("手机要求输码配对", needsPairing = true), nowMillis, out)
+                        return
+                    }
+                    out.common(SessionEvent.AuthStarted(a.mode))
+                }
                 is HiCarAuthAction.Succeeded -> {
                     sessionKey = a.sessionKey.copyOf()
                     a.sessionKey.fill(0)
@@ -447,6 +584,9 @@ class WirelessReceiverSession internal constructor(
      * 报给手机的是平台交回的热点频率（读不到真实信道的平台交回推测值），热点还没开好就等开好再回。
      */
     private fun onDataChannelRequest(request: BluetoothOutput.DataChannelRequest, nowMillis: Long, out: Out) {
+        if (request.capability.unparsedFrom != null && negotiatedFrequency == 0) {
+            diag(SessionLayer.SESSION, "手机报的 WiFi 能力没有全解开，只用解开的部分：${request.capability}", out)
+        }
         when {
             !authSucceeded -> refuse(request, DataChannelRefusal.BUSY, "认证完成之前收到数据通道协商请求", nowMillis, out)
             request.dataChannel != NearbySession.CHANNEL_WIFI ->
@@ -528,7 +668,7 @@ class WirelessReceiverSession internal constructor(
     }
 
     private fun connectionInfo(net: WifiNetwork, port: Int) = WifiConnectionInfo(
-        mode = WifiMode.HOTSPOT,
+        mode = net.mode,
         phoneIp = WifiConnectionInfo.pickPhoneAddress(net.localIp),
         ssid = net.ssid,
         bssid = net.bssid,
@@ -573,7 +713,7 @@ class WirelessReceiverSession internal constructor(
                 connectionInfoSent = true
                 val layer = checkNotNull(nearby)
                 handleBluetooth(call(WirelessStep.PHONE_JOIN) { layer.sendConnectionInfo(info) }, nowMillis, out)
-                if (!ended) out.add(WirelessEvent.ConnectionInfoSent(wifiPort, mac, checkNotNull(info.hotspotChannel)))
+                if (!ended) out.add(WirelessEvent.ConnectionInfoSent(wifiPort, mac, info.hotspotChannel))
             }
         }
     }
@@ -615,6 +755,7 @@ class WirelessReceiverSession internal constructor(
         wipeKey()
         pendingAuthRequests.clear()
         pendingDataChannel = null
+        reconnectDeadline = null
         authAcceptDeadline = null
         authDeadline = null
         networkDeadline = null

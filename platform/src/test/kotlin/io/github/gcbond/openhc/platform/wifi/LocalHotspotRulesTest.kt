@@ -390,4 +390,42 @@ class LocalHotspotRulesTest {
         assertNull(LocalHotspotRules.networkName("<unknown ssid>"))
         assertNull(LocalHotspotRules.networkName(null))
     }
+
+    /** 能一边连 WiFi 一边开热点的车机（车主在安卓 13 车机上遇到）：车机自己 WiFi 的地址恰好在开热点时出现，不能当成热点地址。 */
+    @Test
+    fun stationAddressIsNeverTakenForTheHotspot() {
+        val station = "192.168.1.23"
+        val early = mapOf("wlan0" to setOf(station))
+        assertNull(LocalHotspotRules.pickInterface(emptyMap(), early, stationIp = station), "热点网卡的地址还没出现，接着等")
+        val later = early + ("ap0" to setOf("192.168.15.1"))
+        assertEquals("ap0" to "192.168.15.1", LocalHotspotRules.pickInterface(emptyMap(), later, stationIp = station))
+        assertEquals("ap0" to "192.168.15.1", LocalHotspotRules.pickInterface(early, later, stationIp = station))
+        // 读不到车机 WiFi 的地址、前后快照一样只有 wlan0：车机 WiFi 还开着时兜底先不用，到点再用。
+        assertNull(LocalHotspotRules.pickInterface(early, early, stationIp = null, wlanFallback = false))
+        assertEquals("wlan0" to station, LocalHotspotRules.pickInterface(early, early, stationIp = null, wlanFallback = true))
+        // 开热点时车机 WiFi 断开、热点就在 wlan0 上（比亚迪安卓 10）：照旧选 wlan0。
+        assertEquals("wlan0" to "192.168.46.1", LocalHotspotRules.pickInterface(emptyMap(), mapOf("wlan0" to setOf("192.168.46.1")), stationIp = null))
+    }
+
+    @Test
+    fun reportedFrequencyBeatsGuesses() {
+        assertEquals(5180 to HotspotFrequencySource.REPORTED, LocalHotspotRules.estimateFrequency(HotspotBandHint(WifiBand.GHZ_2, 0), reportedMhz = 5180))
+        assertEquals(2412 to HotspotFrequencySource.REPORTED, LocalHotspotRules.estimateFrequency(null, reportedMhz = 2412))
+        assertEquals(2437 to HotspotFrequencySource.ASSUMED_DEFAULT, LocalHotspotRules.estimateFrequency(null, reportedMhz = 0))
+        // 连接串只认 2.4 / 5 GHz：6 GHz 或不合法的值不用，照旧推测。
+        assertEquals(2437 to HotspotFrequencySource.ASSUMED_DEFAULT, LocalHotspotRules.estimateFrequency(null, reportedMhz = 5955))
+        assertEquals(2437 to HotspotFrequencySource.ASSUMED_DEFAULT, LocalHotspotRules.estimateFrequency(null, reportedMhz = 2413))
+        assertEquals(true, LocalHotspotRules.isWifiChannelFrequency(2484))
+        assertEquals(true, LocalHotspotRules.isWifiChannelFrequency(5745))
+    }
+
+    @Test
+    fun reportedBssidComesAfterConfigBeforeInterface() {
+        val mac = byteArrayOf(0x0A, 0x11, 0x22, 0x33, 0x44, 0x55)
+        assertEquals("1a:2b:3c:4d:5e:6f" to HotspotMacSource.REPORTED, LocalHotspotRules.pickBssid(null, mac, reportedBssid = "1A:2B:3C:4D:5E:6F"))
+        assertEquals("0a:1b:2c:3d:4e:5f" to HotspotMacSource.CONFIG, LocalHotspotRules.pickBssid("0a:1b:2c:3d:4e:5f", mac, reportedBssid = "1a:2b:3c:4d:5e:6f"))
+        // 系统回报的是占位值：跳过，用网卡地址；都没有才用占位值。
+        assertEquals("0a:11:22:33:44:55" to HotspotMacSource.INTERFACE, LocalHotspotRules.pickBssid(null, mac, reportedBssid = MacText.PLACEHOLDER))
+        assertEquals(MacText.PLACEHOLDER to HotspotMacSource.PLACEHOLDER, LocalHotspotRules.pickBssid(null, null, reportedBssid = null))
+    }
 }

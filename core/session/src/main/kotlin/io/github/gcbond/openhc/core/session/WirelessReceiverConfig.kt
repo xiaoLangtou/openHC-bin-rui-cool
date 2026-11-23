@@ -116,9 +116,20 @@ class WirelessTimeouts(
     val networkStartMillis: Long = 10_000,
     /** 从向手机要 MAC 起，到手机连上车机热点上的 TCP。手机连热点、拿地址可能要好几秒。 */
     val phoneJoinMillis: Long = 20_000,
+    /**
+     * 车机主动回连：手机同意开认证子通道后，车机去连它的时限。手机只等约 10 秒；按 SDP 查再连比按通道号直连慢，留到 9 秒。
+     */
+    val reconnectAuthConnectMillis: Long = 9_000,
+    /** 车机主动回连：请手机开认证子通道之后，等手机应答（实测手机同意时 1 秒内回，要问用户时约 10 秒后回拒绝）。 */
+    val reconnectAnswerMillis: Long = 20_000,
+    /** 车机主动回连：手机暂时拒绝之后，控制通道留着等手机上的确认（原厂车机拨通后也是等 120 秒）。 */
+    val reconnectConfirmMillis: Long = 120_000,
 ) {
     init {
-        require(authChannelAcceptMillis > 0 && authMillis > 0 && networkStartMillis > 0 && phoneJoinMillis > 0) {
+        require(
+            authChannelAcceptMillis > 0 && authMillis > 0 && networkStartMillis > 0 && phoneJoinMillis > 0 &&
+                reconnectAuthConnectMillis > 0 && reconnectAnswerMillis > 0 && reconnectConfirmMillis > 0,
+        ) {
             "超时必须为正"
         }
     }

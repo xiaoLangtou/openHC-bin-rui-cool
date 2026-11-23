@@ -22,6 +22,7 @@ class WirelessReceiverSessionTest {
         val session = WirelessReceiverSession(config, AccessUnitSink { }, layers)
         var now = 1_000L
         val rfcomm = HashMap<WirelessChannel, WirelessAction.ListenRfcomm>()
+        val rfcommConnects = HashMap<WirelessChannel, WirelessAction.ConnectRfcomm>()
         val listens = HashMap<SessionChannel, SessionAction.Listen>()
         val connects = HashMap<SessionChannel, SessionAction.Connect>()
         var network: WirelessAction.StartWifiNetwork? = null
@@ -39,6 +40,10 @@ class WirelessReceiverSessionTest {
                         rfcomm[o.channel] = o
                         name(o.id, "${o.channel}.listener")
                         name(o.acceptId, o.channel.name)
+                    }
+                    is WirelessAction.ConnectRfcomm -> {
+                        rfcommConnects[o.channel] = o
+                        name(o.id, o.channel.name)
                     }
                     is WirelessAction.StartWifiNetwork -> {
                         network = o
@@ -80,6 +85,7 @@ class WirelessReceiverSessionTest {
                 is SessionEvent -> "event $c"
             }
             is WirelessAction.ListenRfcomm -> "rfcomm-listen ${o.channel} ${o.uuid}"
+            is WirelessAction.ConnectRfcomm -> "rfcomm-connect ${o.channel} ${o.uuid} ${o.rfcommChannel?.let { "通道 $it" } ?: "按 SDP"}"
             is WirelessAction.RfcommWrite -> "rfcomm-write ${names[o.id]} ${o.bytes.text()}"
             is WirelessAction.RfcommClose -> "rfcomm-close ${names[o.id]}"
             is WirelessAction.StartWifiNetwork -> "wifi-start"
@@ -91,12 +97,26 @@ class WirelessReceiverSessionTest {
         fun btListening(channel: WirelessChannel, port: Int) = record(session.onListening(rfcomm.getValue(channel).id, port, now))
         fun btAccepted(channel: WirelessChannel) =
             record(session.onAccepted(rfcomm.getValue(channel).acceptId, WirelessSynthetic.PHONE_BLUETOOTH, now))
+        /** 蓝牙连接的 id：车机主动连的用连接动作的 id，监听接受的用监听给的 id。 */
+        fun btId(channel: WirelessChannel): Int = rfcommConnects[channel]?.id ?: rfcomm.getValue(channel).acceptId
         fun btData(channel: WirelessChannel, text: String): List<String> {
             val bytes = "xx$text".bytes()
-            return record(session.onData(rfcomm.getValue(channel).acceptId, bytes, 2, bytes.size - 2, now))
+            return record(session.onData(btId(channel), bytes, 2, bytes.size - 2, now))
         }
-        fun btClosed(channel: WirelessChannel) = record(session.onClosed(rfcomm.getValue(channel).acceptId, now))
-        fun btError(channel: WirelessChannel) = record(session.onIoError(rfcomm.getValue(channel).acceptId, "测试错误", now))
+        fun btClosed(channel: WirelessChannel) = record(session.onClosed(btId(channel), now))
+        fun btError(channel: WirelessChannel) = record(session.onIoError(btId(channel), "测试错误", now))
+        fun startReconnect(name: String = "Phone") = record(session.startReconnect(WirelessSynthetic.PHONE_BLUETOOTH, name, now))
+        fun btConnected(channel: WirelessChannel) = record(session.onConnected(rfcommConnects.getValue(channel).id, now))
+        fun btConnectError(channel: WirelessChannel) = record(session.onIoError(rfcommConnects.getValue(channel).id, "测试错误", now))
+
+        /** 主动回连到手机同意开认证子通道、车机连上它为止。 */
+        fun reconnectToAuthChannel() {
+            startReconnect()
+            btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+            btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+            btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok")
+            btConnected(WirelessChannel.BLUETOOTH_AUTH)
+        }
         fun networkReady(net: WifiNetwork) = record(session.onWifiNetworkReady(network!!.id, net, now))
         fun networkError() = record(session.onIoError(network!!.id, "测试错误", now))
         fun networkLost() = record(session.onClosed(network!!.id, now))
@@ -451,6 +471,29 @@ class WirelessReceiverSessionTest {
         )
     }
 
+    /** 平台建的是直连组：连接串用直连格式（没有加入标记 1、没有信道号段），事件里的信道号为 null。 */
+    @Test
+    fun directGroupUsesTheDirectFormat() {
+        val d = Driver()
+        d.toAuthenticated()
+        assertEquals(listOf("event WifiNetworkReady(5745 MHz)"), d.networkReady(WirelessSynthetic.direct(5745)))
+        assertEquals(listOf("rfcomm-write BLUETOOTH_CONTROL dc:5745"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "nego"))
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "confirm")
+        d.listening(SessionChannel.CONTROL, 40100)
+        assertEquals(
+            listOf("rfcomm-write BLUETOOTH_CONTROL info", "event ConnectionInfoSent(40100，直连)"),
+            d.btData(WirelessChannel.BLUETOOTH_CONTROL, "mac"),
+        )
+        val info = d.layers.bluetooth.lastInfo!!
+        assertEquals(WifiMode.DIRECT, info.mode)
+        assertEquals(
+            "192.168.49.2##DIRECT-ab-OpenHC\n0a:1b:2c:3d:4e:5f\n${WirelessSynthetic.HOTSPOT_PASSPHRASE}\n5745" +
+                "##version:3##40100##hicarApIp:192.168.49.1",
+            info.encode(),
+        )
+        assertNull(assertIs<WirelessEvent.ConnectionInfoSent>(d.outputs.last()).channel)
+    }
+
     @Test
     fun macBeforeAskingIsIgnoredAndSentOnlyOnce() {
         val d = Driver()
@@ -692,5 +735,189 @@ class WirelessReceiverSessionTest {
             AccessUnitSink { },
         )
         assertTrue(Regex("[0-9]{6}").matches(random.pinCode))
+    }
+
+    // ---------------- 车机主动回连 ----------------
+
+    @Test
+    fun reconnectHandoffOrder() {
+        val d = Driver()
+        // 车机连手机的蓝牙控制服务：不开监听、不出二维码。
+        assertEquals(listOf("rfcomm-connect BLUETOOTH_CONTROL $controlUuid 按 SDP"), d.startReconnect("车主的手机"))
+        assertTrue(d.outputs.none { it is WirelessEvent.PairingReady })
+        // 连上后车机当握手发起方。
+        assertEquals(
+            listOf("event PhoneBluetoothConnected(地址不显示)", "rfcomm-write BLUETOOTH_CONTROL bt-connect-id"),
+            d.btConnected(WirelessChannel.BLUETOOTH_CONTROL),
+        )
+        assertTrue("bt.create(发起方)" in d.layers.calls)
+        // 握手完成：请手机开认证子通道，业务标签是手机名。
+        assertEquals(
+            listOf("event BluetoothHandshakeCompleted(加密=true)", "rfcomm-write BLUETOOTH_CONTROL authreq"),
+            d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs"),
+        )
+        assertTrue("bt.requestAuthChannel(车主的手机)" in d.layers.calls)
+        // 手机同意：按它给的通道号连过去（没带 UUID 时按默认的 FE36 备用）。
+        assertEquals(
+            listOf("rfcomm-connect BLUETOOTH_AUTH $subchannelUuid 通道 8"),
+            d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok"),
+        )
+        assertEquals(WirelessSynthetic.PHONE_BLUETOOTH, d.rfcommConnects.getValue(WirelessChannel.BLUETOOTH_AUTH).address)
+        // 连上认证子通道：等手机先发认证握手，车机什么都不发。
+        assertEquals(emptyList(), d.btConnected(WirelessChannel.BLUETOOTH_AUTH))
+        assertTrue("auth.create" in d.layers.calls)
+        assertEquals(
+            listOf("rfcomm-write BLUETOOTH_AUTH hello-reply", "event AuthStarted(TRUSTED_RECONNECT)"),
+            d.btData(WirelessChannel.BLUETOOTH_AUTH, "hello-trusted"),
+        )
+        assertEquals(
+            listOf("rfcomm-write BLUETOOTH_AUTH done-reply", "event Authenticated(TRUSTED_RECONNECT)", "wifi-start"),
+            d.btData(WirelessChannel.BLUETOOTH_AUTH, "done-trusted"),
+        )
+        // 之后与手机连上来时相同。
+        assertEquals(listOf("event WifiNetworkReady(2437 MHz)"), d.networkReady(d.hotspotNetwork(2437)))
+        assertEquals(listOf("rfcomm-write BLUETOOTH_CONTROL dc:2437"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "nego"))
+        assertEquals(
+            listOf("event DataChannelNegotiated(2437 MHz)", "listen CONTROL ${WirelessSynthetic.HOTSPOT_IP}:0"),
+            d.btData(WirelessChannel.BLUETOOTH_CONTROL, "confirm"),
+        )
+        assertNull(d.session.nextTickAtMillis?.takeIf { it < d.now + d.config.timeouts.networkStartMillis - 1 })
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+    }
+
+    @Test
+    fun reconnectUsesUuidFromAnswerForSdpFallback() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        assertEquals(listOf("rfcomm-connect BLUETOOTH_AUTH $RECONNECT_UUID 通道 9"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-uuid"))
+    }
+
+    @Test
+    fun reconnectDeclinedKeepsControlAndAcceptsPhoneOwnRequest() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        // 手机暂时拒绝（例如在问用户要不要关热点）：不结束，控制通道留着。
+        assertEquals(listOf("event ReconnectAwaitingPhone(状态=1)"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no"))
+        assertTrue(d.tick(d.now + d.config.timeouts.reconnectConfirmMillis - 1).isEmpty())
+        // 手机自己来请求开认证子通道：照手机连上来时的做法开监听、回通道号。
+        assertEquals(listOf("rfcomm-listen BLUETOOTH_AUTH $subchannelUuid"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "auth?"))
+        assertEquals(listOf("rfcomm-write BLUETOOTH_CONTROL rfcomm:5"), d.btListening(WirelessChannel.BLUETOOTH_AUTH, 5))
+        // 没有控制通道的监听要关，只关认证子通道的监听。
+        assertEquals(listOf("rfcomm-close BLUETOOTH_AUTH.listener"), d.btAccepted(WirelessChannel.BLUETOOTH_AUTH))
+        d.btData(WirelessChannel.BLUETOOTH_AUTH, "hello-trusted")
+        assertEquals(
+            listOf("rfcomm-write BLUETOOTH_AUTH done-reply", "event Authenticated(TRUSTED_RECONNECT)", "wifi-start"),
+            d.btData(WirelessChannel.BLUETOOTH_AUTH, "done-trusted"),
+        )
+        // 等确认的时限已经撤掉（热点开好，免得建网超时混进来）。
+        d.networkReady(d.hotspotNetwork())
+        assertTrue(d.tick(d.now + d.config.timeouts.reconnectConfirmMillis + 1).none { it.startsWith("event Ended") })
+    }
+
+    @Test
+    fun reconnectDeclinedEndsWhenPhoneNeverConfirms() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
+        d.tick(d.now + d.config.timeouts.reconnectConfirmMillis)
+        val reason = assertIs<WirelessEndReason.ReconnectFailed>(d.ended())
+        assertEquals("手机上一直没确认", reason.detail)
+        assertFalse(reason.needsPairing)
+        assertTrue("rfcomm-close BLUETOOTH_CONTROL" in d.outputs.map { d.describe(it) })
+    }
+
+    @Test
+    fun reconnectDeclinedEndsWhenPhoneClosesControl() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
+        d.btClosed(WirelessChannel.BLUETOOTH_CONTROL)
+        assertEquals("手机上没确认（关了连接）", assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).detail)
+    }
+
+    @Test
+    fun reconnectEndsWhenPhoneNeverAnswers() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        assertTrue(d.tick(d.now + d.config.timeouts.reconnectAnswerMillis - 1).isEmpty())
+        d.tick(d.now + d.config.timeouts.reconnectAnswerMillis)
+        assertEquals("手机一直没回应", assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).detail)
+    }
+
+    @Test
+    fun reconnectEndsWhenPhoneUnreachable() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnectError(WirelessChannel.BLUETOOTH_CONTROL)
+        assertEquals("连不上手机：测试错误", assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).detail)
+        assertTrue(d.layers.calls.none { it.startsWith("bt.create") })
+    }
+
+    @Test
+    fun reconnectEndsWhenCarCannotReachAuthChannel() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok")
+        // 车机去连的时限比「等手机连进来」长：到了旧的 5 秒还不算超时。
+        assertTrue(d.tick(d.now + d.config.timeouts.authChannelAcceptMillis).isEmpty())
+        d.tick(d.now + d.config.timeouts.reconnectAuthConnectMillis)
+        val reason = assertIs<WirelessEndReason.Failed>(d.ended())
+        assertEquals(WirelessStep.AUTH, reason.step)
+        assertTrue(reason.detail.startsWith("车机"), reason.detail)
+    }
+
+    @Test
+    fun reconnectNeedingPinEndsAndAsksForPairing() {
+        val d = Driver()
+        d.reconnectToAuthChannel()
+        d.btData(WirelessChannel.BLUETOOTH_AUTH, "hello")
+        val reason = assertIs<WirelessEndReason.ReconnectFailed>(d.ended())
+        assertTrue(reason.needsPairing)
+        assertTrue(d.outputs.none { it is WirelessOutput.Common && it.output is SessionEvent.AuthStarted })
+    }
+
+    @Test
+    fun phoneOwnRequestWhileCarConnectsAuthChannelIsRejected() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok")
+        assertEquals(listOf("diag", "rfcomm-write BLUETOOTH_CONTROL reject:19"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "auth?"))
+        assertTrue(d.rfcomm[WirelessChannel.BLUETOOTH_AUTH] == null, "不另开认证子通道的监听")
+    }
+
+    @Test
+    fun startAndStartReconnectAreExclusiveAndAddressIsChecked() {
+        val d = Driver()
+        d.start()
+        assertFailsWith<IllegalStateException> { d.startReconnect() }
+        assertFailsWith<IllegalArgumentException> { Driver().session.startReconnect("不是地址", "Phone", 0L) }
+        assertFailsWith<IllegalArgumentException> { Driver().session.startReconnect(WirelessSynthetic.PHONE_BLUETOOTH, " ", 0L) }
+    }
+
+    @Test
+    fun connectedCallbackIgnoredInPassiveMode() {
+        val d = Driver()
+        d.start()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        // 手机连上来的连接只认 onAccepted；误报的 onConnected 不改变任何状态。
+        assertTrue(d.record(d.session.onConnected(d.rfcomm.getValue(WirelessChannel.BLUETOOTH_CONTROL).acceptId, d.now)).isEmpty())
+        assertEquals(
+            listOf("event PhoneBluetoothConnected(地址不显示)", "rfcomm-write BLUETOOTH_CONTROL bt-connect-id"),
+            d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
+        )
     }
 }

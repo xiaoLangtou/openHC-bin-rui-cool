@@ -8,9 +8,10 @@ import io.github.gcbond.openhc.wireless.WirelessStep
 // 设置「开机静默连接」（默认关）的判定：开机广播进来以后走哪条路、后台等待建立起来没有、什么时候把界面带到前台。
 // 本文件是纯逻辑，不引用安卓类，由 JVM 单元测试覆盖；接线见 SilentConnect.kt。
 //
-// 静默开着时开机不打开界面，在后台像点了「开始」一样进入等待：有线等插线，无线照「连接方式」里的设置等已配对的手机回连
-// （热点方式照旧在手机认证通过后才开热点）。等待期间前台服务的通知一直在。手机连上开始投屏、或者要车主看车机屏幕
-// （首次配对的连接码、关掉手机 USB 调试的提示）时，才把界面带到前台。开机广播是系统允许后台应用起前台服务的场合之一。
+// 静默开着时开机不打开界面：有线在后台像点了「开始」一样等插线；无线在后台待命——「自动连接手机」要等用无线连成功过的
+// 手机蓝牙连上车机时（系统把本应用叫起来）才拨，拨之前会把界面带到前台（开热点要界面在前台）。等插线期间前台服务的通知一直在。
+// 手机连上开始投屏、或者要车主看车机屏幕（首次配对的连接码、关掉手机 USB 调试的提示）时，才把界面带到前台。
+// 开机广播是系统允许后台应用起前台服务的场合之一。
 
 /** 收到开机广播以后走哪条路。 */
 enum class BootRoute {
@@ -29,7 +30,7 @@ enum class BootRoute {
     /** 在后台等插线。 */
     SILENT_WIRED,
 
-    /** 在后台等已配对的手机无线回连。 */
+    /** 无线在后台待命（等用无线连成功过的手机蓝牙连上车机）。 */
     SILENT_WIRELESS,
     ;
 
@@ -46,8 +47,8 @@ enum class SilentCheck {
     WAITING,
 
     /**
-     * 现在不等是对的，后面会自己开始：蓝牙还没打开（本进程收到蓝牙打开时接着进入等待），
-     * 或者只开了「蓝牙连上自动连接」（手机蓝牙连上时系统会把本应用叫起来）。
+     * 待命：现在不用做什么，后面会自己开始——用无线连成功过的手机蓝牙连上车机时，系统会把本应用叫起来去拨；
+     * 车机蓝牙还没打开的，打开以后手机才会连上来。
      */
     STANDBY,
 
@@ -66,10 +67,8 @@ class SilentSnapshot(
     val wiredBlocked: Boolean,
     /** 无线要求了前台、服务也真的进了前台。 */
     val wirelessWaiting: Boolean,
-    /** 无线自动回连没在等的原因；还没判断过为 null。 */
+    /** 「自动连接手机」能不能起作用；还没判断过为 null。 */
     val wirelessHold: AutoHold?,
-    /** 设置里开着「蓝牙连上自动连接」。 */
-    val connectOnBluetooth: Boolean,
 )
 
 object SilentConnectPolicy {
@@ -109,9 +108,9 @@ object SilentConnectPolicy {
      * 后台等待建立起来没有。[deadlineReached]：已经握了 [SETTLE_LIMIT_MS]。
      *
      * - 等插线：服务进了前台算等上了；开始不了、或到点还没进前台，打开界面。
-     * - 等回连：服务进了前台算等上了；蓝牙还没开的，到点就待命（本进程收到蓝牙打开会接着进入等待）；
-     *   自动回连关着、只开了「蓝牙连上自动连接」的，直接待命；系统没有本地热点（用不了无线）的，改在后台等插线、
-     *   不打开界面；别的原因（没有配对过的手机、读不到车机蓝牙地址、前台服务起不来……）打开界面，由首页说明。
+     * - 无线：「自动连接手机」都准备好了就待命；蓝牙还没开的，到点就待命（打开以后手机才会连上来）；
+     *   系统没有本地热点（用不了无线）的，改在后台等插线、不打开界面；别的原因（还没有用无线连成功过的手机、
+     *   缺悬浮窗权限、读不到车机蓝牙地址……）打开界面，由首页说明。
      */
     fun check(route: BootRoute, s: SilentSnapshot, deadlineReached: Boolean): SilentCheck = when (route) {
         BootRoute.SILENT_WIRED -> when {
@@ -122,8 +121,8 @@ object SilentConnectPolicy {
         BootRoute.SILENT_WIRELESS -> when {
             s.wirelessWaiting -> SilentCheck.WAITING
             s.wirelessHold == null -> if (deadlineReached) SilentCheck.OPEN_UI else SilentCheck.PENDING
+            s.wirelessHold == AutoHold.READY -> SilentCheck.STANDBY
             s.wirelessHold == AutoHold.BLUETOOTH_OFF -> if (deadlineReached) SilentCheck.STANDBY else SilentCheck.PENDING
-            s.wirelessHold == AutoHold.DISABLED && s.connectOnBluetooth -> SilentCheck.STANDBY
             s.wirelessHold == AutoHold.HOTSPOT_UNSUPPORTED -> SilentCheck.WIRED_INSTEAD
             else -> SilentCheck.OPEN_UI
         }

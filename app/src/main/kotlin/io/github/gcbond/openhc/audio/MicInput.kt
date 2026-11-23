@@ -3,12 +3,12 @@ package io.github.gcbond.openhc.audio
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.util.Log
 import androidx.core.content.ContextCompat
 import io.github.gcbond.openhc.core.dmsdp.audio.MicCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.MicEvent
 import io.github.gcbond.openhc.core.dmsdp.audio.MicParameters
 import io.github.gcbond.openhc.core.dmsdp.audio.MicStreamListener
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.MicAacEncoder
 import io.github.gcbond.openhc.platform.media.MicCapture
 import java.io.Closeable

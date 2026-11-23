@@ -81,6 +81,12 @@
         android.uid.system（与官方 CarLink 同款打包方式），此 signature 级权限即可自动授予，广播放行。
     -->
     <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
+    <!-- 比亚迪车机「选择禁止后台启动项」对话框：安卓 11 起要声明，才查得到车机上有没有它（设置 → 启动）。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.BYD_APPSTARTMANAGEMENT" />
+        </intent>
+    </queries>
 
     <application
         android:name=".OpenHcApp"
@@ -154,7 +160,7 @@
         -->
         <receiver
             android:name=".wireless.BluetoothConnectionReceiver"
-            android:enabled="false"
+            android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />

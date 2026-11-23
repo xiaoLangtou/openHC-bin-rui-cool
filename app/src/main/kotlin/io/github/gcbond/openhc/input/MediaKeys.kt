@@ -3,11 +3,11 @@ package io.github.gcbond.openhc.input
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.KeyEvent
 import io.github.gcbond.openhc.core.hisight.HiSightInput
 import io.github.gcbond.openhc.core.session.SessionAction
 import io.github.gcbond.openhc.core.session.SessionOutput
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.MediaKeyForwarder
 import io.github.gcbond.openhc.platform.media.MediaKeySession
 

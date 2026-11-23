@@ -14,13 +14,14 @@ import io.github.gcbond.openhc.connection.ScreenSpec
 import io.github.gcbond.openhc.settings.AppSettings
 
 /**
- * 设置页「画面」一组：帧率、清晰度、全屏显示。分辨率不给选，一律按屏幕实际尺寸。改动在下次连接时生效。
+ * 设置页「画面」一组：帧率、界面大小、清晰度、全屏显示。分辨率不给选，一律按屏幕实际尺寸。改动在下次连接时生效。
  * 新的画面设置做成一行（[ChoiceRow] / [SwitchRow]）放进这一组。
  */
 @Composable
 internal fun PictureSettingsSection(settings: AppSettings, screen: ScreenSpec) {
     SettingsGroup(stringResource(R.string.settings_group_picture)) {
         FpsSetting(settings, screen)
+        UiScaleSetting(settings)
         ClaritySettingsSection()
         FullScreenSetting(settings)
     }
@@ -42,6 +43,24 @@ internal fun FpsSetting(settings: AppSettings, screen: ScreenSpec) {
     ) { index ->
         fps = values[index]
         settings.fps = values[index]
+    }
+}
+
+/** 界面大小：声明给手机的 DPI 按百分比缩小，大屏车机上手机界面显得太大时用。下次连接生效。 */
+@Composable
+internal fun UiScaleSetting(settings: AppSettings) {
+    var percent by remember { mutableIntStateOf(settings.uiScalePercent) }
+    val values = DisplayPlan.UI_SCALE_CHOICES
+    ChoiceRow(
+        title = stringResource(R.string.settings_ui_scale),
+        options = values.map {
+            if (it == DisplayPlan.DEFAULT_UI_SCALE) stringResource(R.string.settings_ui_scale_default) else "$it%"
+        },
+        selected = values.indexOf(percent),
+        description = stringResource(R.string.settings_ui_scale_hint),
+    ) { index ->
+        percent = values[index]
+        settings.uiScalePercent = values[index]
     }
 }
 

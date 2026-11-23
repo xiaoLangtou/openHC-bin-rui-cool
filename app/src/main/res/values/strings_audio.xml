@@ -25,8 +25,8 @@
     <string name="settings_audio_codec_pcm">PCM（不压缩，默认：延迟更低；某台手机在 PCM 下不出声会自动改用 AAC，记在下面）</string>
     <string name="settings_audio_codec_aac">AAC（压缩：所有手机都用 AAC）</string>
     <string name="settings_audio_fallback_title">已自动改用 AAC 的手机</string>
-    <string name="settings_audio_fallback_empty">没有。手机在 PCM 下不出声（想放声音却一直没开声音通道，或者发来的声音不对）时会记在这里，下次连接对它改用 AAC。</string>
-    <string name="settings_audio_fallback_hint">之前在 PCM 下正常出过声的手机，要连续两次不出声才会记进来。点「恢复 PCM」后下次连接再试 PCM。</string>
+    <string name="settings_audio_fallback_none">没有</string>
+    <string name="settings_audio_fallback_help">手机在 PCM 下不出声（想放声音却一直没开声音通道，或者发来的声音不对）时会记在这里，下次连接对它改用 AAC。之前在 PCM 下正常出过声的手机，要连续两次不出声才会记进来。点「恢复 PCM」后下次连接再试 PCM。</string>
     <string name="settings_audio_fallback_item">%1$s（编号 %2$s）：%3$s，%4$s 记下</string>
     <string name="settings_audio_fallback_unnamed">没报名字的手机</string>
     <string name="settings_audio_fallback_reset">恢复 PCM</string>

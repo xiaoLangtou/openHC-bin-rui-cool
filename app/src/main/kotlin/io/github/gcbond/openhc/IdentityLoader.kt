@@ -9,7 +9,7 @@ import java.io.FileNotFoundException
 import java.io.IOException
 
 /**
- * 读车机固定参数：安装包里的 `openhc-identity.json`，也就是仓库里固定的那份，所有安装包都一样。
+ * 读车机的连接参数：安装包里的 `openhc-identity.json`（不进仓库，构建时打进安装包，见 app/build.gradle.kts）。
  * 缺少或不能用（例如有人把文件改坏了）时报出来，见 [IdentityResolution]。
  */
 object IdentityLoader {

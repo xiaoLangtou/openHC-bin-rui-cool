@@ -66,4 +66,9 @@ sealed class HiSightOutput {
 
     /** 会话已结束。总是跟在 [CloseAll] 后面，只出现一次。 */
     class Ended(val reason: HiSightEndReason) : HiSightOutput()
+
+    /** 只用于诊断的说明（例如手机发来的格式和常见的不一样、已按宽松规则接受），写日志即可，不含密钥和地址。 */
+    class Note(val text: String) : HiSightOutput() {
+        override fun toString() = "Note($text)"
+    }
 }

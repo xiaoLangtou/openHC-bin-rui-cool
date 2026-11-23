@@ -10,7 +10,7 @@ import kotlinx.serialization.json.intOrNull
 /**
  * 车机（本应用）对手机声明的身份。
  *
- * 取值固定在 `app/src/main/assets/openhc-identity.json`，所有安装包都一样。
+ * 取值来自安装包里的 `openhc-identity.json`：不进仓库，构建时从本机目录打进安装包（见 app/build.gradle.kts）。
  */
 data class HostIdentity(
     /** 车型编号的前 6 位十六进制（3 字节），大写。 */

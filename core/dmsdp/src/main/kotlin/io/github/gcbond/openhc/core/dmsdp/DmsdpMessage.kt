@@ -116,6 +116,10 @@ class DmsdpMessage(
             return sb.toString()
         }
 
+        /** 看起来是文字消息：以大写字母开头（方法名或 `DMSDP/1.0`），并且有头部结束的空行。 */
+        fun looksLikeText(payload: ByteArray): Boolean =
+            payload.isNotEmpty() && payload[0] in 'A'.code.toByte()..'Z'.code.toByte() && indexOfBlankLine(payload) >= 0
+
         /** 编码一条消息：首行、头部各占一行（CRLF），再一个空行，再正文。 */
         fun encode(startLine: String, headers: List<Pair<String, String>>, body: ByteArray = ByteArray(0)): ByteArray {
             val text = StringBuilder(startLine).append("\r\n")

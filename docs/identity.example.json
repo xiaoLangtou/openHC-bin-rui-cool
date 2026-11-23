@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "host": {
+    "modelId": "000000",
+    "subModelId": "00",
+    "brand": "car",
+    "deviceName": "OpenHC"
+  },
+  "nearbyKeys": {
+    "rootKey": "AAAAAAAAAAAAAAAAAAAAAA==",
+    "constA": "AAAAAAAAAAAAAAAAAAAAAA==",
+    "constB": "AAAAAAAAAAAAAAAAAAAAAA=="
+  },
+  "authService": {
+    "packageName": "example.package",
+    "serviceType": "EXAMPLE",
+    "envelopeVersion": "example"
+  }
+}

@@ -9,8 +9,7 @@
     <string name="home_mode">当前模式：%1$s</string>
     <string name="home_mode_both">无线 + 有线</string>
     <string name="home_mode_wired_only">只用数据线</string>
-    <string name="home_mode_auto">无线自动回连</string>
-    <string name="home_mode_connect_on_bt">蓝牙连上自动连接</string>
+    <string name="home_mode_connect_on_bt">自动连接手机</string>
 
     <!-- 设置页：分组名与分段选择里的短选项 -->
     <string name="settings_group_picture">画面</string>

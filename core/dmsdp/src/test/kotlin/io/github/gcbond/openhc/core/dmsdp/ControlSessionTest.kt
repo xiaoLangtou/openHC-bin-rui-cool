@@ -240,6 +240,30 @@ class ControlSessionTest {
         assertTrue(tcp.none { it is DmsdpAction.OpenKeepAliveSocket })
     }
 
+    /**
+     * 加密后认不出的载荷（手机在声音数据连接连上前，经控制连接送来的声音）：跳过、不断开，
+     * 前 3 个和之后每第 100 个交出事件；之后的文字消息照常处理。
+     */
+    @Test
+    fun unrecognizedBinaryPayloadIsSkippedNotFatal() {
+        val (session, _) = encryptedSession()
+        val binary = ByteArray(1400) { (it * 7 + 3).toByte() }
+        val events = (1..101).flatMap { session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(binary)).events() }
+        val skipped = events.map { it as DmsdpEvent.UnrecognizedControlPayload }
+        assertEquals(listOf(1, 2, 3, 100), skipped.map { it.count })
+        assertEquals(1400, skipped[0].size)
+        assertContentEquals(binary.copyOf(DmsdpEvent.UnrecognizedControlPayload.HEAD_BYTES), skipped[0].head)
+        // 碰巧带空行、但不以大写字母开头的二进制也跳过（新会话里是第 1 个，交出事件）。
+        val (other, _) = encryptedSession()
+        val crlf = byteArrayOf(0x01, 0x0D, 0x0A, 0x0D, 0x0A)
+        assertIs<DmsdpEvent.UnrecognizedControlPayload>(other.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(crlf)).events().single())
+        val out = session.feed(
+            DmsdpChannel.CONTROL,
+            phone.encryptedText("SET_PARAMETER * DMSDP/1.0\r\nCSeq: 7\r\nTimeServerPort: 0\r\nTimeUsHigh: 1\r\nTimeUsLow: 2\r\n\r\n"),
+        )
+        assertIs<DmsdpEvent.TimeSyncRequested>(out.events().single())
+    }
+
     @Test
     fun timeSyncAnswersOnlyCSeqAndKeepsRawValues() {
         val (session, _) = encryptedSession()

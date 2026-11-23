@@ -1,5 +1,7 @@
 package io.github.gcbond.openhc.core.session
 
+import io.github.gcbond.openhc.core.common.hexToBytes
+
 import io.github.gcbond.openhc.core.common.ByteReader
 import io.github.gcbond.openhc.core.common.ByteWriter
 import io.github.gcbond.openhc.core.common.codec.Crc16Arc
@@ -87,7 +89,7 @@ class RealWirelessFlowTest {
         private val real = ProductionWirelessLayers(config)
         val fake = FakeWirelessLayers()
 
-        override fun bluetoothNearby() = real.bluetoothNearby()
+        override fun bluetoothNearby(initiator: Boolean) = real.bluetoothNearby(initiator)
         override fun auth(pinCode: String) = fake.auth(pinCode)
         override fun wifiPhase(config: ReceiverConfig): Layers = object : Layers by fake.wifi {
             override fun nearby() = WifiPhaseLayers(config).nearby()
@@ -228,6 +230,81 @@ class RealWirelessFlowTest {
         val end = run(session.stop(now))
         assertIs<WirelessEvent.Ended>(end.last())
         assertEquals(1, end.count { it is WirelessAction.StopWifiNetwork })
+    }
+
+    /**
+     * 车机主动回连，用真的蓝牙 nearby：车机拨号 → 当握手发起方 → 请手机开认证子通道 → 按手机给的通道号连 → 认证（假的）
+     * → 实车抓到的那条数据通道协商（2026-11-22，Mate 70，解密后 33 字节）→ 车机按热点频率回应。
+     */
+    @Test
+    fun reconnectWithRealNearbyUpToDataChannelAnswer() {
+        val config = WirelessSynthetic.config()
+        val layers = HybridLayers(config)
+        val session = WirelessReceiverSession(config, AccessUnitSink { }, layers)
+        val now = 1_000L
+        val connects = HashMap<WirelessChannel, WirelessAction.ConnectRfcomm>()
+        var network: WirelessAction.StartWifiNetwork? = null
+        fun run(outputs: List<WirelessOutput>): List<WirelessOutput> {
+            for (o in outputs) {
+                when (o) {
+                    is WirelessAction.ConnectRfcomm -> connects[o.channel] = o
+                    is WirelessAction.StartWifiNetwork -> network = o
+                    else -> Unit
+                }
+            }
+            return outputs
+        }
+        fun bt(channel: WirelessChannel, bytes: ByteArray) = run(session.onData(connects.getValue(channel).id, bytes, 0, bytes.size, now))
+        val phoneName = "车主的Mate 70 Pro"
+        val nameBytes = phoneName.toByteArray()
+
+        // 车机连手机的蓝牙控制服务（FE35，按 SDP 查），不开监听、不出二维码。
+        assertTrue(run(session.startReconnect(WirelessSynthetic.PHONE_BLUETOOTH, phoneName, now)).none { it is WirelessEvent.PairingReady })
+        val control = connects.getValue(WirelessChannel.BLUETOOTH_CONTROL)
+        assertEquals("0000fe35-0000-1000-8000-00805f9b34fb", control.uuid.toString())
+        assertEquals(null, control.rfcommChannel)
+
+        // 连上：车机当发起方，明文 connectId，再明文 TLV1{02} TLV3(deviceId) TLV5{01}。
+        val opened = run(session.onConnected(control.id, now)).rfcommWrites().map { Phone.open(it) }
+        assertEquals(2, opened.size)
+        assertTrue(opened.none { it.second })
+        assertEquals("818102" + "83c0" + config.deviceId.toByteArray().toHex() + "858101", opened[1].third.toHex())
+
+        // 手机回 TLV2/4/6（加密）→ 握手完成，车机接着发命令 3（加密）：通道 2、业务 19、标签 = 手机名、协议 0、不带 UUID。
+        val back = Phone.tlv(2, byteArrayOf(5)) + Phone.tlv(4, "0123456789AB\u0000".toByteArray()) + Phone.tlv(6, byteArrayOf(1))
+        val asked = bt(WirelessChannel.BLUETOOTH_CONTROL, Phone.sealed(0, back))
+        assertIs<WirelessEvent.BluetoothHandshakeCompleted>(asked.filterIsInstance<WirelessEvent>().single())
+        val (outer2, encrypted2, cmd3) = Phone.open(asked.rfcommWrites().single())
+        assertEquals(2, outer2)
+        assertTrue(encrypted2)
+        assertEquals(Phone.tlv(3, ByteWriter().ea(2).ea(19).ea(nameBytes.size).bytes(nameBytes).ea(0).toByteArray()).toHex(), cmd3.toHex())
+
+        // 手机回命令 4：同意、通道 8、原样回送、带 FE36 → 车机按通道 8 连过去（FE36 备用于查 SDP）。
+        val fe36 = "0000fe3600001000800000805f9b34fb".hexToBytes()
+        val cmd4 = Phone.tlv(4, ByteWriter().ea(0).ea(8).ea(2).ea(19).ea(nameBytes.size).bytes(nameBytes).ea(0).ea(16).bytes(fe36).toByteArray())
+        bt(WirelessChannel.BLUETOOTH_CONTROL, Phone.sealed(2, cmd4))
+        val auth = connects.getValue(WirelessChannel.BLUETOOTH_AUTH)
+        assertEquals(8, auth.rfcommChannel)
+        assertEquals("0000fe36-0000-1000-8000-00805f9b34fb", auth.uuid.toString())
+        assertEquals(WirelessSynthetic.PHONE_BLUETOOTH, auth.address)
+
+        // 认证（假的，免码）通过才开热点。
+        run(session.onConnected(auth.id, now))
+        bt(WirelessChannel.BLUETOOTH_AUTH, "hello-trusted".bytes())
+        assertEquals(null, network)
+        bt(WirelessChannel.BLUETOOTH_AUTH, "done-trusted".bytes())
+        run(session.onWifiNetworkReady(network!!.id, WirelessSynthetic.hotspot(5745), now))
+
+        // 实车那条数据通道协商：车机当组主、报热点频率（5745 = EA 0x2C 0xF1 → ad f1）。
+        val sample = "819f83839c818182818381848186818c7fbf857f83878089808b808a8091819280".hexToBytes()
+        val offer = bt(WirelessChannel.BLUETOOTH_CONTROL, Phone.sealed(4, sample))
+        assertTrue(offer.none { it is WirelessEvent.Ended }, offer.toString())
+        val (outer4, _, offered) = Phone.open(offer.rfcommWrites().single())
+        assertEquals(4, outer4)
+        val answer = ByteReader(offered)
+        assertEquals(2, answer.ea(), "命令 2：车机回协商应答")
+        val value = ByteReader(answer.bytes(answer.ea()))
+        assertEquals(3, value.ea(), "数据通道 3（WiFi）")
     }
 
     private fun tags(payload: ByteArray): List<Int> {

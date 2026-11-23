@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.R
 import io.github.gcbond.openhc.settings.WirelessNetworkPreferences
+import io.github.gcbond.openhc.settings.WirelessPreferences
+import io.github.gcbond.openhc.wireless.WirelessUiState
 
 // 无线连接里 WiFi 那一段（车机开热点）：设置页「连接方式」组里的「退出后恢复车机 WiFi」、
 // 首页无线卡片上的一行说明，以及首页顶上的提示卡片。
@@ -46,9 +48,17 @@ internal fun RestoreWifiSetting() {
     }
 }
 
-/** 无线连接怎么给手机准备 WiFi 的一句说明（车机开热点，车机原来连着的 WiFi 会断开）。 */
+/**
+ * 无线连接怎么给手机准备 WiFi 的一句说明：车机开热点（车机原来连着的 WiFi 会断开），或者 WiFi 直连（试验）。
+ * 连接进行中按这次连接用的方式；空闲时按设置（设置页和首页不同时显示，回到首页时重新组合，读到的是新值）。
+ */
 @Composable
-internal fun wirelessNetworkText(): String = stringResource(R.string.wireless_network_line)
+internal fun wirelessNetworkText(state: WirelessUiState): String {
+    val context = LocalContext.current
+    val prefs = remember(context) { WirelessPreferences(context) }
+    val direct = if (state.active) state.direct else prefs.usesWifiDirect
+    return stringResource(if (direct) R.string.wireless_network_line_direct else R.string.wireless_network_line)
+}
 
 /**
  * 「退出后恢复车机 WiFi」要车主自己打开 WiFi 时（安卓 10 起应用打不开）首页顶上的提示卡片；不需要时什么都不显示。

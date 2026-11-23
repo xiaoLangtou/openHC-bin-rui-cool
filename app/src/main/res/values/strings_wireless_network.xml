@@ -6,13 +6,26 @@
     <string name="settings_wireless_restore">退出后恢复车机 WiFi（默认关）</string>
     <string name="settings_wireless_restore_hint">无线连接结束、热点关掉以后，如果车机 WiFi 是因为开热点才断开的，就把它打开。安卓 10 起应用不能自己打开 WiFi：车机 WiFi 没有自己恢复时，首页顶上会提示你去系统里打开。</string>
 
+    <!-- 设置页：无线方式 -->
+    <string name="settings_wireless_mode">无线方式</string>
+    <string name="settings_wireless_mode_hotspot">车机开热点</string>
+    <string name="settings_wireless_mode_direct">5 GHz 直连（试验）</string>
+    <string name="settings_wireless_mode_hint">车机开热点：手机连车机开的热点，最稳；车机原来连着的 WiFi 会断开。5 GHz 直连：车机建一个 WiFi 直连组让手机加入，优先用 5 GHz，避开和蓝牙挤在 2.4 GHz 上（手机蓝牙忙的时候画面容易卡）；不开热点，车机原来连着的 WiFi 不用断开。下一次无线连接生效。</string>
+    <string name="settings_wireless_mode_direct_note">试验功能。要先打开车机 WiFi（不用连任何网络）。车机 WiFi 连在某些 5 GHz 信道上、或者建不了 5 GHz 时，会退到 2.4 GHz。连不上或者画面卡，就改回「车机开热点」，报告问题时附上诊断日志。</string>
+
     <!-- 首页无线卡片 -->
     <string name="wireless_network_line">无线方式：车机开热点。手机连上来时，车机原来连着的 WiFi 会断开。</string>
+    <string name="wireless_network_line_direct">无线方式：WiFi 直连（试验，优先 5 GHz）。车机 WiFi 要开着，原来连着的网络不用断开。</string>
     <string name="wireless_hint_negotiating_hotspot">认证成功，车机正在开热点，和手机商量 WiFi…</string>
     <string name="wireless_hint_sending_hotspot">车机热点已打开，正在把热点信息发给手机…</string>
     <string name="wireless_hint_waiting_join_hotspot">等手机连上车机热点…（手机开着热点的话会被关掉）</string>
+    <string name="wireless_hint_negotiating_direct">认证成功，车机正在建 WiFi 直连组，和手机商量 WiFi…</string>
+    <string name="wireless_hint_sending_direct">直连组已建好，正在把组的信息发给手机…</string>
+    <string name="wireless_hint_waiting_join_direct">等手机加入车机的 WiFi 直连组…（手机开着热点的话会被关掉）</string>
     <string name="wireless_end_step_hotspot">车机开热点失败（%1$s）。安卓 8～12 的车机要打开系统定位开关；车机开着个人热点时先关掉。</string>
     <string name="wireless_end_step_join_hotspot">手机没能连上车机热点（%1$s）。可以重新开始再试一次。</string>
+    <string name="wireless_end_step_direct">车机建 WiFi 直连组失败（%1$s）。先确认车机 WiFi 开着；还不行就在设置里把「无线方式」改回「车机开热点」。</string>
+    <string name="wireless_end_step_join_direct">手机没能加入车机的 WiFi 直连组（%1$s）。可以重新开始再试一次；总是不行就在设置里把「无线方式」改回「车机开热点」。</string>
 
     <!-- 退出后恢复车机 WiFi：应用打不开 WiFi 时的提示 -->
     <string name="wireless_restore_title">车机 WiFi 还关着</string>

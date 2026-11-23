@@ -8,12 +8,12 @@ import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import io.github.gcbond.openhc.MainActivity
 import io.github.gcbond.openhc.connection.UsbAutoConnect
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.usb.PhoneUsbMode
 import io.github.gcbond.openhc.platform.usb.UsbDescriber
 import io.github.gcbond.openhc.settings.WirelessPreferences
@@ -95,14 +95,14 @@ internal object BootStart {
         wirelessWanted = wirelessWanted(context),
     )
 
-    /** 开机后无线要不要等手机回连（只看设置）。 */
+    /** 开机后无线要不要自动连手机（只看设置）。 */
     fun wirelessWanted(context: Context): Boolean {
         val wireless = WirelessPreferences(context)
-        return BootStartPolicy.wirelessWanted(wireless.wiredOnly, wireless.autoReconnect, wireless.connectOnBluetooth)
+        return BootStartPolicy.wirelessWanted(wireless.wiredOnly, wireless.connectOnBluetooth)
     }
 
     /** 车机上插着能走有线的华为 / 荣耀手机（普通状态，或开着 USB 调试、等用户关掉）。 */
-    private fun phonePlugged(context: Context): Boolean {
+    fun phonePlugged(context: Context): Boolean {
         val usb = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return false
         return try {
             usb.deviceList.values.any { UsbDescriber.phoneMode(it) in PLUGGED_MODES }
@@ -125,6 +125,26 @@ internal object BootStart {
     /** 本应用的系统设置页（有的车机把自启动、悬浮窗开关放在这里）。 */
     fun appDetailsIntent(context: Context): Intent =
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+
+    /**
+     * 比亚迪车机的「选择禁止后台启动项」对话框：开关开着的应用收不到开机广播、蓝牙连上的广播（没在运行时），
+     * 车主要把本应用的开关关掉才放行；比亚迪每次更新安装应用都会把它重新打开。没有这个对话框的车机返回 null。
+     */
+    fun bydAutostartIntent(context: Context): Intent? {
+        val intent = Intent(ACTION_BYD_APP_START_MANAGEMENT)
+        val pm = context.packageManager
+        val found = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.resolveActivity(intent, 0)
+            }
+        } catch (e: RuntimeException) {
+            null
+        }
+        return if (found != null) intent else null
+    }
 
     fun lastRecord(context: Context): BootRecord? = BootRecord.decode(prefs(context).getString(KEY_LAST_BOOT, null))
 
@@ -155,5 +175,8 @@ internal object BootStart {
     private const val PREFS_FILE = "openhc-boot"
     private const val KEY_LAST_BOOT = "last_boot"
     private const val KEY_SILENT = "silent_connect"
+
+    /** 比亚迪「选择禁止后台启动项」对话框的动作（清单里的 queries 也要声明，安卓 11 起才查得到）。 */
+    private const val ACTION_BYD_APP_START_MANAGEMENT = "android.intent.action.BYD_APPSTARTMANAGEMENT"
     const val TAG = "OpenHC-Boot"
 }

@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -15,12 +14,10 @@ import io.github.gcbond.openhc.R
 import io.github.gcbond.openhc.settings.WirelessPreferences
 
 /**
- * 无线连接的几项设置在设置页里分在两组：「连接方式」里是只用数据线连接、无线自动回连，「启动」里是蓝牙连上自动连接；
- * 无线自动回连开着时另有一组 BLE 广播的调试项。三个开关切换立即生效；调试项下次开始等待时生效
- * （从设置页回去时，还没连上手机的等待会按新设置重开）。
+ * 无线连接的两项设置在设置页里分在两组：「连接方式」里是只用数据线连接，「启动」里是自动连接手机。切换立即生效。
  *
- * 这几行分在不同的组里、又互相影响（只用数据线连接开着时提示别的不起作用，自动回连关着时不显示调试组），
- * 所以状态放在这里，由设置页创建一份（[rememberWirelessSettingsState]）传给各行。
+ * 这两行分在不同的组里、又互相影响（只用数据线连接开着时提示别的不起作用，自动连接手机开着时「启动」组要列出悬浮窗权限），
+ * 所以状态放在这里，由设置页创建一份（[rememberWirelessSettingsState]）传给各行。BLE 广播的调试项随被动等待一起不再显示。
  */
 @Stable
 internal class WirelessSettingsState(context: Context) {
@@ -31,13 +28,7 @@ internal class WirelessSettingsState(context: Context) {
         private set
     var connectOnBluetooth by mutableStateOf(prefs.connectOnBluetooth)
         private set
-    var autoReconnect by mutableStateOf(prefs.autoReconnect)
-        private set
-    var republishSeconds by mutableIntStateOf(prefs.republishSeconds)
-        private set
-    var declareRandomAddress by mutableStateOf(prefs.declareRandomAddress)
-        private set
-    var gattServer by mutableStateOf(prefs.gattServer)
+    var wifiDirect by mutableStateOf(prefs.wifiDirect)
         private set
 
     fun changeWiredOnly(value: Boolean) {
@@ -46,32 +37,18 @@ internal class WirelessSettingsState(context: Context) {
         controller?.onWiredOnlyChanged()
     }
 
+    /** 下一次无线连接生效，正在进行的连接照旧。 */
+    fun changeWifiDirect(value: Boolean) {
+        wifiDirect = value
+        prefs.wifiDirect = value
+    }
+
     fun changeConnectOnBluetooth(value: Boolean) {
         connectOnBluetooth = value
         prefs.connectOnBluetooth = value
         controller?.onConnectOnBluetoothChanged()
     }
 
-    fun changeAutoReconnect(value: Boolean) {
-        autoReconnect = value
-        prefs.autoReconnect = value
-        controller?.onAutoReconnectSettingChanged()
-    }
-
-    fun changeRepublishSeconds(value: Int) {
-        republishSeconds = value
-        prefs.republishSeconds = value
-    }
-
-    fun changeDeclareRandomAddress(value: Boolean) {
-        declareRandomAddress = value
-        prefs.declareRandomAddress = value
-    }
-
-    fun changeGattServer(value: Boolean) {
-        gattServer = value
-        prefs.gattServer = value
-    }
 }
 
 @Composable
@@ -80,7 +57,7 @@ internal fun rememberWirelessSettingsState(): WirelessSettingsState {
     return remember(context) { WirelessSettingsState(context) }
 }
 
-/** 只用数据线连接（默认关）：开着时无线关掉，提示自动回连、蓝牙连上自动连接都不起作用。 */
+/** 只用数据线连接（默认关）：开着时无线关掉，提示自动连接手机不起作用。 */
 @Composable
 internal fun WiredOnlySetting(state: WirelessSettingsState) {
     SwitchRow(
@@ -92,18 +69,7 @@ internal fun WiredOnlySetting(state: WirelessSettingsState) {
     )
 }
 
-/** 无线自动回连（默认开）。 */
-@Composable
-internal fun AutoReconnectSetting(state: WirelessSettingsState) {
-    SwitchRow(
-        title = stringResource(R.string.settings_wireless_auto),
-        checked = state.autoReconnect,
-        description = stringResource(R.string.settings_wireless_auto_hint),
-        onCheckedChange = state::changeAutoReconnect,
-    )
-}
-
-/** 蓝牙连上自动连接（默认关）。 */
+/** 自动连接手机（默认开；存储的键沿用旧名「蓝牙连上自动连接」）。 */
 @Composable
 internal fun ConnectOnBluetoothSetting(state: WirelessSettingsState) {
     SwitchRow(
@@ -114,36 +80,15 @@ internal fun ConnectOnBluetoothSetting(state: WirelessSettingsState) {
     )
 }
 
-/** BLE 广播的调试项：只在无线自动回连开着时显示，下次开始等待时生效。 */
+/** 无线方式（默认车机开热点）：「5 GHz 直连」是试验功能，安卓 10 起才有，更早的系统不显示这一行。 */
 @Composable
-internal fun WirelessDebugSection(state: WirelessSettingsState) {
-    if (!state.autoReconnect) return
-    SettingsGroup(stringResource(R.string.settings_wireless_debug)) {
-        val choices = WirelessPreferences.REPUBLISH_CHOICES
-        val labels = choices.map { seconds ->
-            when {
-                seconds == 0 -> stringResource(R.string.settings_wireless_republish_off)
-                seconds % 60 == 0 -> stringResource(R.string.settings_wireless_republish_minutes, seconds / 60)
-                else -> stringResource(R.string.settings_wireless_republish_seconds, seconds)
-            }
-        }
-        ChoiceRow(
-            title = stringResource(R.string.settings_wireless_republish),
-            options = labels,
-            selected = choices.indexOf(state.republishSeconds),
-            description = stringResource(R.string.settings_wireless_republish_hint),
-        ) { index -> state.changeRepublishSeconds(choices[index]) }
-        SwitchRow(
-            title = stringResource(R.string.settings_wireless_random),
-            checked = state.declareRandomAddress,
-            description = stringResource(R.string.settings_wireless_random_hint),
-            onCheckedChange = state::changeDeclareRandomAddress,
-        )
-        SwitchRow(
-            title = stringResource(R.string.settings_wireless_gatt),
-            checked = state.gattServer,
-            description = stringResource(R.string.settings_wireless_gatt_hint),
-            onCheckedChange = state::changeGattServer,
-        )
-    }
+internal fun WirelessModeSetting(state: WirelessSettingsState) {
+    if (!WirelessPreferences.wifiDirectSupported) return
+    ChoiceRow(
+        title = stringResource(R.string.settings_wireless_mode),
+        options = listOf(stringResource(R.string.settings_wireless_mode_hotspot), stringResource(R.string.settings_wireless_mode_direct)),
+        selected = if (state.wifiDirect) 1 else 0,
+        description = stringResource(R.string.settings_wireless_mode_hint),
+        note = if (state.wifiDirect) stringResource(R.string.settings_wireless_mode_direct_note) else null,
+    ) { state.changeWifiDirect(it == 1) }
 }

@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
@@ -20,6 +19,7 @@ import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.UiVisibility
 import io.github.gcbond.openhc.platform.bluetooth.BluetoothStatus
 import io.github.gcbond.openhc.platform.bluetooth.LePairingPeripheral
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.wifi.MacText
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

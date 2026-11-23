@@ -3,8 +3,8 @@ package io.github.gcbond.openhc.connection
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import android.util.Log
 import io.github.gcbond.openhc.MainActivity
+import io.github.gcbond.openhc.platform.log.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

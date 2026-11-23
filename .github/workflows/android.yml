@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 拒绝提交凭据（见 SECURITY.md）
+        run: python3 tools/check_public_tree.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

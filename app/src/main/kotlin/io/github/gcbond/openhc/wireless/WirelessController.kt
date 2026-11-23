@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.wireless
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -11,8 +12,11 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.content.ContextCompat
+import io.github.gcbond.openhc.platform.log.Log
+import io.github.gcbond.openhc.startup.BootStartPolicy
+import io.github.gcbond.openhc.startup.BootStart
+import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.IdentityLoader
 import io.github.gcbond.openhc.audio.AudioOutput
 import io.github.gcbond.openhc.connection.BluetoothAddressPolicy
@@ -37,9 +41,11 @@ import io.github.gcbond.openhc.core.session.WirelessRunnerBridge
 import io.github.gcbond.openhc.input.MediaKeys
 import io.github.gcbond.openhc.platform.bluetooth.BleBeacon
 import io.github.gcbond.openhc.platform.bluetooth.BluetoothStatus
+import io.github.gcbond.openhc.platform.bluetooth.RfcommClient
 import io.github.gcbond.openhc.platform.bluetooth.RfcommServer
 import io.github.gcbond.openhc.platform.media.VideoDecoder
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotOwner
+import io.github.gcbond.openhc.platform.wifi.WifiDirectGroupOwner
 import io.github.gcbond.openhc.platform.wifi.MacText
 import io.github.gcbond.openhc.platform.wifi.WifiStatus
 import io.github.gcbond.openhc.settings.AppSettings
@@ -77,27 +83,36 @@ import kotlin.concurrent.thread
  * 收尾：会话结束（WirelessEvent.Ended）或用户停止 → 执行器 close（会话按顺序发 TEARDOWN、关蓝牙、关热点）→ 声音、解码器关掉
  * → 平台资源兜底关闭 → 回到空闲，显示原因。和有线不同，没有「拔线重插」：结束后点开始就能再来一次（会出新的二维码）。
  *
- * 无线自动回连（设置里的开关，默认开，规则在 [AutoReconnectPolicy]）：有配对过的手机、有线和无线都没在进行时，
- * 自动开一次同样的连接（「等已配对的手机回连」）：蓝牙控制监听开好后再挂 GATT 服务、发 BLE 广播（[ReconnectBeacon]），
- * 手机靠广播发现车机、自己经蓝牙连上来，之后与扫码完全相同（认证按手机报的 has_pin 自动走免码回连）。
- * 手机经蓝牙连上、连接结束、收尾时都停广播。连接结束（不是用户停的）回到等待；条件不满足只记日志、界面上一行说明，
- * 不弹框不报错。等待时手机还没连上就不挡有线：有线开始时让出（[yieldToWired]、[onWiredChanged]），有线结束后再回来。
- * 两次等待之间留在前台，不先释放再申请（安卓 12 起后台不能再起前台服务）。开关开着时，用户点开始的连接也发广播。
+ * 自动连接手机（设置「自动连接手机」，默认开；规则在 [ReconnectPolicy]、[ReconnectTriggers]）：只拨用无线连成功过的手机，
+ * 由车机主动拨（车机当蓝牙客户端发起，[startReconnect][io.github.gcbond.openhc.core.session.WirelessReceiverSession.startReconnect]），
+ * 手机热点关着时手机不弹框直接连。两个触发点：
+ * - 手机的经典蓝牙连上车机（[onPhoneBluetooth]，系统广播经 [BluetoothConnectionReceiver] 转来，本应用没在运行时由系统拉起）；
+ * - 界面回到前台（[onAppForeground]，含开机自动打开）：拨最近连成功的那台。一次蓝牙连接只拨一次，用户点了停止也不重拨。
+ * 界面不在前台时先把它带到前台再拨（[surfaceUi]）：车主要看到投屏；而且安卓 10 起定位权限只在界面在前台时算数，否则开不了热点。
+ * 有线在等插线时，认识的手机蓝牙连上就请有线停下、改走无线。拨号没成就回到空闲，界面上一行说明，不再等。
+ * 用户点「开始无线连接」是扫码连接（新手机配对，配对过的手机扫码免输码）。被动等手机回连（「等已配对的手机回连」、BLE 广播）
+ * 已不再自动进入，相关代码待删。
  *
  * WiFi（规则在 [WirelessNetworkPlan]）：车机开本地热点（[LocalHotspotOwner]，安卓 8.0 起才有，更早的车机用不了无线）。
- * 无线一开始（有连接、或在等下一次自动回连）就先把热点开好留着，几次连接之间不关，手机认证通过后直接用；
- * 无线停了（用户停止、有线接手、切到仅有线、不再等回连）才关（[syncHotspotStandby]）。所以无线开着时车机自己的 WiFi 会被热点顶掉。
+ * 有连接在进行时就先把热点开好留着（车机主动回连要等车机连上手机的蓝牙控制通道之后才开，手机不在时不碰车机 WiFi），
+ * 手机认证通过后直接用；连接结束就关（[syncHotspotStandby]），这期间车机自己的 WiFi 会被热点顶掉。
  * 「退出后恢复车机 WiFi」开着时，热点关掉后由 [wifiRestore] 把车机 WiFi 开回来（安卓 10 起改为提示车主）。
  *
- * 另外两个设置：「只用数据线连接」开着时完全不做无线（不发广播、不等回连、开始不了，手机还没连上的等待立刻停）；
- * 「蓝牙连上自动连接」开着时，手机的经典蓝牙连上车机（[onPhoneBluetooth]，系统广播经 [BluetoothConnectionReceiver] 转来，
- * 本应用没在运行时由系统拉起）就恢复自动回连、空闲就进入等待，已经在等的马上换序列号重新发布。车机主动去连手机
- * （车机当蓝牙客户端发起）没有实现：回连靠手机看到广播后自己连上来。
+ * 另一个设置：「只用数据线连接」开着时完全不做无线（不拨手机、开始不了，手机还没连上的扫码等待立刻停）。
  *
  * 线程：调度在自己的 [HandlerThread] 上串行执行，公开方法可以在任意线程调用（[sendInput] 在主线程，直接投到协议线程）。
  * 日志标签 `OpenHC-Wireless`。
  */
-class WirelessController(context: Context, private val wiredActive: () -> Boolean) {
+class WirelessController(
+    context: Context,
+    private val wiredActive: () -> Boolean,
+    /** 有线只是在等插线（手机还没插上）。 */
+    private val wiredWaitingForPhone: () -> Boolean = { false },
+    /** 请有线停下等插线（认识的手机蓝牙连上、要改走无线时）。 */
+    private val stopWiredWaiting: () -> Unit = {},
+    /** 让有线回到等插线（为无线让路之后，无线没拨成或连接结束时）。 */
+    private val resumeWiredWaiting: () -> Unit = {},
+) {
 
     /** 前台服务监听：要不要留在前台、通知内容要不要更新。在主线程上回调。 */
     fun interface HostListener {
@@ -156,8 +171,8 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     /** 有一次无线连接在进行（含等已配对的手机回连）。 */
     val isActive: Boolean get() = state.value.active
 
-    /** 有线要不要因为无线而不开始：等已配对的手机回连、手机还没连上时不挡（有线来了就让出）。 */
-    val blocksWired: Boolean get() = AutoReconnectPolicy.blocksWired(state.value)
+    /** 有线要不要因为无线而不开始：扫码等待里手机还没连上时不挡（有线来了就让出）。 */
+    val blocksWired: Boolean get() = ReconnectPolicy.blocksWired(state.value)
 
     /** 自动回连排着下一次等待（两次等待之间）：前台服务的通知据此显示「正在等已配对的手机回连」。 */
     @Volatile
@@ -175,13 +190,23 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
 
     private var attempt: Attempt? = null
     private var attemptCounter = 0
-    private val autoPolicy = AutoReconnectPolicy()
+    /** 车机主动回连什么时候拨、拨谁（冷却、一次蓝牙连接只拨一次）。 */
+    private val triggers = ReconnectTriggers(RECONNECT_COOLDOWN_MS)
+
+    /** 有线在等插线时来了要拨的手机：先请有线停下，等它停好再拨（[onWiredChanged]）。 */
+    private var pendingAfterWired: PendingReconnect? = null
+
+    /** 用户点了停止：空闲说明显示「手机蓝牙重新连上时再自动连」，下次开始连接时清掉。 */
+    private var userStopped = false
+
+    /** 正在等界面带到前台再拨（那 1.5 秒里别的入口不拨，免得拨成另一台）。 */
+    private var waitingForUi = false
     private var autoRetry: Runnable? = null
     private var lastWiredActive = false
 
     /**
-     * 热点先开好留着：有连接、或在等下一次自动回连时就开着，几次连接之间不关；都没有了才关。
-     * 认证通过才申请时正赶上手机关掉自己的热点、车机 WiFi 刚断，实测安卓 10 车机上系统一直不回话。
+     * 热点提前开好：认证通过才申请时正赶上手机关掉自己的热点、车机 WiFi 刚断，实测安卓 10 车机上系统一直不回话。
+     * 什么时候开、什么时候关见 [syncHotspotStandby]。
      */
     private var hotspotStandby = false
 
@@ -196,7 +221,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         val bluetoothState = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val on = intent?.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) == BluetoothAdapter.STATE_ON
-                if (on) post { evaluateAuto("蓝牙打开了") }
+                if (on) post { refreshIdleStatus("蓝牙打开了") }
             }
         }
         try {
@@ -216,121 +241,82 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
 
     // ---------------------------------------------------------------- 对外操作（任意线程）
 
-    /** 「开始无线连接」。运行时权限由界面先申请好（见 [WirelessStartFlow]）。用户自己开始后，自动回连也恢复。 */
+    /** 「开始无线连接」（扫码）。运行时权限由界面先申请好（见 [WirelessStartFlow]）。 */
     fun start() = post {
         if (attempt != null) return@post
-        autoPolicy.onUserStart()
         cancelAutoRetry()
         begin(Kind.MANUAL)
     }
 
-    /** 「停止」：按顺序收尾。停的是自动回连的等待时，本次运行不再自动等待（点开始恢复）。 */
+    /** 「停止」：按顺序收尾。之后这次蓝牙连接里不再自动拨（手机蓝牙重新连上车机时再拨）。 */
     fun stop() = post {
         val current = attempt
         apply(WirelessSignal.StopRequested)
         if (current == null) {
-            if (autoRetry != null) {
-                Log.i(TAG, "用户停止：取消排着的自动回连")
-                lastEndByUser = true
-                cancelAutoRetry()
-                autoPolicy.afterAttempt(AutoReconnectPolicy.Outcome.USER_STOP)
-                setAutoHold(AutoHold.PAUSED_BY_USER)
-            }
             releaseForeground()
             return@post
         }
         Log.i(TAG, "用户停止第 ${current.id} 次无线连接")
+        userStopped = true
         current.stopReason = StopReason.USER
         current.causes.onUserStop()
         teardown(current)
     }
 
-    /** 界面回到前台：条件满足就进入等已配对的手机回连（排着的退避不等了）。 */
+    /** 界面回到前台（含开机自动打开）：「自动连接手机」开着就拨最近连成功的那台（一次蓝牙连接只拨一次）。 */
     fun onAppForeground() = post {
-        cancelAutoRetry()
-        evaluateAuto("界面回到前台")
+        dialFromUi("界面回到前台")
         // 在后台申请热点会被系统拒绝：回到前台时补一次（已经开着或在申请时什么都不做）。
         if (hotspotStandby) warmHotspot()
     }
 
     /**
-     * 开机静默连接（开机广播接收器转来，没有界面）：和界面回到前台一样，条件满足就在后台进入等已配对的手机回连。
-     * 不满足的原因照常记在 [WirelessUiState.autoHold]，开机那边据此决定待命还是改为打开界面。
+     * 开机静默连接（开机广播接收器转来，没有界面）：不拨手机（没有界面开不了热点），只把「自动连接手机」现在能不能起作用
+     * 记在 [WirelessUiState.autoHold]，开机那边据此决定待命（等手机蓝牙连上时系统把本应用叫起来）还是改为打开界面。
      */
     fun onSilentBoot() = post {
-        cancelAutoRetry()
-        evaluateAuto("开机静默连接")
+        refreshIdleStatus("开机静默连接")
     }
 
-    /** 有线的状态变了（主线程回调转来）：有线开始时让出等待，有线结束后回到等待。 */
+    /** 有线的状态变了（主线程回调转来）：有线开始时让出扫码等待；有线停下后接着拨等着的手机，或更新空闲说明。 */
     fun onWiredChanged() = post {
         val active = wiredActive()
         if (active == lastWiredActive) return@post
         lastWiredActive = active
         if (active) {
-            cancelAutoRetry()
             yieldWaiting("有线连接开始了")
             if (attempt == null) {
                 setAutoHold(AutoHold.WIRED_ACTIVE)
                 releaseForeground()
             }
         } else {
-            evaluateAuto("有线连接结束了")
+            val pending = pendingAfterWired
+            if (pending != null) {
+                pendingAfterWired = null
+                Log.i(TAG, "有线已经停下，接着拨手机（${pending.why}）")
+                beginReconnect(pending.address, pending.why, preemptWired = false, resumeWiredAfter = true)
+                return@post
+            }
+            refreshIdleStatus("有线连接结束了")
         }
     }
 
     /** 有线马上要开始：手机还没连上的等待先让出；有线没真的开始（例如没给授权）时过一会儿回到等待。 */
     fun yieldToWired() = post {
-        if (yieldWaiting("有线要开始")) return@post
-        if (attempt == null && autoRetry != null) {
-            cancelAutoRetry()
-            scheduleAutoRetry(AutoReconnectPolicy.YIELD_RECHECK_MILLIS, "让给有线")
-        }
+        yieldWaiting("有线要开始")
     }
 
-    /** 设置里切了「无线自动回连」开关。 */
-    fun onAutoReconnectSettingChanged() = post {
-        autoPolicy.onSettingChanged()
-        if (wirelessPrefs.autoReconnect) {
-            cancelAutoRetry()
-            evaluateAuto("打开了无线自动回连")
-            return@post
-        }
-        cancelAutoRetry()
-        val current = attempt
-        if (current != null && current.kind == Kind.AUTO && isWaiting(current)) {
-            Log.i(TAG, "关掉了无线自动回连，停止等待")
-            current.stopReason = StopReason.AUTO_OFF
-            current.causes.onUserStop()
-            apply(WirelessSignal.StopRequested)
-            teardown(current)
-        } else if (current == null) {
-            setAutoHold(AutoHold.DISABLED)
-            releaseForeground()
-        }
-    }
-
-    /** 从设置页回来：设置可能改了，还没连上手机的等待按新设置重开一次（下次连接生效的设置才真的生效）。 */
+    /** 从设置页回来：设置可能改了（例如刚打开「自动连接手机」），照界面回到前台一样看要不要拨。 */
     fun onSettingsClosed() = post {
-        val current = attempt
-        if (current != null && current.kind == Kind.AUTO && isWaiting(current)) {
-            Log.i(TAG, "从设置页回来，按新设置重开等待")
-            current.stopReason = StopReason.RESTART
-            current.causes.onUserStop()
-            apply(WirelessSignal.StopRequested)
-            teardown(current)
-        } else if (current == null) {
-            evaluateAuto("从设置页回来")
-        }
+        if (attempt == null) dialFromUi("从设置页回来")
     }
 
-    /** 设置里切了「只用数据线连接」：开 → 手机还没连上的无线（等回连、等扫码）立刻停，之后不做无线；关 → 回到等待。 */
+    /** 设置里切了「只用数据线连接」：开 → 手机还没连上的无线（等扫码、在拨）立刻停，之后不做无线；关 → 刷新空闲说明。 */
     fun onWiredOnlyChanged() = post {
         syncBluetoothReceiver()
-        autoPolicy.onSettingChanged()
         cancelAutoRetry()
         if (!wirelessPrefs.wiredOnly) {
-            evaluateAuto("关掉了只用数据线连接")
+            refreshIdleStatus("关掉了只用数据线连接")
             return@post
         }
         val current = attempt
@@ -347,14 +333,16 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         // 手机已经连上的无线连接照常进行到结束，之后不再做无线。
     }
 
-    /** 设置里切了「蓝牙连上自动连接」。 */
-    fun onConnectOnBluetoothChanged() = post { syncBluetoothReceiver() }
+    /** 设置里切了「自动连接手机」。 */
+    fun onConnectOnBluetoothChanged() = post {
+        syncBluetoothReceiver()
+        refreshIdleStatus("切了自动连接手机")
+    }
 
     /**
      * 手机的经典蓝牙连上 / 断开了车机（任意线程，[BluetoothConnectionReceiver] 转来，只报蓝牙设备类是手机的）。
-     * 只在「蓝牙连上自动连接」开着、没开「只用数据线连接」时有用：
-     * - 连上：当作用户回到车上（恢复自动回连）；空闲就进入等待（「无线自动回连」关着也进），已经在等就马上换序列号重新发布。
-     * - 断开：「无线自动回连」关着、这次等待是这台手机蓝牙连上才开始的、手机还没连上来时，跟着停掉。
+     * 只在「自动连接手机」开着、没开「只用数据线连接」时有用：连上是一次新的蓝牙连接，认识的手机就拨（[ReconnectTriggers]）；
+     * 断开清掉「这次蓝牙连接里拨过」。
      */
     fun onPhoneBluetooth(connected: Boolean, address: String) = post {
         if (!BluetoothTrigger.listens(wirelessPrefs.connectOnBluetooth, wirelessPrefs.wiredOnly)) return@post
@@ -377,7 +365,6 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
             block(WirelessNotice.TrustStoreUnavailable(e.message ?: e.javaClass.simpleName))
             return@post
         }
-        autoPolicy.onUserStart()
         cancelAutoRetry()
         begin(Kind.MANUAL)
     }
@@ -464,8 +451,9 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     /**
      * 开一次连接。[kind] 是 [Kind.AUTO]（自动进入的等待）时开始不了只记日志、界面上一行说明（[AutoHold]），不报错。
      */
-    private fun begin(kind: Kind, bluetoothTrigger: String? = null) {
+    private fun begin(kind: Kind, bluetoothTrigger: String? = null, reconnect: ReconnectTarget? = null, resumeWiredAfter: Boolean = false) {
         if (attempt != null) return
+        userStopped = false
         if (wirelessPrefs.wiredOnly) return blocked(kind, WirelessNotice.WiredOnly, AutoHold.WIRED_ONLY)
         if (wiredActive()) return blocked(kind, WirelessNotice.WiredActive, AutoHold.WIRED_ACTIVE)
         // 本地热点安卓 8.0 起才有，更早的车机用不了无线。不要求车机 WiFi 开着：开热点时单射频车机自己的 WiFi 本来就会断。
@@ -509,7 +497,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         } catch (e: IOException) {
             return blocked(kind, WirelessNotice.TrustStoreUnavailable(e.message ?: e.javaClass.simpleName), AutoHold.START_FAILED)
         }
-        if (kind == Kind.AUTO && trustStore.peerCount == 0) {
+        if (kind != Kind.MANUAL && trustStore.peerCount == 0) {
             return blocked(kind, WirelessNotice.StartFailed("没有配对过的手机"), AutoHold.NO_PAIRED_PHONE)
         }
         val fullScreen = settings.fullScreen
@@ -518,6 +506,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
                 io.github.gcbond.openhc.connection.DisplayArea.screenFor(app, fullScreen),
                 io.github.gcbond.openhc.connection.ResolutionChoice.Auto,
                 settings.fps,
+                settings.uiScalePercent,
             )
         } catch (e: IllegalArgumentException) {
             return blocked(kind, WirelessNotice.StartFailed("屏幕参数不对：${e.message}"), AutoHold.START_FAILED)
@@ -526,7 +515,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         Log.i(TAG, "画布 ${display.width}x${display.height}（全屏${if (fullScreen) "开" else "关"}）")
         val clarity = ClarityPreferences(app).clarity
         val audio = AudioPreferences(app).toSettings()
-        val beacon = beaconPlan(kind, adapter)
+        val beacon = if (kind == Kind.RECONNECT) null else beaconPlan(kind, adapter)
         if (kind == Kind.AUTO && beacon == null) {
             return blocked(kind, WirelessNotice.StartFailed("发不了 BLE 广播"), AutoHold.ADVERTISING_UNSUPPORTED)
         }
@@ -550,20 +539,24 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         }
 
         cancelAutoRetry()
-        val current = Attempt(++attemptCounter, kind, config, adapter, identity.host, beacon, bluetoothTrigger)
+        val directGroup = wirelessPrefs.usesWifiDirect
+        val current = Attempt(
+            ++attemptCounter, kind, config, adapter, identity.host, beacon, bluetoothTrigger, reconnect, resumeWiredAfter, directGroup,
+        )
         attempt = current
+        if (reconnect != null) triggers.commitDial(reconnect.address, SystemClock.elapsedRealtime())
         inputTarget = current
         Log.i(
             TAG,
-            "第 ${current.id} 次无线连接（${if (kind == Kind.AUTO) "等已配对的手机回连" else "用户开始"}）：" +
+            "第 ${current.id} 次无线连接（${when (kind) { Kind.AUTO -> "等已配对的手机回连"; Kind.RECONNECT -> "车机主动回连"; Kind.MANUAL -> "用户开始" }}）：" +
                 "蓝牙地址来源 ${bluetooth.source}，deviceId ${config.deviceId.take(4)}…，" +
-                "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}，系统 ${Build.VERSION.SDK_INT}，$wifi，" +
-                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，" +
+                "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}（界面大小 ${settings.uiScalePercent}%），系统 ${Build.VERSION.SDK_INT}，$wifi，" +
+                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${if (directGroup) "WiFi 直连组（试验）" else "本地热点"}，" +
                 "广播 ${beacon?.let { "开（重新发布 ${it.republishMillis / 1000} 秒，GATT ${if (it.gatt) "开" else "关"}${if (it.declareRandomAddress) "，声明随机地址" else ""}）" } ?: "不发"}",
         )
         Log.i(TAG, "第 ${current.id} 次无线连接的清晰度：${clarity.key}，声明码率 ${VideoClarity.describe(config.display.bitrate)}")
         setAutoHold(null)
-        apply(WirelessSignal.AttemptStarted(current.id, addressMismatch, autoReconnect = kind == Kind.AUTO))
+        apply(WirelessSignal.AttemptStarted(current.id, addressMismatch, autoReconnect = kind == Kind.AUTO, direct = directGroup))
         current.runner.start()
         watchTermination(current)
     }
@@ -587,11 +580,11 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     }
 
     /**
-     * 这次连接发不发广播、怎么发：自动进入的等待一定发；用户开始的连接在「无线自动回连」开着时也发（手机能靠它发现车机）。
-     * 还要有广播权限、车机支持。不发返回 null。
+     * 这次连接发不发广播、怎么发：只有被动等手机回连（已不再自动进入）才发；扫码连接不用（手机按二维码直接连车机），
+     * 车机主动回连也不用。还要有广播权限、车机支持。不发返回 null。
      */
     private fun beaconPlan(kind: Kind, adapter: BluetoothAdapter): ReconnectBeacon.Options? {
-        if (kind == Kind.MANUAL && !wirelessPrefs.autoReconnect) return null
+        if (kind != Kind.AUTO) return null
         val missing = WirelessPermissions.advertise(Build.VERSION.SDK_INT).filterNot { granted(it) }
         if (missing.isNotEmpty()) {
             Log.i(TAG, "没有蓝牙广播权限，这次不发广播（${if (kind == Kind.AUTO) "不进入等待" else "只能扫码"}）")
@@ -609,49 +602,189 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         )
     }
 
-    // ---------------------------------------------------------------- 自动回连
+    // ---------------------------------------------------------------- 自动连接手机
+
+    /** 更新空闲时的一行说明（「自动连接手机」能不能起作用）；没有连接时退出前台。 */
+    private fun refreshIdleStatus(why: String) {
+        if (attempt != null) return
+        lastWiredActive = wiredActive()
+        var hold = ReconnectPolicy.hold(reconnectConditions())
+        if (hold == AutoHold.READY && userStopped) hold = AutoHold.PAUSED_BY_USER
+        if (hold != state.value.autoHold) Log.i(TAG, "自动连接手机（$why）：$hold")
+        setAutoHold(hold)
+        releaseForeground()
+    }
 
     /**
-     * 条件满足就进入等已配对的手机回连；不满足记下原因（界面上一行说明），没有连接时退出前台。
-     * [bluetoothTrigger] 是触发这次的手机蓝牙地址（手机蓝牙连上时），这时「无线自动回连」开关关着也进入。
+     * 界面在前台时（回到前台、开机自动打开、从设置页回来）拨最近连成功的那台。能查到手机蓝牙连没连着车机时只在连着时拨，
+     * 有线在等插线也请它让出；查不到时照拨（手机不在就连不上，热点要等连上手机的蓝牙才开，不碰车机 WiFi），但不打断有线。
      */
-    private fun evaluateAuto(why: String, bluetoothTrigger: String? = null) {
-        if (attempt != null) return
-        if (autoRetry != null) return
-        lastWiredActive = wiredActive()
-        val hold = autoPolicy.hold(autoConditions(), bluetoothTrigger = bluetoothTrigger != null)
-        if (hold != null) {
-            if (hold != state.value.autoHold) Log.i(TAG, "自动回连不进入等待（$why）：$hold")
-            setAutoHold(hold)
-            releaseForeground()
+    private fun dialFromUi(why: String) {
+        refreshIdleStatus(why)
+        if (attempt != null || waitingForUi || !wirelessPrefs.connectOnBluetooth || wirelessPrefs.wiredOnly) return
+        if (userStopped) {
+            Log.i(TAG, "点过停止，回到界面不自动拨；手机蓝牙重新连上车机时再拨（$why）")
             return
         }
-        Log.i(TAG, "进入等已配对的手机回连（$why）")
-        begin(Kind.AUTO, bluetoothTrigger)
+        val last = wirelessPrefs.lastPhone ?: return
+        val connected = BluetoothStatus.adapter(app)?.let { phoneConnected(it, last) }
+        if (connected == false) {
+            Log.i(TAG, "最近那台手机的蓝牙没连着车机，不拨（$why）")
+            return
+        }
+        if (connected == null && wiredActive()) {
+            Log.i(TAG, "查不到手机蓝牙连没连着、有线在进行：不拨（$why）")
+            return
+        }
+        when (val decision = triggers.onUiShown(last, wirelessPrefs.knownPhones, SystemClock.elapsedRealtime())) {
+            is ReconnectTriggers.Decision.Dial ->
+                beginReconnect(decision.address, "$why（手机蓝牙${if (connected == true) "连着" else "连没连着查不到"}）", preemptWired = connected == true)
+            is ReconnectTriggers.Decision.Skip -> Log.i(TAG, "不自动拨（$why）：${decision.reason}")
+        }
     }
 
     private fun onPhoneBluetoothConnected(address: String) {
-        Log.i(TAG, "手机蓝牙连上了车机（${MacText.mask(address)}）：蓝牙连上自动连接")
-        autoPolicy.onBluetoothTrigger()
-        val current = attempt
-        if (current != null) {
-            if (current.kind == Kind.AUTO && isWaiting(current)) current.beacon?.republishNow("手机蓝牙连上了")
-            return
+        Log.i(TAG, "手机蓝牙连上了车机（${MacText.mask(address)}）")
+        when (val decision = triggers.onBluetoothConnected(address, wirelessPrefs.knownPhones, SystemClock.elapsedRealtime())) {
+            is ReconnectTriggers.Decision.Dial -> beginReconnect(decision.address, "手机蓝牙连上了", preemptWired = true)
+            is ReconnectTriggers.Decision.Skip -> Log.i(TAG, "手机蓝牙连上了，不拨：${decision.reason}")
         }
-        cancelAutoRetry()
-        evaluateAuto("手机蓝牙连上了", bluetoothTrigger = address)
     }
 
     private fun onPhoneBluetoothDisconnected(address: String) {
-        val current = attempt ?: return
-        val trigger = current.bluetoothTrigger ?: return
-        if (current.kind != Kind.AUTO || !isWaiting(current) || wirelessPrefs.autoReconnect) return
-        if (!trigger.equals(address, ignoreCase = true)) return
-        Log.i(TAG, "触发这次等待的手机蓝牙断开了（${MacText.mask(address)}），停止等待")
-        current.stopReason = StopReason.AUTO_OFF
-        current.causes.onUserStop()
-        apply(WirelessSignal.StopRequested)
-        teardown(current)
+        triggers.onBluetoothDisconnected(address)
+        // 认识的手机蓝牙断开：点过的停止只管到这次蓝牙连接为止。
+        if (userStopped && wirelessPrefs.knownPhones.any { it.equals(address, ignoreCase = true) }) {
+            userStopped = false
+            refreshIdleStatus("手机蓝牙断开了")
+        }
+    }
+
+    /**
+     * 车机主动回连（任意线程）：马上拨蓝牙地址为 [address] 的手机，不看「自动连接手机」开关和记录。给调试入口用；
+     * 真的拨出去了同样计入冷却和这次蓝牙连接（[ReconnectTriggers.commitDial]，在 [begin] 里记）。
+     */
+    fun reconnectPhone(address: String, why: String) = post {
+        beginReconnect(address, why, preemptWired = true)
+    }
+
+    /**
+     * 拨 [address]：先判前置条件（不满足只在界面上一行说明，不弹界面），有线在等插线时按 [preemptWired] 请它让出，
+     * 界面不在前台先带到前台、等 [SURFACE_WAIT_MS] 后确认界面真出来了再拨（出不来就不拨：开不了热点，拨了也白拨、手机还会记一次失败）。
+     * [resumeWiredAfter]：有线是为这次让出来的，这次没拨成、或连接结束后让有线回到等插线。
+     * 真的开始拨了才记进拨号规则（[begin] 里 [ReconnectTriggers.commitDial]），没拨成不占名额。
+     */
+    private fun beginReconnect(address: String, why: String, preemptWired: Boolean, resumeWiredAfter: Boolean = false) {
+        fun giveUp() {
+            if (resumeWiredAfter) {
+                Log.i(TAG, "这次没拨成，让有线回到等插线")
+                resumeWiredWaiting()
+            }
+        }
+        if (attempt != null || waitingForUi) {
+            Log.i(TAG, "已经有连接在进行或在等界面，不拨手机（$why）")
+            return
+        }
+        val hold = ReconnectPolicy.hold(reconnectConditions(forDial = true)).takeUnless { it == AutoHold.READY }
+        if (hold != null) {
+            Log.i(TAG, "不拨手机（$why）：$hold")
+            setAutoHold(hold)
+            return giveUp()
+        }
+        if (wiredActive()) {
+            if (preemptWired && wiredWaitingForPhone()) {
+                Log.i(TAG, "有线在等插线：请它先停下，改为车机主动拨手机（$why）")
+                pendingAfterWired = PendingReconnect(address, why)
+                stopWiredWaiting()
+            } else {
+                Log.i(TAG, "有线连接在进行，不拨手机（$why）")
+                setAutoHold(AutoHold.WIRED_ACTIVE)
+            }
+            return
+        }
+        val adapter = BluetoothStatus.adapter(app)
+        val name = adapter?.let { phoneName(it, address) }
+        if (name == null) {
+            Log.i(TAG, "${if (adapter == null) "车机没有蓝牙" else "读不到这台手机的蓝牙名"}，不拨（$why）")
+            return giveUp()
+        }
+        cancelAutoRetry()
+        val target = ReconnectTarget(address, name)
+        if (!surfaceUi(why)) {
+            Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why")
+            begin(Kind.RECONNECT, reconnect = target, resumeWiredAfter = resumeWiredAfter)
+            if (attempt == null) giveUp()
+            return
+        }
+        Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why；界面带到前台 $SURFACE_WAIT_MS 毫秒后再拨")
+        waitingForUi = true
+        handler.postDelayed({
+            waitingForUi = false
+            when {
+                attempt != null -> Log.i(TAG, "等界面时已经有连接在进行，不拨了")
+                !uiVisible() -> {
+                    Log.i(TAG, "界面没能打开（多半缺悬浮窗权限或被系统拦了），这次不拨：开不了热点")
+                    setAutoHold(AutoHold.UI_NOT_SHOWN)
+                    giveUp()
+                }
+                else -> {
+                    begin(Kind.RECONNECT, reconnect = target, resumeWiredAfter = resumeWiredAfter)
+                    if (attempt == null) giveUp()
+                }
+            }
+            syncHotspotStandby()
+        }, SURFACE_WAIT_MS)
+    }
+
+    private fun uiVisible(): Boolean = (app as? OpenHcApp)?.uiVisibility?.visible != false
+
+    /**
+     * 车机主动回连前把界面带到前台；界面已经在前台返回 false，否则发出打开请求后返回 true。
+     *
+     * 一是车主要看到投屏；二是安卓 10 起定位权限是「使用期间允许」，只有界面在前台才算数（前台服务不算），
+     * 界面不在前台时系统不让开热点（2026-11-22 实车：手机蓝牙连上触发、界面在后台，认证通过后开热点被拒
+     * 「does not have Coarse/Fine Location permission」）。安卓 10 起后台打开界面要悬浮窗权限，没有时请求不报错、界面不出来。
+     */
+    private fun surfaceUi(why: String): Boolean {
+        if (uiVisible()) return false
+        Log.i(
+            TAG,
+            "车机主动回连：界面不在前台，先带到前台（$why）" + if (overlayGranted()) "" else "；没有悬浮窗权限，多半被系统拦下",
+        )
+        try {
+            app.startActivity(BootStart.surfaceIntent(app))
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "带不到前台：${e.javaClass.simpleName}：${e.message}")
+        }
+        return true
+    }
+
+    private fun overlayGranted(): Boolean = !BootStartPolicy.overlayRequired(Build.VERSION.SDK_INT) || BootStart.canDrawOverlays(app)
+
+    /** 车机蓝牙记下的这台手机的名字（请手机开认证子通道时当业务标签；实车只验证过和手机蓝牙名一致的情况）。 */
+    @SuppressLint("MissingPermission")
+    private fun phoneName(adapter: BluetoothAdapter, address: String): String? = try {
+        adapter.getRemoteDevice(address).name?.takeIf { it.isNotBlank() }
+    } catch (e: IllegalArgumentException) {
+        null
+    } catch (e: SecurityException) {
+        null
+    }
+
+    /**
+     * 这台手机的经典蓝牙现在连没连着车机。用的是系统的隐藏接口（BluetoothDevice.isConnected），拿不到时返回 null（不知道）。
+     */
+    private fun phoneConnected(adapter: BluetoothAdapter, address: String): Boolean? = try {
+        val device = adapter.getRemoteDevice(address)
+        (android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected").invoke(device) as? Boolean).also {
+            Log.i(TAG, "手机蓝牙连着车机：$it（${MacText.mask(address)}）")
+        }
+    } catch (e: ReflectiveOperationException) {
+        Log.i(TAG, "查不到手机蓝牙连没连着（${e.javaClass.simpleName}）")
+        null
+    } catch (e: RuntimeException) {
+        Log.i(TAG, "查不到手机蓝牙连没连着（${e.javaClass.simpleName}）")
+        null
     }
 
     /** 清单里「手机蓝牙连上」的入口：开关开着、没开只用数据线连接时启用。 */
@@ -660,50 +793,25 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     }
 
     /**
-     * 判断自动回连时的条件快照。只有读信任库有副作用（打开时会清掉上次写到一半的临时文件）：有线在进行时它可能正在
-     * 首次配对落盘，所以有线在进行（或只用数据线）时不读，按 0 台算——这两种情况本来就排在前面挡住了。
+     * 判断「自动连接手机」时的条件快照。[forDial]：马上要拨（触发规则已经定了拨谁），不再看开关、记录和悬浮窗（悬浮窗另看界面出没出来），
+     * 有线在进行另外处理。
      */
-    private fun autoConditions(): AutoReconnectPolicy.Conditions {
+    private fun reconnectConditions(forDial: Boolean = false): ReconnectPolicy.Conditions {
         val adapter = BluetoothStatus.adapter(app)
         val sdk = Build.VERSION.SDK_INT
         val address = BluetoothAddressPolicy.chooseForWireless(DeviceInfo.systemBluetoothAddress(), settings.manualBluetoothAddress).address
-        val wiredOnly = wirelessPrefs.wiredOnly
-        val wiredActive = wiredActive()
-        return AutoReconnectPolicy.Conditions(
-            enabled = wirelessPrefs.autoReconnect,
-            wiredOnly = wiredOnly,
-            wiredActive = wiredActive,
-            identityLoaded = IdentityLoader.load(app) is IdentityLoader.Result.Loaded,
-            pairedPhones = if (wiredOnly || wiredActive) 0 else pairedPhones(),
-            bluetoothOn = BluetoothStatus.state(adapter) == BluetoothStatus.State.ON,
+        return ReconnectPolicy.Conditions(
+            enabled = forDial || wirelessPrefs.connectOnBluetooth,
+            wiredOnly = wirelessPrefs.wiredOnly,
+            wiredActive = !forDial && wiredActive(),
             hotspotSupported = WirelessNetworkPlan.hotspotSupported(sdk),
-            permissionsGranted = WirelessPermissions.missing(sdk) { granted(it) }.isEmpty() &&
-                WirelessPermissions.advertise(sdk).all { granted(it) },
-            advertisingSupported = BleBeacon.support(adapter) is BleBeacon.Support.Available,
+            identityLoaded = IdentityLoader.load(app) is IdentityLoader.Result.Loaded,
             bluetoothAddressKnown = address != null,
+            bluetoothOn = BluetoothStatus.state(adapter) == BluetoothStatus.State.ON,
+            permissionsGranted = WirelessPermissions.missing(sdk) { granted(it) }.isEmpty(),
+            knownPhones = if (forDial) 1 else wirelessPrefs.knownPhones.size,
+            overlayGranted = forDial || overlayGranted(),
         )
-    }
-
-    /** 配对过的手机数；信任库读不了按 0 算（开始时会报出来）。 */
-    private fun pairedPhones(): Int = try {
-        FileTrustStore.open(trustDir).peerCount
-    } catch (e: IOException) {
-        0
-    }
-
-    /** [delayMillis] 后再判断一次要不要进入等待；期间留在前台，通知显示正在等回连。 */
-    private fun scheduleAutoRetry(delayMillis: Long, why: String) {
-        cancelAutoRetry()
-        val retry = Runnable {
-            autoRetry = null
-            autoRetryPending = false
-            evaluateAuto(why)
-            syncHotspotStandby()
-        }
-        autoRetry = retry
-        autoRetryPending = true
-        handler.postDelayed(retry, delayMillis)
-        notifyHost()
     }
 
     private fun cancelAutoRetry() {
@@ -747,7 +855,16 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
 
         /** 自动进入的「等已配对的手机回连」。 */
         AUTO,
+
+        /** 车机主动回连：车机去拨已配对的手机（手机蓝牙连上车机时、或调试入口），不发广播、不出二维码。 */
+        RECONNECT,
     }
+
+    /** 车机主动回连要拨的手机：蓝牙地址和设备名（请手机开认证子通道时的业务标签）。 */
+    private class ReconnectTarget(val address: String, val name: String)
+
+    /** 有线在等插线时来了要拨的手机：等有线停好后再拨。 */
+    private class PendingReconnect(val address: String, val why: String)
 
     /** 本机为什么停掉这次连接（会话自己结束的为 null）。决定之后自动回连多久再来。 */
     private enum class StopReason {
@@ -775,7 +892,19 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         beaconOptions: ReconnectBeacon.Options?,
         /** 这次等待是这台手机的经典蓝牙连上才开始的（地址），其他为 null。 */
         val bluetoothTrigger: String?,
+        /** 车机主动回连的目标（[Kind.RECONNECT]），其他为 null。 */
+        reconnect: ReconnectTarget?,
+        /** 有线是为这次让出来的：结束后让有线回到等插线。 */
+        val resumeWiredAfter: Boolean = false,
+        /** 这次不开本地热点，改建 WiFi 直连组（设置里「无线方式」选了直连，安卓 10 起）。 */
+        val directGroup: Boolean = false,
     ) {
+        /** 投屏开始过。 */
+        var projected = false
+
+        /** 这次连的手机的蓝牙地址：主动回连时是拨的那台，扫码时手机经蓝牙连上来才知道；投屏开始后记进「连成功过的手机」。 */
+        var phoneAddress: String? = reconnect?.address
+
         val sink = ForwardingSink()
         val startedAt = SystemClock.elapsedRealtime()
 
@@ -797,16 +926,30 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         private val results = RunnerResults()
         val executor = WirelessPlatformExecutor(
             openRfcomm = { name, uuid, events -> RfcommServer(adapter, name, uuid, events, "OpenHC-Rfcomm-$id") },
+            dialRfcomm = { address, uuid, channel, events ->
+                val byChannel = channel.takeUnless { DebugOverrides.forceRfcommSdp }
+                if (channel != null && byChannel == null) Log.i(TAG, "[$id] 调试开关：认证子通道改按 SDP 查")
+                RfcommClient(adapter, address, uuid, events, "OpenHC-Wireless-$id-dial", byChannel)
+            },
             // 会话在手机认证通过后才要热点；无线开着时热点已经先开好留着，这里直接接手。之前排的「恢复车机 WiFi」作废。
             startHotspot = { events ->
                 wifiRestore.onHotspotRequested()
                 LocalHotspotOwner.get(app).create(events) { Log.i(TAG, "[$id] 热点：$it") }
             },
+            // 直连：不开热点、不动车机自己的 WiFi，所以也不排「恢复车机 WiFi」。
+            startDirect = if (directGroup) {
+                { events -> WifiDirectGroupOwner(app, events) { Log.i(TAG, "[$id] 直连：$it") } }
+            } else {
+                null
+            },
             results = results,
             onEvent = { event -> onWirelessEvent(this, event) },
             log = { Log.i(TAG, "[$id] $it") },
         )
-        val bridge: WirelessRunnerBridge = WirelessRunnerBridge(session) { output -> executor.execute(output) }
+        val bridge: WirelessRunnerBridge = WirelessRunnerBridge(
+            session,
+            reconnect?.let { target -> { now: Long -> session.startReconnect(target.address, target.name, now) } } ?: session::start,
+        ) { output -> executor.execute(output) }
         val runner: SocketRunner = SocketRunner(
             bridge,
             { event -> onProtocolEvent(this, event) },
@@ -881,6 +1024,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
                 is WirelessEvent.PairingReady -> current.beacon?.onListenerReady()
                 is WirelessEvent.PhoneBluetoothConnected -> {
                     current.phoneSeen = true
+                    current.phoneAddress = event.address
                     current.beacon?.stop("手机经蓝牙连上了")
                 }
                 is WirelessEvent.Ended -> current.beacon?.stop("连接结束")
@@ -904,6 +1048,13 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         if (current !== attempt || current.finished) return
         apply(WirelessSignal.Session(event))
         when (event) {
+            // 投屏开始了才算连成功：记下这台手机，之后「自动连接手机」就会拨它。
+            is SessionEvent.VideoStarted -> {
+                current.projected = true
+                current.phoneAddress?.let { address ->
+                    if (wirelessPrefs.rememberPhone(address)) Log.i(TAG, "记下连成功的手机（${MacText.mask(address)}），之后会自动连它")
+                }
+            }
             is SessionEvent.VideoNegotiated -> {
                 current.touchNegotiated = event.video.touchInput
                 current.keyNegotiated = event.video.keyInput
@@ -1002,39 +1153,21 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
         afterAttempt(current)
     }
 
-    /** 一次连接收尾之后：按结束方式决定自动回连多久再来；不再来就退出前台。 */
+    /** 一次连接收尾之后：回到空闲（更新空闲说明、退出前台）。 */
     private fun afterAttempt(current: Attempt) {
-        // 热点留着等下一次连接；不再等了才关掉、复查车机 WiFi（见 [syncHotspotStandby]）。
+        // 热点跟着连接走：连接结束就关、复查车机 WiFi（见 [syncHotspotStandby]）。不再自动回到等待。
         lastEndByUser = current.stopReason == StopReason.USER
-        val duration = SystemClock.elapsedRealtime() - current.startedAt
-        val delay = when (current.stopReason) {
-            StopReason.USER -> autoPolicy.afterAttempt(AutoReconnectPolicy.Outcome.USER_STOP)
-            StopReason.YIELD -> autoPolicy.afterAttempt(AutoReconnectPolicy.Outcome.YIELDED)
-            StopReason.RESTART -> autoPolicy.afterAttempt(AutoReconnectPolicy.Outcome.RESTART)
-            StopReason.AUTO_OFF, StopReason.SERVICE_GONE -> null
-            null -> autoPolicy.afterAttempt(
-                if (current.phoneSeen) AutoReconnectPolicy.Outcome.ENDED_AFTER_PHONE else AutoReconnectPolicy.Outcome.ENDED_WITHOUT_PHONE,
-                duration,
-            )
+        current.phoneAddress?.let { triggers.onSessionEnded(it, current.projected, stoppedByUser = lastEndByUser) }
+        if (current.resumeWiredAfter && !wirelessPrefs.wiredOnly && !wiredActive()) {
+            Log.i(TAG, "无线连接结束，让有线回到等插线（之前为无线让出来的）")
+            resumeWiredWaiting()
         }
-        when {
-            current.stopReason == StopReason.USER && wirelessPrefs.autoReconnect -> setAutoHold(AutoHold.PAUSED_BY_USER)
-            current.stopReason == StopReason.SERVICE_GONE -> setAutoHold(AutoHold.FOREGROUND_UNAVAILABLE)
-        }
-        if (delay == null) {
+        if (current.stopReason == StopReason.SERVICE_GONE) {
+            setAutoHold(AutoHold.FOREGROUND_UNAVAILABLE)
             releaseForeground()
             return
         }
-        // 现在就不满足条件的（开关关了、没有配对过的手机、有线在进行……）不必留在前台等。
-        val hold = autoPolicy.hold(autoConditions())
-        if (hold != null) {
-            Log.i(TAG, "自动回连不再等待：$hold")
-            setAutoHold(hold)
-            releaseForeground()
-            return
-        }
-        Log.i(TAG, "${delay} 毫秒后回到等已配对的手机回连（连续失败 ${autoPolicy.consecutiveFailures} 次）")
-        scheduleAutoRetry(delay, "上一次连接结束")
+        refreshIdleStatus("上一次连接结束")
     }
 
     // ---------------------------------------------------------------- 前台服务
@@ -1086,11 +1219,15 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     }
 
     /**
-     * 按现在的情况开着或关掉留着的热点。有连接、或在等下一次自动回连就开着；没有了（用户停止、有线接手、
-     * 切到仅有线、条件不满足不再等）就关掉，「退出后恢复车机 WiFi」开着时复查车机 WiFi（下一次又开热点时作废）。
+     * 按现在的情况开着或关掉留着的热点。有连接在进行就开着（车机主动回连要等连上手机的蓝牙控制通道）；连接结束
+     * （或切到仅有线、有线接手）就关掉，「退出后恢复车机 WiFi」开着时复查车机 WiFi（下一次又开热点时作废）。
      */
     private fun syncHotspotStandby() {
-        val wanted = (attempt != null || autoRetry != null) && !wirelessPrefs.wiredOnly && !wiredActive()
+        val current = attempt
+        // 车机主动回连要等车机连上手机的蓝牙控制通道才开：手机不在旁边时不顶掉车机自己的 WiFi。
+        // 建直连组的连接不开热点（开热点会停掉车机 WiFi，组就建不起来了）。
+        val wanted = current != null && !current.directGroup && (current.kind != Kind.RECONNECT || current.phoneSeen) &&
+            !wirelessPrefs.wiredOnly && !wiredActive()
         if (wanted == hotspotStandby) return
         hotspotStandby = wanted
         if (wanted) {
@@ -1108,6 +1245,12 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     }
 
     private companion object {
+        /** 同一台手机两次车机主动回连之间至少隔这么久。 */
+        const val RECONNECT_COOLDOWN_MS = 60_000L
+
+        /** 车机主动回连时界面不在前台：带到前台后等这么久再拨（界面一般 1 秒内出来；出不来也照拨）。 */
+        const val SURFACE_WAIT_MS = 1_500L
+
         const val TAG = "OpenHC-Wireless"
 
         /** 触摸采样最多记几个输入。 */

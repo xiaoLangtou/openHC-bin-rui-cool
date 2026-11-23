@@ -121,9 +121,10 @@ class FrameTest {
         val decoder = NearbyFrameDecoder()
         decoder.feed(hex("7f00000000"))
         assertFailsWith<MalformedMessageException> { decoder.next() }
-        // 载荷长度字段连续 4 字节都没有终止位：不再等更多数据，直接按非法处理。
+        // 载荷长度字段连续 4 字节都没有终止位：不再等更多数据，直接按非法处理；报错写明字段和帧内位置。
         decoder.feed(hex("7f80808000000000"))
-        assertFailsWith<MalformedMessageException> { decoder.next() }
+        val bad = assertFailsWith<MalformedMessageException> { decoder.next() }
+        assertEquals("拆帧：载荷长度 从帧内第 4 字节起连续 4 字节都没有终止位", bad.message)
         assertEquals(0, decoder.buffered)
     }
 

@@ -76,6 +76,9 @@ class DmsdpSession(
     private var listenerRequested = false
 
     private val controlDecoder = ControlFrameDecoder()
+
+    /** 加密控制连接上认不出、跳过了的载荷个数（见 [DmsdpEvent.UnrecognizedControlPayload]）。 */
+    private var unrecognizedPayloads = 0
     private var controlState = ControlState.NOT_CONNECTED
     private var nextCSeq = 1
     private var tcpKeepAlive: TcpKeepAlive? = null
@@ -436,6 +439,15 @@ class DmsdpSession(
             for (record in DeviceRecords.parseAll(payload)) onDeviceRecord(record, nowMillis, out)
             return
         }
+        if (!DmsdpMessage.looksLikeText(payload)) {
+            // 手机的声音数据连接还没连上时，会先经控制连接送声音（不是 '$' 记录，格式还没弄清）：跳过，不断开。
+            unrecognizedPayloads++
+            if (unrecognizedPayloads <= UNRECOGNIZED_REPORTED || unrecognizedPayloads % UNRECOGNIZED_REPORT_EVERY == 0) {
+                val head = payload.copyOf(minOf(payload.size, DmsdpEvent.UnrecognizedControlPayload.HEAD_BYTES))
+                out.event(DmsdpEvent.UnrecognizedControlPayload(unrecognizedPayloads, payload.size, head))
+            }
+            return
+        }
         val message = DmsdpMessage.parse(payload)
         when {
             isKeepAliveRequest(message) -> tcpKeepAlive?.onPeerRequest()
@@ -634,6 +646,9 @@ class DmsdpSession(
     }
 
     private companion object {
+        /** 认不出的载荷：前几个都交出事件，之后每第这么多个交一次，免得刷屏。 */
+        const val UNRECOGNIZED_REPORTED = 3
+        const val UNRECOGNIZED_REPORT_EVERY = 100
         const val OPTIONS = "OPTIONS"
         const val SET_PARAMETER = "SET_PARAMETER"
         const val GET_PARAMETER = "GET_PARAMETER"

@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import io.github.gcbond.openhc.R
 import io.github.gcbond.openhc.connection.UsbAutoConnect
 import io.github.gcbond.openhc.platform.net.VpnConsent
+import io.github.gcbond.openhc.settings.WirelessPreferences
 import io.github.gcbond.openhc.startup.BootOutcome
 import io.github.gcbond.openhc.startup.BootRecord
 import io.github.gcbond.openhc.startup.BootStart
@@ -33,13 +34,13 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * 设置页「启动」一组：开机自动打开 OpenHC（默认关，立即生效），[extraRows] 排在它下面（「蓝牙连上自动连接」），
- * 再下面是开机静默连接（默认关，只在开机自动打开开着时起作用）；开机自动打开开着时再往下列出还要车主做的系统设置：
- * 安卓 10 起的悬浮窗权限（带跳转；静默时手机连上要靠它把画面带到前台）、车机系统的自启动管理
- * （只能说明，带本应用系统设置页的跳转），以及上次开机的结果。
+ * 设置页「启动」一组：开机自动打开 OpenHC（默认关，立即生效），[extraRows] 排在它下面（「自动连接手机」），
+ * 再下面是开机静默连接（默认关，只在开机自动打开开着时起作用）；开机自动打开或自动连接手机（[autoConnect]）开着时，
+ * 再往下列出还要车主做的系统设置：安卓 10 起的悬浮窗权限（带跳转；后台打开界面要靠它，自动连接时开热点也要界面在前台）、
+ * 车机系统的自启动管理（比亚迪直接打开它的对话框；别的车机只能说明，带本应用系统设置页的跳转），以及上次开机的结果。
  */
 @Composable
-internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
+internal fun BootStartSettingsSection(autoConnect: Boolean = false, extraRows: @Composable () -> Unit = {}) {
     val context = LocalContext.current
     var enabled by remember(context) { mutableStateOf(BootStart.isEnabled(context)) }
     var silent by remember(context) { mutableStateOf(BootStart.isSilent(context)) }
@@ -48,7 +49,8 @@ internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
     var overlay by remember(context) { mutableStateOf(BootStart.canDrawOverlays(context)) }
     val record = remember(context) { BootStart.lastRecord(context) }
     val installedAt = remember(context) { BootStart.installedAtMillis(context) }
-    val wirelessWanted = remember(context) { BootStart.wirelessWanted(context) }
+    // 自动连接手机在同一页里能切换：跟着 [autoConnect] 重算。
+    val wirelessWanted = remember(context, autoConnect) { BootStart.wirelessWanted(context) }
     val usbChanges by UsbAutoConnect.changes.collectAsState()
     val usbAutoConnect = remember(context, usbChanges) { UsbAutoConnect.isEnabled(context) }
     // 从系统设置页回来时重查悬浮窗权限。
@@ -74,7 +76,7 @@ internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
     }
     // 静默时系统没有本地热点（安卓 8.0 以下，用不了无线）就只等插线，见 SilentConnectPolicy.route。
     val hotspotSupported = WirelessNetworkPlan.hotspotSupported(Build.VERSION.SDK_INT)
-    // 开机后有线、无线先等哪个（见 BootStartPolicy.waitForCable，开机时插着手机的情况不在这里说）；静默时在后台等。
+    // 开机后等不等插线（见 BootStartPolicy.waitForCable，开机时插着手机的情况不在这里说）、无线怎么自动连；静默时在后台。
     val afterBoot = when {
         silent && (!wirelessWanted || !hotspotSupported) -> R.string.settings_boot_silent_wired
         !wirelessWanted -> R.string.settings_boot_wired
@@ -83,7 +85,11 @@ internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
     }
     // 静默那一行的提示：开机自动打开关着时它不起作用；开着时说还缺什么（VPN 授权只影响先等插线的情况）。
     val waitsForCable = !hotspotSupported ||
-        BootStartPolicy.waitForCable(phonePlugged = false, usbAutoConnect = usbAutoConnect, wirelessWanted = wirelessWanted)
+        BootStartPolicy.waitForCable(
+            phonePlugged = false,
+            usbAutoConnect = usbAutoConnect,
+            wirelessWanted = wirelessWanted,
+        )
     val silentNote = when {
         !enabled -> stringResource(R.string.settings_boot_silent_needs_boot)
         !silent -> null
@@ -127,7 +133,12 @@ internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
                 }
             }
         }
-        if (!enabled) return@SettingsGroup
+        // 比亚迪车机：开机自动打开、自动连接手机都要在它的「选择禁止后台启动项」里放行，开关没开也给入口。
+        val bydAutostart = remember(context) { BootStart.bydAutostartIntent(context) }
+        if (!enabled && !autoConnect) {
+            if (bydAutostart != null) BydAutostartRow { openFirstAvailable(listOf(bydAutostart, BootStart.appDetailsIntent(context))) }
+            return@SettingsGroup
+        }
 
         // 悬浮窗权限
         when {
@@ -143,17 +154,21 @@ internal fun BootStartSettingsSection(extraRows: @Composable () -> Unit = {}) {
                 RowNote(stringResource(if (silent) R.string.settings_boot_overlay_missing_silent else R.string.settings_boot_overlay_missing))
             }
         }
-        // 车机系统的自启动管理：只能说明，给个本应用系统设置页的入口
-        GroupRow(spacing = 8.dp) {
-            RowDescription(stringResource(R.string.settings_boot_autostart_note))
-            ActionButton(
-                stringResource(R.string.settings_boot_open_app_settings),
-                onClick = { openFirstAvailable(listOf(BootStart.appDetailsIntent(context))) },
-            )
+        // 车机系统的自启动管理：比亚迪直接打开它的对话框；别的车机只能说明，给个本应用系统设置页的入口
+        if (bydAutostart != null) {
+            BydAutostartRow { openFirstAvailable(listOf(bydAutostart, BootStart.appDetailsIntent(context))) }
+        } else {
+            GroupRow(spacing = 8.dp) {
+                RowHeader(stringResource(R.string.settings_boot_autostart_title), stringResource(R.string.settings_boot_autostart_note))
+                ActionButton(
+                    stringResource(R.string.settings_boot_open_app_settings),
+                    onClick = { openFirstAvailable(listOf(BootStart.appDetailsIntent(context))) },
+                )
+            }
         }
         // 上次开机的结果
         val seen = BootStartPolicy.bootSeenSinceInstall(record, installStamp = installedAt)
-        if (record != null || !seen) {
+        if (enabled && (record != null || !seen)) {
             GroupRow(spacing = 4.dp) {
                 if (record != null) RowDescription(lastBootText(record), color = Palette.Text)
                 if (!seen) RowDescription(stringResource(R.string.settings_boot_not_seen))
@@ -184,6 +199,15 @@ private fun lastBootText(record: BootRecord): String {
         },
     )
     return stringResource(R.string.settings_boot_last, time, kind, outcome)
+}
+
+/** 比亚迪车机的后台启动放行：说明 + 直接打开它的「选择禁止后台启动项」对话框。 */
+@Composable
+private fun BydAutostartRow(onOpen: () -> Unit) {
+    GroupRow(spacing = 8.dp) {
+        RowHeader(stringResource(R.string.settings_boot_byd_title), stringResource(R.string.settings_boot_byd_note))
+        ActionButton(stringResource(R.string.settings_boot_open_byd), onClick = onOpen)
+    }
 }
 
 /** 能显示通知：安卓 13 以前不用申请。 */

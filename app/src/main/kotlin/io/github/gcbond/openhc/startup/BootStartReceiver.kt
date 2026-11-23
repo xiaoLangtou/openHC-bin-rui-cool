@@ -10,9 +10,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import io.github.gcbond.openhc.MainActivity
 import io.github.gcbond.openhc.OpenHcApp
+import io.github.gcbond.openhc.platform.log.Log
 
 /**
  * 开机广播接收器（清单里默认停用，设置「开机自动打开 OpenHC」打开时才启用）。冷启动和熄火后再点火都走这里。

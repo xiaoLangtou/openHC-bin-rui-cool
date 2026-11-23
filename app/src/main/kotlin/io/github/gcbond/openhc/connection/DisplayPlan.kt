@@ -43,7 +43,8 @@ sealed class ResolutionChoice {
  *
  * - 画布：自动时取屏幕实际尺寸（投屏页全屏沉浸，画面铺满整块屏）；宽高向下取偶数（H.264 按宏块编码，奇数边长没意义）。
  * - DPI：按屏幕 DPI 声明；画布比屏幕小时，车机显示时会把画面放大，DPI 按同样比例缩小，手机界面上的元素在车机屏上
- *   的实际大小就不变。缩放比例（density）= DPI / 160。
+ *   的实际大小就不变。再乘以设置里的「界面大小」百分比：有的车机为了好点按把系统 DPI 设得偏高，大屏上手机界面
+ *   显得很大，声明的 DPI 调小后手机按更小的缩放排版，同一屏放得下更多内容；画布和码率不变。缩放比例（density）= DPI / 160。
  * - 帧率：自动时按屏幕刷新率（见 platform 的 FrameRatePolicy），否则用设置的值。
  * - 关键帧间隔（GOP）：一律声明，约 [KEY_FRAME_SECONDS] 秒一个关键帧，见 [keyFrameInterval]。
  */
@@ -58,6 +59,11 @@ object DisplayPlan {
     /** 设置页列出的固定帧率；0 表示自动。 */
     val FPS_CHOICES: List<Int> = listOf(30, 60)
 
+    /** 设置页列出的「界面大小」（声明 DPI 的百分比），第一个是默认。 */
+    val UI_SCALE_CHOICES: List<Int> = listOf(100, 85, 75, 65)
+
+    const val DEFAULT_UI_SCALE = 100
+
     private const val BASE_DPI = 160.0
     private const val MIN_DPI = 60
 
@@ -68,8 +74,15 @@ object DisplayPlan {
     const val MIN_GOP = 30
     const val MAX_GOP = 600
 
-    fun resolve(screen: ScreenSpec, resolution: ResolutionChoice, fpsSetting: Int): DisplaySettings {
+    /** [uiScalePercent]：界面大小，见 [UI_SCALE_CHOICES]；只能缩小（1～100）。 */
+    fun resolve(
+        screen: ScreenSpec,
+        resolution: ResolutionChoice,
+        fpsSetting: Int,
+        uiScalePercent: Int = DEFAULT_UI_SCALE,
+    ): DisplaySettings {
         require(screen.width > 0 && screen.height > 0 && screen.densityDpi > 0 && screen.autoFps > 0) { "屏幕参数非法: $screen" }
+        require(uiScalePercent in 1..100) { "界面大小只能是 1～100%: $uiScalePercent" }
         val (rawW, rawH) = when (resolution) {
             ResolutionChoice.Auto -> screen.width to screen.height
             is ResolutionChoice.Fixed -> resolution.width to resolution.height
@@ -78,7 +91,7 @@ object DisplayPlan {
         val height = even(rawH)
         // 车机把画面等比放大到屏幕上的倍数。
         val displayScale = minOf(screen.width.toDouble() / width, screen.height.toDouble() / height)
-        val dpi = max(MIN_DPI, (screen.densityDpi / displayScale).roundToInt())
+        val dpi = max(MIN_DPI, (screen.densityDpi / displayScale * uiScalePercent / 100.0).roundToInt())
         val fps = if (fpsSetting > 0) fpsSetting else screen.autoFps
         return DisplaySettings(
             width = width,

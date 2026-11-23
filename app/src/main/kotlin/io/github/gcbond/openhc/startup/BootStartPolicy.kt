@@ -48,18 +48,18 @@ object BootStartPolicy {
     /**
      * 开机打开界面以后，要不要像点了「开始」一样进入等插线。
      *
-     * 有线在等插线时，无线不进入「等已配对的手机回连」（两种连接同时只能有一种，有线优先），所以：
+     * 无线平时不占着什么（「自动连接手机」只在手机蓝牙连上、或界面回到前台时拨一次），有线在等插线时，
+     * 用无线连成功过的手机蓝牙一连上，无线就请有线停下、改走无线；所以等不等插线只看有线自己：
      * - 车机上已经插着手机：进入等插线（插着的手机不会再有一次「设备接入」把有线带起来）；
      * - 不做无线（[wirelessWanted] 为假）：进入等插线；
-     * - 要做无线、开着「插线时不再弹窗」：不进入，让无线先等手机回连；之后插线时系统会拉起本应用，照样开始有线；
-     * - 要做无线、没开「插线时不再弹窗」：插线不会自己开始有线，只能进入等插线（这期间不做无线自动回连）。
+     * - 开着「插线时不再弹窗」：不进入，插线时系统会拉起本应用，照样开始有线；
+     * - 没开：插线不会自己开始有线，进入等插线。
      */
     fun waitForCable(phonePlugged: Boolean, usbAutoConnect: Boolean, wirelessWanted: Boolean): Boolean =
         phonePlugged || !wirelessWanted || !usbAutoConnect
 
-    /** 开机后无线要不要等手机回连，只看设置：没开「只用数据线连接」，并且开着无线自动回连或蓝牙连上自动连接。 */
-    fun wirelessWanted(wiredOnly: Boolean, autoReconnect: Boolean, connectOnBluetooth: Boolean): Boolean =
-        !wiredOnly && (autoReconnect || connectOnBluetooth)
+    /** 开机后无线要不要自动连手机，只看设置：没开「只用数据线连接」，并且开着「自动连接手机」。 */
+    fun wirelessWanted(wiredOnly: Boolean, connectOnBluetooth: Boolean): Boolean = !wiredOnly && connectOnBluetooth
 
     fun overlayRequired(sdkInt: Int): Boolean = sdkInt >= OVERLAY_REQUIRED_FROM_SDK
 

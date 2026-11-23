@@ -6,16 +6,35 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.isFile) file.inputStream().use { load(it) }
+}
+
 // 发布签名：密钥不进仓库。环境变量 OPENHC_SIGNING 或 local.properties 里的 openhc.signing 指向一份配置文件
 // （storeFile、storePassword、keyAlias、keyPassword）；都没有时正式包不签名，调试包照常用调试密钥。
 val signingProperties: Properties? = (
     providers.environmentVariable("OPENHC_SIGNING").orNull
-        ?: rootProject.file("local.properties").takeIf { it.isFile }
-            ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
-            ?.getProperty("openhc.signing")
+        ?: localProperties.getProperty("openhc.signing")
     )
     ?.takeIf { it.isNotBlank() }
     ?.let { path -> Properties().apply { file(path).inputStream().use { load(it) } } }
+
+// 连接参数（openhc-identity.json，格式见 docs/identity.example.json）：不进仓库，构建时从本机目录打进 assets。
+// 环境变量 OPENHC_IDENTITY_DIR 优先，其次 local.properties 的 openhc.identity.dir；都没有就不打包，装上后首页提示缺少。
+val identityFileName = "openhc-identity.json"
+val identityDir: File? = (
+    providers.environmentVariable("OPENHC_IDENTITY_DIR").orNull
+        ?: localProperties.getProperty("openhc.identity.dir")
+    )
+    ?.takeIf { it.isNotBlank() }
+    ?.let { file(it) }
+    ?.also { dir ->
+        val names = dir.listFiles()?.map { it.name }?.sorted()
+        require(names == listOf(identityFileName)) {
+            "连接参数目录 $dir 里必须只有 $identityFileName（实际：$names），防止把别的私有文件打进安装包"
+        }
+    }
 
 android {
     namespace = "io.github.gcbond.openhc"
@@ -26,8 +45,14 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         // versionCode = 主版本 × 10000 + 次版本 × 100 + 补丁号。
-        versionCode = 101
-        versionName = "0.1.1"
+        versionCode = 202
+        versionName = "0.2.2"
+    }
+
+    sourceSets {
+        getByName("main") {
+            identityDir?.let { assets.srcDir(it) }
+        }
     }
 
     signingConfigs {

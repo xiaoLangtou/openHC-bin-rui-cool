@@ -7,8 +7,13 @@ import io.github.gcbond.openhc.core.session.WirelessChannel
 import io.github.gcbond.openhc.core.session.WirelessEvent
 import io.github.gcbond.openhc.core.session.WirelessOutput
 import io.github.gcbond.openhc.core.session.WirelessRunnerBridge
+import io.github.gcbond.openhc.platform.bluetooth.RfcommClient
 import io.github.gcbond.openhc.platform.bluetooth.RfcommEndpoint
 import io.github.gcbond.openhc.platform.bluetooth.RfcommEvents
+import io.github.gcbond.openhc.core.nearby.WifiMode
+import io.github.gcbond.openhc.platform.wifi.DirectGroup
+import io.github.gcbond.openhc.platform.wifi.DirectGroupEvents
+import io.github.gcbond.openhc.platform.wifi.DirectMacSource
 import io.github.gcbond.openhc.platform.wifi.HotspotMacSource
 import io.github.gcbond.openhc.platform.wifi.LocalHotspot
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotEvents
@@ -20,6 +25,9 @@ import java.util.UUID
 internal interface WirelessResults {
     fun onListening(id: Int, port: Int)
     fun onAccepted(id: Int, remote: String)
+
+    /** 车机主动连手机的蓝牙连接连上了（车机主动回连）。 */
+    fun onConnected(id: Int)
     fun onData(id: Int, data: ByteArray)
     fun onClosed(id: Int)
     fun onIoError(id: Int, message: String)
@@ -34,6 +42,8 @@ internal class RunnerResults : WirelessResults {
     override fun onListening(id: Int, port: Int) = runner.submit { now -> bridge.onListening(id, port, now) }
 
     override fun onAccepted(id: Int, remote: String) = runner.submit { now -> bridge.onAccepted(id, remote, now) }
+
+    override fun onConnected(id: Int) = runner.submit { now -> bridge.onConnected(id, now) }
 
     override fun onData(id: Int, data: ByteArray) = runner.submit { now -> bridge.onData(id, data, 0, data.size, now) }
 
@@ -58,7 +68,11 @@ internal class RunnerResults : WirelessResults {
  */
 internal class WirelessPlatformExecutor(
     private val openRfcomm: (serviceName: String, uuid: UUID, events: RfcommEvents) -> RfcommEndpoint,
+    /** 车机主动连手机（车机主动回连）：[channel] 不为 null 时先按通道号直连，否则按 [uuid] 查 SDP。 */
+    private val dialRfcomm: (address: String, uuid: UUID, channel: Int?, events: RfcommClient.Events) -> RfcommEndpoint,
     private val startHotspot: (LocalHotspotEvents) -> LocalHotspotHandle,
+    /** 不为 null 时会话要的网络改建 WiFi 直连组（设置里「无线方式」选了直连）。 */
+    private val startDirect: ((DirectGroupEvents) -> LocalHotspotHandle)? = null,
     private val results: WirelessResults,
     private val onEvent: (WirelessEvent) -> Unit,
     private val log: (String) -> Unit,
@@ -75,16 +89,30 @@ internal class WirelessPlatformExecutor(
     @Volatile
     private var readyHotspot: LocalHotspot? = null
 
+    /** 建好的直连组（日志用）。 */
+    @Volatile
+    private var readyDirect: DirectGroup? = null
+
     /** 桥接的平台回调。 */
     fun execute(output: WirelessOutput) {
         when (output) {
             is WirelessAction.ListenRfcomm -> listen(output)
+            is WirelessAction.ConnectRfcomm -> dial(output)
             is WirelessAction.RfcommWrite -> write(output)
             is WirelessAction.RfcommClose -> closeRfcomm(output.id)
-            is WirelessAction.StartWifiNetwork -> startLocalHotspot(output.id)
+            is WirelessAction.StartWifiNetwork -> {
+                val direct = startDirect
+                if (direct != null) startDirectGroup(output.id, direct) else startLocalHotspot(output.id)
+            }
             is WirelessAction.StopWifiNetwork -> stopHotspot(output.id)
             is WirelessEvent -> {
-                if (output is WirelessEvent.ConnectionInfoSent) {
+                if (output is WirelessEvent.ConnectionInfoSent && output.channel == null) {
+                    val group = readyDirect
+                    log(
+                        "连接串已发给手机（端口 ${output.port}，直连格式），等手机加入直连组（以手机连上 TCP 端口为准）" +
+                            "（手机报的 MAC ${MacText.mask(output.phoneMac)}；组在 ${group?.frequencyMhz ?: "?"} MHz，系统交回的真实频率）",
+                    )
+                } else if (output is WirelessEvent.ConnectionInfoSent) {
                     log(
                         "连接串已发给手机（端口 ${output.port}），等手机连上车机热点（以手机连上 TCP 端口为准，热点看不到终端列表）" +
                             "（手机报的 MAC ${MacText.mask(output.phoneMac)}）",
@@ -172,6 +200,46 @@ internal class WirelessPlatformExecutor(
         endpoint.start()
     }
 
+    private fun dial(action: WirelessAction.ConnectRfcomm) {
+        val label = action.channel.label
+        val how = action.rfcommChannel?.let { "通道 $it" } ?: "按 SDP 查 ${action.uuid}"
+        log("$label：车机去连手机（${MacText.mask(action.address)}，$how）")
+        val events = object : RfcommClient.Events {
+            override fun onConnected() = ifConnected(action.id) {
+                log("$label：连上手机了")
+                results.onConnected(action.id)
+            }
+
+            override fun onConnectFailed(message: String) = ifConnected(action.id) {
+                log("$label：$message")
+                results.onIoError(action.id, message)
+            }
+
+            override fun onData(data: ByteArray) = ifConnected(action.id) { results.onData(action.id, data) }
+
+            override fun onClosed() = ifConnected(action.id) {
+                log("$label：手机关闭了连接")
+                results.onClosed(action.id)
+            }
+
+            override fun onConnectionError(message: String) = ifConnected(action.id) {
+                log("$label：$message")
+                results.onIoError(action.id, message)
+            }
+
+            override fun onNote(message: String) = ifConnected(action.id) { log("$label：$message") }
+        }
+        val endpoint = dialRfcomm(action.address, action.uuid, action.rfcommChannel, events)
+        synchronized(lock) {
+            if (!closed) connections[action.id] = endpoint
+        }
+        if (isClosed()) {
+            endpoint.closeConnection()
+            return
+        }
+        endpoint.start()
+    }
+
     private fun write(action: WirelessAction.RfcommWrite) {
         val endpoint = synchronized(lock) { connections[action.id] }
         if (endpoint == null) {
@@ -227,8 +295,34 @@ internal class WirelessPlatformExecutor(
 
     private fun stopHotspot(id: Int) {
         val handle = synchronized(lock) { hotspots.remove(id) } ?: return
-        log("关掉热点")
+        log(if (startDirect != null) "拆掉直连组" else "关掉热点")
         handle.stop()
+    }
+
+    /** 建直连组：组名、口令、频率都由本机定，建好后交回系统读回的实际值；连接串用直连格式。 */
+    private fun startDirectGroup(id: Int, factory: (DirectGroupEvents) -> LocalHotspotHandle) {
+        val events = object : DirectGroupEvents {
+            override fun onReady(group: DirectGroup) = ifHotspot(id) {
+                if (group.macSource == DirectMacSource.PLACEHOLDER) log("读不到直连网卡的真实 MAC，连接串里的组主 MAC 用占位值")
+                readyDirect = group
+                results.onWifiNetworkReady(
+                    id,
+                    WifiNetwork(group.localIp, group.networkName, group.ownerMac, group.passphrase, group.frequencyMhz, WifiMode.DIRECT),
+                )
+            }
+
+            override fun onFailed(message: String) = ifHotspot(id) { results.onIoError(id, message) }
+
+            override fun onLost(message: String) = ifHotspot(id) {
+                log(message)
+                results.onClosed(id)
+            }
+        }
+        val handle = factory(events)
+        synchronized(lock) { if (!closed) hotspots[id] = handle }
+        if (isClosed()) return handle.stop()
+        log("开始建直连组（手机已经认证通过）")
+        handle.start()
     }
 
     // ---------------------------------------------------------------- 工具

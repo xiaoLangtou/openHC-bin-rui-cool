@@ -119,7 +119,7 @@ private fun ColumnScope.ScanContent(state: WirelessUiState, qr: String, actions:
     // 底部一行：左边无线方式和广播情况（小字），右边「停止」；不挤占二维码的高度。
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            listOfNotNull(wirelessNetworkText(), state.beacon?.let { wirelessBeaconText(it) }).joinToString("\n"),
+            listOfNotNull(wirelessNetworkText(state), state.beacon?.let { wirelessBeaconText(it) }).joinToString("\n"),
             style = UiType.hint,
             color = Palette.Muted,
             modifier = Modifier.weight(1f),
@@ -186,7 +186,7 @@ private fun StatusBody(state: WirelessUiState, identityLoaded: Boolean, wireless
             modifier = Modifier.padding(top = 8.dp),
         )
     }
-    if (!wirelessOff) CenteredLine(wirelessNetworkText(), Palette.Muted)
+    if (!wirelessOff) CenteredLine(wirelessNetworkText(state), Palette.Muted)
     state.pinCode?.let { pin ->
         BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 16.dp)) {
             val (box, gap) = QrPinLayout.pinRow(

@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.content.ContextCompat
 import io.github.gcbond.openhc.AppIntents
 import io.github.gcbond.openhc.IdentityLoader
@@ -25,6 +24,7 @@ import io.github.gcbond.openhc.core.session.SessionEvent
 import io.github.gcbond.openhc.core.session.SocketRunner
 import io.github.gcbond.openhc.core.session.VideoParameters
 import io.github.gcbond.openhc.input.MediaKeys
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.VideoDecoder
 import io.github.gcbond.openhc.platform.net.VpnConsent
 import io.github.gcbond.openhc.platform.usb.PhoneUsbMode
@@ -303,7 +303,7 @@ class ConnectionController(context: Context) {
         val bluetooth = BluetoothAddressPolicy.choose(DeviceInfo.systemBluetoothAddress(), settings.manualBluetoothAddress)
         val fullScreen = settings.fullScreen
         val display = try {
-            DisplayPlan.resolve(DisplayArea.screenFor(app, fullScreen), ResolutionChoice.Auto, settings.fps)
+            DisplayPlan.resolve(DisplayArea.screenFor(app, fullScreen), ResolutionChoice.Auto, settings.fps, settings.uiScalePercent)
         } catch (e: IllegalArgumentException) {
             return block(Notice.StartFailed("屏幕参数不对：${e.message}"))
         }
@@ -343,7 +343,7 @@ class ConnectionController(context: Context) {
         Log.i(
             TAG,
             "第 ${current.id} 次连接：蓝牙地址来源 ${bluetooth.source}，deviceId ${config.deviceId.take(4)}…，" +
-                "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi} GOP ${display.gop}" +
+                "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}（界面大小 ${settings.uiScalePercent}%）GOP ${display.gop}" +
                 "（全屏${if (DisplayArea.activeFullScreen) "开" else "关，让出底部导航栏 ${DisplayArea.navigationBarHeight(app)} 像素"}），控制端口 $port，" +
                 "已配对手机 ${trustStore.peerCount} 台，USB 授权宽限 ${grace}ms",
         )

@@ -53,11 +53,11 @@ internal class NearbyFrameDecoder(private val maxPayload: Int = DEFAULT_MAX_PAYL
             throw MalformedMessageException("首字节不是 0x7F")
         }
         var off = p + 1
-        val outerType = decodeEa(buf, off, end) ?: return null
+        val outerType = decodeEa(buf, off, end, "外层类型", p) ?: return null
         off += outerType.size
-        val flag = decodeEa(buf, off, end) ?: return null
+        val flag = decodeEa(buf, off, end, "标志", p) ?: return null
         off += flag.size
-        val flagLength = decodeEa(buf, off, end) ?: return null
+        val flagLength = decodeEa(buf, off, end, "标志段长度", p) ?: return null
         off += flagLength.size
         if (flagLength.value > MAX_FLAG_VALUE) {
             throw MalformedMessageException("标志段的值 ${flagLength.value} 字节，超过上限 $MAX_FLAG_VALUE")
@@ -65,7 +65,7 @@ internal class NearbyFrameDecoder(private val maxPayload: Int = DEFAULT_MAX_PAYL
         if (end - off < flagLength.value) return null
         val flagValue = buf.copyOfRange(off, off + flagLength.value)
         off += flagLength.value
-        val payloadLength = decodeEa(buf, off, end) ?: return null
+        val payloadLength = decodeEa(buf, off, end, "载荷长度", p) ?: return null
         off += payloadLength.size
         if (payloadLength.value > maxPayload) {
             throw MalformedMessageException("载荷 ${payloadLength.value} 字节，超过上限 $maxPayload")
@@ -85,8 +85,15 @@ internal class NearbyFrameDecoder(private val maxPayload: Int = DEFAULT_MAX_PAYL
         return frame
     }
 
-    private fun decodeEa(buf: ByteArray, offset: Int, end: Int): EaValue? {
-        val packed = Ea.tryDecode(buf, offset, end)
+    /** 报错时写明是帧头哪个字段、从帧内第几个字节起（缓冲数组里的下标看诊断日志时对不上）。 */
+    private fun decodeEa(buf: ByteArray, offset: Int, end: Int, field: String, frameStart: Int): EaValue? {
+        val packed = try {
+            Ea.tryDecode(buf, offset, end)
+        } catch (e: MalformedMessageException) {
+            throw MalformedMessageException(
+                "拆帧：$field 从帧内第 ${offset - frameStart} 字节起连续 ${Ea.MAX_BYTES} 字节都没有终止位", e,
+            )
+        }
         return if (packed < 0) null else EaValue((packed ushr 8).toInt(), (packed and 0xFF).toInt())
     }
 

@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -32,6 +31,7 @@ import io.github.gcbond.openhc.connection.ConnectionController
 import io.github.gcbond.openhc.connection.DeviceInfo
 import io.github.gcbond.openhc.connection.Notice
 import io.github.gcbond.openhc.connection.Phase
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.net.VpnConsent
 import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.AudioPreferences
@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
                 Log.i(TAG, "开机自动打开：开始等插线")
                 requestStart(StartKind.BOOT)
             } else {
-                Log.i(TAG, "开机自动打开：先等已配对的手机无线回连，插线时由系统拉起本应用再开始有线")
+                Log.i(TAG, "开机自动打开：不等插线（插线时由系统拉起本应用再开始有线），无线自动连手机")
             }
         } else if (intent?.action == BootStartPolicy.ACTION_SHOW_PROJECTION) {
             Log.i(TAG, "开机静默连接：手机连上了，界面带到前台")
@@ -263,7 +263,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dispatch(kind: StartKind) {
-        // 无线在等已配对的手机回连的话先让出（有线没真的开始时，它过一会儿自己回来）。
+        // 无线在被动等已配对的手机回连（已不再自动进入）的话先让出。
         wireless.yieldToWired()
         when (kind) {
             StartKind.START, StartKind.BOOT -> controller.start()

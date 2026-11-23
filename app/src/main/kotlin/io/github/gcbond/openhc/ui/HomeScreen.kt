@@ -118,7 +118,7 @@ internal fun HomeScreen(
                             WiredCard(wiredState, identityLoaded, actions, onShowProjection, Modifier.fillMaxWidth())
                         }
                     }
-                    HomeFooter(identity, prefs)
+                    HomeFooter(prefs)
                 }
             } else {
                 Column(
@@ -149,7 +149,7 @@ internal fun HomeScreen(
                             .fillMaxWidth()
                             .padding(top = 12.dp),
                     )
-                    HomeFooter(identity, prefs, Modifier.padding(top = 12.dp))
+                    HomeFooter(prefs, Modifier.padding(top = 12.dp))
                 }
             }
         }
@@ -265,7 +265,6 @@ private fun WiredCard(
  */
 @Composable
 private fun HomeFooter(
-    identity: IdentityLoader.Result,
     prefs: WirelessPreferences,
     modifier: Modifier = Modifier,
 ) {
@@ -273,7 +272,6 @@ private fun HomeFooter(
         stringResource(R.string.home_version, BuildConfig.VERSION_NAME),
         stringResource(R.string.home_mode, modeSummary(prefs)),
     )
-    identityFooterLine(identity)?.let { lines += it }
     Row(
         modifier
             .fillMaxWidth()
@@ -294,7 +292,6 @@ private fun HomeFooter(
 internal fun modeSummary(prefs: WirelessPreferences): String {
     if (prefs.wiredOnly) return stringResource(R.string.home_mode_wired_only)
     val parts = mutableListOf(stringResource(R.string.home_mode_both))
-    if (prefs.autoReconnect) parts += stringResource(R.string.home_mode_auto)
     if (prefs.connectOnBluetooth) parts += stringResource(R.string.home_mode_connect_on_bt)
     return parts.joinToString(" · ")
 }

@@ -37,6 +37,9 @@ enum class WirelessStep {
     BLUETOOTH_HANDSHAKE,
     WAITING_AUTH,
 
+    /** 车机主动回连：手机暂时没同意，多半在手机上弹了确认框（例如手机开着热点），等用户在手机上点。 */
+    CONFIRM_ON_PHONE,
+
     /** 首次配对：口令是二维码里带的连接码，手机自动带上。 */
     AUTH_PAIRING,
 
@@ -119,8 +122,8 @@ sealed class WirelessNotice {
 
     data class StartFailed(val reason: String) : WirelessNotice()
 
-    /** 上一次无线连接结束的原因。 */
-    data class Ended(val cause: WirelessEndCause) : WirelessNotice()
+    /** 上一次无线连接结束的原因；[direct]：那次手机加入的是 WiFi 直连组（WiFi 那几步失败时说法不同）。 */
+    data class Ended(val cause: WirelessEndCause, val direct: Boolean = false) : WirelessNotice()
 }
 
 /** 状态归并的输入。 */
@@ -133,6 +136,8 @@ sealed class WirelessSignal {
         val attempt: Int,
         val addressMismatch: Boolean = false,
         val autoReconnect: Boolean = false,
+        /** 这次手机加入的是车机建的 WiFi 直连组，不是热点（设置里「无线方式」选了直连）。 */
+        val direct: Boolean = false,
     ) : WirelessSignal()
 
     /** 开始不了（条件不满足），回到空闲。 */
@@ -189,6 +194,8 @@ data class WirelessUiState(
     val autoHold: AutoHold? = null,
     /** 这次连接里手机经蓝牙连上过。 */
     val phoneConnected: Boolean = false,
+    /** 这次连接手机加入的是车机建的 WiFi 直连组（不是热点）：WiFi 那几步的说法跟着变。只在连接进行中有意义。 */
+    val direct: Boolean = false,
 ) {
     /** 回控已就绪且手机接受触摸。 */
     val inputReady: Boolean get() = projection.inputReady
@@ -203,7 +210,7 @@ data class WirelessUiState(
     override fun toString(): String =
         "WirelessUiState(phase=$phase, step=$step, attempt=$attempt, active=$active, notice=$notice, " +
             "二维码=${if (qrCode != null) "有" else "无"}, 连接码=${if (pinCode != null) "有" else "无"}, 投屏=${projection.phase}, " +
-            "自动回连=$autoReconnect, 广播=$beacon, 不等的原因=$autoHold)"
+            "自动回连=$autoReconnect, 直连=$direct, 广播=$beacon, 不等的原因=$autoHold)"
 }
 
 /** 状态归并：纯函数。 */
@@ -222,6 +229,7 @@ object WirelessReducer {
             addressMismatch = signal.addressMismatch,
             projection = ConnectionReducer.reduce(ConnectionUiState(), ConnectionSignal.AttemptStarted(signal.attempt)),
             autoReconnect = signal.autoReconnect,
+            direct = signal.direct,
             // 自动回到等待时留着上一次的结束原因，看得出刚才为什么断了。
             notice = if (signal.autoReconnect) state.notice else null,
         )
@@ -247,7 +255,7 @@ object WirelessReducer {
         }
 
         is WirelessSignal.AttemptFinished -> WirelessUiState(
-            notice = if (signal.cause is WirelessEndCause.UserStop) null else WirelessNotice.Ended(signal.cause),
+            notice = if (signal.cause is WirelessEndCause.UserStop) null else WirelessNotice.Ended(signal.cause, state.direct),
             attempt = state.attempt,
             autoHold = state.autoHold,
         )
@@ -269,6 +277,7 @@ object WirelessReducer {
             is WirelessEvent.PhoneBluetoothConnected ->
                 connecting(state, WirelessStep.BLUETOOTH_HANDSHAKE).copy(qrCode = null, phoneConnected = true)
             is WirelessEvent.BluetoothHandshakeCompleted -> connecting(state, WirelessStep.WAITING_AUTH)
+            is WirelessEvent.ReconnectAwaitingPhone -> connecting(state, WirelessStep.CONFIRM_ON_PHONE)
             // 热点开好了才会回协商应答：协商完直接发网络信息。
             is WirelessEvent.DataChannelNegotiated -> connecting(state, WirelessStep.SENDING_NETWORK)
             // 热点在握手、认证途中或协商之前开好，不打断当前这一步。

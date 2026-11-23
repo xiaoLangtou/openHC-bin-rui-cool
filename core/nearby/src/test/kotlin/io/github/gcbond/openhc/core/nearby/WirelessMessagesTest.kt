@@ -32,7 +32,9 @@ class WirelessMessagesTest {
         assertEquals(273L, cap.channelBitmap)
         assertEquals(setOf(36, 149, 165), cap.channels5g)
         assertEquals(5180, cap.connectedFrequencyMhz)
-        assertEquals(mapOf(12 to 300, 9 to 0, 17 to 1), cap.otherFields)
+        assertEquals(mapOf(12 to 300L, 9 to 0L, 17 to 1L), cap.otherFields)
+        assertNull(cap.unparsedFrom)
+        assertNull(cap.incompleteRaw)
         // 没出现的 tag 为 null。
         val empty = DataChannelMessages.parseCapability(ByteArray(0))
         assertNull(empty.supports5g)
@@ -67,9 +69,36 @@ class WirelessMessagesTest {
         assertEquals(3, DataChannelMessages.parseRequest(withExtra).dataChannel)
         assertFailsWith<MalformedMessageException> { DataChannelMessages.parseRequest(hex("83")) }
         assertFailsWith<MalformedMessageException> { DataChannelMessages.parseRequest(hex("838385")) }
-        assertFailsWith<MalformedMessageException> {
-            DataChannelMessages.parseRequest(DataChannelMessages.requestValue(3, hex("85000000000000000000")))
-        }
+        // 能力串内容解不了不算整条请求错：只用解开的部分（这里一个字段都没解开）。
+        val unreadable = DataChannelMessages.parseRequest(DataChannelMessages.requestValue(3, hex("85000000000000000000")))
+        assertEquals(0, unreadable.capability.unparsedFrom)
+        assertNull(unreadable.capability.channelBitmap)
+    }
+
+    @Test
+    fun unknownFieldsLongerThanEaKeepTheRestAligned() {
+        // 不认识的 tag 20 带一个 5 字节的值（EA 最多 4 字节），后面的字段照样解得开。
+        val cap = DataChannelMessages.parseCapability(
+            ByteWriter().ea(3).ea(1).ea(20).bytes(hex("0102030481")).ea(4).ea(1).ea(7).ea(2437).toByteArray(),
+        )
+        assertEquals(true, cap.supports2g)
+        assertEquals(true, cap.supports5g)
+        assertEquals(2437, cap.connectedFrequencyMhz)
+        assertEquals(setOf(20), cap.otherFields.keys)
+        assertNull(cap.unparsedFrom)
+    }
+
+    @Test
+    fun unreadableTailKeepsTheFieldsBeforeIt() {
+        // 第 4 字节起是一段认不出的格式（连续 9 字节没有终止位）：前面的 2.4G、5G 照用，记下停在哪、留原文。
+        val bytes = ByteWriter().ea(3).ea(1).ea(4).ea(1).ea(21).bytes(ByteArray(9) { 0x11 }).toByteArray()
+        val cap = DataChannelMessages.parseCapability(bytes)
+        assertEquals(true, cap.supports2g)
+        assertEquals(true, cap.supports5g)
+        assertEquals(4, cap.unparsedFrom)
+        assertContentEquals(bytes, cap.incompleteRaw)
+        assertTrue(cap.canUse(2437))
+        assertTrue("第 4 字节起解不了，原文 ${bytes.toHex()}" in cap.toString())
     }
 
     @Test

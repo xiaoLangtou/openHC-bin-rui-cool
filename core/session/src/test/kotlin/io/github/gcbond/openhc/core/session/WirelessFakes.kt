@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.core.session
 
+import io.github.gcbond.openhc.core.nearby.WifiMode
 import io.github.gcbond.openhc.core.auth.InMemoryTrustStore
 import io.github.gcbond.openhc.core.nearby.DataChannelRefusal
 import io.github.gcbond.openhc.core.nearby.NearbySession
@@ -27,6 +28,10 @@ internal object WirelessSynthetic {
     /** 平台开好的热点：网络名、BSSID、口令都是合成值。 */
     fun hotspot(frequencyMhz: Int = 5745, localIp: String = HOTSPOT_IP) =
         WifiNetwork(localIp, "OpenHC-5678", "0A:1B:2C:3D:4E:5F", HOTSPOT_PASSPHRASE, frequencyMhz)
+
+    /** 车机建的直连组（组主地址 192.168.49.1）。 */
+    fun direct(frequencyMhz: Int = 5745) =
+        WifiNetwork("192.168.49.1", "DIRECT-ab-OpenHC", "0A:1B:2C:3D:4E:5F", HOTSPOT_PASSPHRASE, frequencyMhz, WifiMode.DIRECT)
 
     /** 手机能力：组主、组成员都行，2.4G、5G 都支持，9 个 5G 信道全有，当前没连 WiFi。 */
     fun capability(channels: Collection<Int> = WifiChannels.CHANNELS_5G) = WifiCapability(
@@ -61,6 +66,9 @@ internal object WirelessSynthetic {
  * `nego` 数据通道协商（能力见 [capability]），`nego-ble` 要的不是 WiFi，`confirm` 确认协商（频率照抄车机给的），
  * `refuse` 手机忙，`mac` 报 MAC，`busy` 回忙。
  */
+/** 假手机在主动回连应答里带的服务 UUID（和默认的 FE36 不同，便于核对车机用的是哪个）。 */
+internal val RECONNECT_UUID: java.util.UUID = java.util.UUID.fromString("0000fe36-0000-1000-8000-00805f9b0001")
+
 internal class FakeBluetoothNearby(private val calls: MutableList<String>) : BluetoothNearbyLayer {
     override var nextTickAtMillis: Long? = null
     var capability: WifiCapability = WirelessSynthetic.capability()
@@ -79,6 +87,11 @@ internal class FakeBluetoothNearby(private val calls: MutableList<String>) : Blu
             "refuse" -> listOf(BluetoothOutput.DataChannelResult(false, 2, null))
             "mac" -> listOf(BluetoothOutput.PeerMac(WirelessSynthetic.PHONE_MAC))
             "busy" -> listOf(BluetoothOutput.PeerBusy)
+            // 车机主动回连：握手完成（手机不请求开子通道），手机对车机请求的应答。
+            "hs" -> listOf(BluetoothOutput.HandshakeCompleted(true))
+            "cmd4-ok" -> listOf(BluetoothOutput.AuthChannelReady(8, null))
+            "cmd4-uuid" -> listOf(BluetoothOutput.AuthChannelReady(9, RECONNECT_UUID))
+            "cmd4-no" -> listOf(BluetoothOutput.AuthChannelRejected(1))
             else -> emptyList()
         }
     }
@@ -97,6 +110,11 @@ internal class FakeBluetoothNearby(private val calls: MutableList<String>) : Blu
     }
 
     override fun onTick(nowMillis: Long) = onTickHandler(nowMillis)
+
+    override fun requestAuthChannel(tag: ByteArray): List<BluetoothOutput> {
+        calls += "bt.requestAuthChannel(${tag.toString(Charsets.UTF_8)})"
+        return listOf(BluetoothOutput.Send("authreq".bytes()))
+    }
 
     override fun rfcommUuid(request: BluetoothOutput.SocketRequest): UUID = uuid
 
@@ -154,8 +172,8 @@ internal class FakeWirelessLayers : WirelessLayers {
         }
     }
 
-    override fun bluetoothNearby(): BluetoothNearbyLayer {
-        calls += "bt.create"
+    override fun bluetoothNearby(initiator: Boolean): BluetoothNearbyLayer {
+        calls += if (initiator) "bt.create(发起方)" else "bt.create"
         return bluetooth
     }
 

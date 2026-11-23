@@ -5,13 +5,17 @@
     <string name="settings_boot">开机自动打开 OpenHC</string>
     <string name="settings_boot_hint">车机开机、或熄火后再点火时，自动打开 OpenHC。能不能打开还取决于车机系统的启动设置，打开后按下面的提示设置。</string>
     <string name="settings_boot_wired">打开后进入等插线，跟你手动打开再点「开始」一样。</string>
-    <string name="settings_boot_wireless_both">开着无线自动回连和「插线时不再弹窗」：开机后先等已配对的手机无线回连；插上手机（或开机时已经插着）就改走有线。</string>
-    <string name="settings_boot_wireless_blocked">开着无线自动回连，但没开「插线时不再弹窗」：开机后进入等插线，这期间不等手机无线回连。两样都要的话，请打开上面的「插线时不再弹窗」。</string>
+    <string name="settings_boot_wireless_both">开着「插线时不再弹窗」：开机后打开 OpenHC，自动连上次用无线连过的手机（手机蓝牙要连着车机）；插上手机（或开机时已经插着）就改走有线。</string>
+    <string name="settings_boot_wireless_blocked">没开「插线时不再弹窗」：开机后进入等插线；用无线连过的手机蓝牙连上车机时，改走无线自动连接。</string>
     <string name="settings_boot_overlay_granted">悬浮窗权限：已允许</string>
-    <string name="settings_boot_overlay_missing">还差一步：悬浮窗权限。安卓 10 起，开机时要有它才能把 OpenHC 打开。点这里去开；车机上找不到时，在系统设置的「应用」里找到 OpenHC，打开「悬浮窗」或「显示在其他应用上层」。</string>
+    <string name="settings_boot_overlay_missing">还差一步：悬浮窗权限。安卓 10 起，开机自动打开、自动连接手机都要有它才能把 OpenHC 打开（自动连接时开热点也要界面在前台）。点这里去开；车机上找不到时，在系统设置的「应用」里找到 OpenHC，打开「悬浮窗」或「显示在其他应用上层」。</string>
     <string name="settings_boot_overlay_not_needed">这台车机是安卓 %1$s，不需要悬浮窗权限。</string>
     <string name="settings_boot_autostart_note">有的车机系统默认禁止应用开机自启动，要在系统的「自启动管理」「后台启动」之类的设置里允许 OpenHC；有的系统每次更新应用都会重新禁止，更新后要再允许一次。</string>
     <string name="settings_boot_open_app_settings">打开系统里 OpenHC 的设置页</string>
+    <string name="settings_boot_autostart_title">系统自启动管理</string>
+    <string name="settings_boot_byd_title">比亚迪后台启动</string>
+    <string name="settings_boot_byd_note">比亚迪车机：要在「选择禁止后台启动项」里把 OpenHC 的开关关掉，「开机自动打开」和「自动连接手机」才能用。每次更新安装 OpenHC，比亚迪都会把这个开关重新打开，更新后要再关一次。</string>
+    <string name="settings_boot_open_byd">打开比亚迪的后台启动设置</string>
     <string name="settings_boot_last">上次开机：%1$s（%2$s）：%3$s</string>
     <string name="settings_boot_fresh">系统刚启动</string>
     <string name="settings_boot_resent">系统已运行 %1$d 分钟，多半是熄火后再点火</string>
@@ -24,17 +28,17 @@
     <string name="settings_boot_not_seen">这次安装或更新以后还没收到过开机广播。重新开过车机还是这样的话，多半是被系统的自启动管理拦了。</string>
     <string name="settings_boot_no_settings_page">这台车机上没有对应的系统设置页，请在车机的系统设置里手动找。</string>
     <string name="settings_boot_outcome_silent_wired">没打开界面，在后台等插线</string>
-    <string name="settings_boot_outcome_silent_wireless">没打开界面，在后台等已配对的手机回连</string>
-    <string name="settings_boot_outcome_silent_standby">没打开界面，在后台待命：蓝牙打开、或手机蓝牙连上以后再开始等</string>
+    <string name="settings_boot_outcome_silent_wireless">没打开界面，无线在后台等手机</string>
+    <string name="settings_boot_outcome_silent_standby">没打开界面，在后台待命：用无线连过的手机蓝牙连上车机时再打开、自动连接</string>
 
     <!-- 设置页：开机静默连接 -->
     <string name="settings_boot_silent">开机静默连接（默认关）</string>
-    <string name="settings_boot_silent_hint">开启后上面的开机启动不再显示首页；在后台等手机（热点照旧在手机认证通过后才开），连上才显示投屏，等待时有常驻通知。</string>
+    <string name="settings_boot_silent_hint">开启后上面的开机启动不再显示首页：有线在后台等插线，无线在后台待命，连上才显示投屏；等插线时有常驻通知。</string>
     <string name="settings_boot_silent_needs_boot">要先打开上面的「开机自动打开 OpenHC」。</string>
     <string name="settings_boot_silent_needs_vpn">有线还没同意过 VPN 授权：在首页点一次「开始」并同意，之后开机才能在后台等插线；在那之前开机照常打开首页。</string>
     <string name="settings_boot_silent_needs_notifications">没有通知权限：后台等待时看不到常驻通知。点这里去开。</string>
     <string name="settings_boot_silent_wired">开机后不打开首页，在后台等插线；手机连上开始投屏时才把投屏画面带到前台（首次配对要输连接码时也会露出来）。</string>
-    <string name="settings_boot_silent_wireless_both">开机后不打开首页，在后台等已配对的手机无线回连；插上手机（或开机时已经插着）就改走有线。手机连上开始投屏时才把投屏画面带到前台。</string>
-    <string name="settings_boot_silent_wireless_blocked">开机后不打开首页，在后台等插线，这期间不等手机无线回连。两样都要的话，请打开上面的「插线时不再弹窗」。</string>
+    <string name="settings_boot_silent_wireless_both">开机后不打开首页，在后台待命：用无线连过的手机蓝牙连上车机时，打开 OpenHC 自动连接；插上手机（或开机时已经插着）就改走有线。</string>
+    <string name="settings_boot_silent_wireless_blocked">开机后不打开首页，在后台等插线；用无线连过的手机蓝牙连上车机时，打开 OpenHC 改走无线自动连接。</string>
     <string name="settings_boot_overlay_missing_silent">还差一步：悬浮窗权限。安卓 10 起，开机静默连接要有它，手机连上时才能把投屏画面带到前台。点这里去开；车机上找不到时，在系统设置的「应用」里找到 OpenHC，打开「悬浮窗」或「显示在其他应用上层」。</string>
 </resources>

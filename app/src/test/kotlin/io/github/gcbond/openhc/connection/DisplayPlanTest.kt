@@ -20,6 +20,24 @@ class DisplayPlanTest {
     }
 
     @Test
+    fun uiScaleShrinksOnlyTheDeclaredDpi() {
+        // 系统 240 dpi 的屏：85% 声明 204，画布、帧率不变。
+        val smaller = DisplayPlan.resolve(screen, ResolutionChoice.Auto, fpsSetting = 0, uiScalePercent = 85)
+        assertEquals(1920 to 1080, smaller.width to smaller.height)
+        assertEquals(55, smaller.fps)
+        assertEquals(204, smaller.dpi)
+        assertEquals(204 / 160.0, smaller.density)
+        assertEquals(156, DisplayPlan.resolve(screen, ResolutionChoice.Auto, 0, uiScalePercent = 65).dpi)
+        // 和画布缩放叠加：1280x720 画布放大 1.5 倍显示，DPI 先除以 1.5 再乘 75%。
+        assertEquals(120, DisplayPlan.resolve(screen, ResolutionChoice.Fixed(1280, 720), 0, uiScalePercent = 75).dpi)
+        // 默认 100% 和原来一样。
+        assertEquals(240, DisplayPlan.resolve(screen, ResolutionChoice.Auto, 0).dpi)
+        assertEquals(DisplayPlan.DEFAULT_UI_SCALE, DisplayPlan.UI_SCALE_CHOICES.first())
+        assertFailsWith<IllegalArgumentException> { DisplayPlan.resolve(screen, ResolutionChoice.Auto, 0, uiScalePercent = 0) }
+        assertFailsWith<IllegalArgumentException> { DisplayPlan.resolve(screen, ResolutionChoice.Auto, 0, uiScalePercent = 120) }
+    }
+
+    @Test
     fun gopFollowsTheDeclaredFps() {
         assertEquals(60, DisplayPlan.resolve(screen, ResolutionChoice.Fixed(1280, 720), fpsSetting = 30).gop)
         assertEquals(120, DisplayPlan.resolve(screen, ResolutionChoice.Auto, fpsSetting = 60).gop)

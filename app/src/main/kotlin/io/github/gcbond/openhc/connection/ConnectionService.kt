@@ -8,7 +8,6 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -17,6 +16,7 @@ import androidx.core.content.ContextCompat
 import io.github.gcbond.openhc.AppIntents
 import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.R
+import io.github.gcbond.openhc.platform.log.Log
 
 /**
  * 有线投屏的前台服务：用户要求连接期间（等插线、连接、投屏、等拔线重插）留在前台，切到后台也不断连。

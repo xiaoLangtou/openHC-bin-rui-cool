@@ -3,6 +3,7 @@ package io.github.gcbond.openhc.core.nearby
 import io.github.gcbond.openhc.core.common.ByteReader
 import io.github.gcbond.openhc.core.common.ByteWriter
 import io.github.gcbond.openhc.core.common.MalformedMessageException
+import io.github.gcbond.openhc.core.common.toHex
 
 /**
  * 手机在数据通道协商请求（资源层命令 1）里报的 WiFi 能力。能力串是一串 `EA(tag) EA(值)`，没有长度字段：
@@ -17,8 +18,12 @@ import io.github.gcbond.openhc.core.common.MalformedMessageException
  * | 6 | 双频同时工作 | 1 = 支持 |
  * | 7 | 发送方当前连着的 WiFi 频率（MHz） | 0 = 没连 |
  *
- * 新版手机还会带别的 tag（含义未知），值同样是一个 EA，原样放在 [otherFields]。没出现的 tag 对应字段为 null；
+ * 新版手机还会带别的 tag（含义未知），原样放在 [otherFields]。没出现的 tag 对应字段为 null；
  * 同一个 tag 出现多次时以最后一次为准。
+ *
+ * 值都按 tag 5 那种写法读（7 位一组、末字节最高位为 1，最多 9 字节）：它包含 EA，现有手机报的值读出来不变，
+ * 但别的 tag 的值超过 4 字节时也读得了，后面的字段不会错位。从某个字节起还是解不了时（格式不认识），
+ * 只用前面解出来的字段，[unparsedFrom] 记下从哪里停的，[incompleteRaw] 留着整串原文写诊断日志。
  */
 class WifiCapability(
     val canBeGroupOwner: Boolean? = null,
@@ -30,10 +35,18 @@ class WifiCapability(
     val dualBand: Boolean? = null,
     /** 手机当前连着的 WiFi 频率（MHz），0 表示没连；没有 tag 7 时为 null。 */
     val connectedFrequencyMhz: Int? = null,
-    otherFields: Map<Int, Int> = emptyMap(),
+    otherFields: Map<Int, Long> = emptyMap(),
+    /** 能力串从第几个字节起解不了（后面的忽略）；整串都解开了为 null。 */
+    val unparsedFrom: Int? = null,
+    incompleteRaw: ByteArray? = null,
 ) {
     /** 不认识的 tag 和它的值。 */
-    val otherFields: Map<Int, Int> = LinkedHashMap(otherFields)
+    val otherFields: Map<Int, Long> = LinkedHashMap(otherFields)
+
+    private val raw = incompleteRaw?.copyOf()
+
+    /** 没解完整时的整串能力原文（写诊断日志用：能力串里只有能力和频率，没有地址）；解完整时为 null。 */
+    val incompleteRaw: ByteArray? get() = raw?.copyOf()
 
     /** 位图里已知含义的 5 GHz 信道；没有 tag 5 时为 null。 */
     val channels5g: Set<Int>? get() = channelBitmap?.let { WifiChannels.channelsOf(it) }
@@ -51,9 +64,12 @@ class WifiCapability(
         else -> false
     }
 
-    override fun toString() =
-        "WifiCapability(组主=$canBeGroupOwner, 组成员=$canBeGroupClient, 2.4G=$supports2g, 5G=$supports5g, " +
-            "5G 信道=${channels5g}, 双频=$dualBand, 当前频率=$connectedFrequencyMhz, 其他 tag=${otherFields.keys})"
+    override fun toString(): String {
+        val head = "WifiCapability(组主=$canBeGroupOwner, 组成员=$canBeGroupClient, 2.4G=$supports2g, 5G=$supports5g, " +
+            "5G 信道=${channels5g}, 双频=$dualBand, 当前频率=$connectedFrequencyMhz, 其他 tag=$otherFields"
+        val at = unparsedFrom ?: return "$head)"
+        return "$head，第 $at 字节起解不了，原文 ${raw?.toHex()})"
+    }
 }
 
 /** 拒绝数据通道协商时回给手机的结果值。 */
@@ -102,7 +118,7 @@ internal object DataChannelMessages {
 
     class Result(val dataChannel: Int, val result: Int, val role: Int?, val frequencyMhz: Int?)
 
-    /** 解析命令 1 的值。必须带 TLV 3（能力串）；其他 TLV 忽略。 */
+    /** 解析命令 1 的值。必须带 TLV 3（能力串）；其他 TLV 忽略。能力串内容解不完整不算错（见 [parseCapability]）。 */
     fun parseRequest(value: ByteArray): Request {
         val r = ByteReader(value)
         val dataChannel = r.ea()
@@ -111,15 +127,25 @@ internal object DataChannelMessages {
         return Request(dataChannel, parseCapability(detail.valueView()))
     }
 
+    /** 解析能力串（格式见 [WifiCapability]）。不因格式抛异常：从解不了的字节起忽略，只用前面解出来的字段。 */
     fun parseCapability(bytes: ByteArray): WifiCapability {
         val r = ByteReader(bytes)
-        val values = LinkedHashMap<Int, Int>()
+        val values = LinkedHashMap<Int, Long>()
         var bitmap: Long? = null
+        var stoppedAt: Int? = null
         while (r.remaining > 0) {
-            val tag = r.ea()
-            if (tag == TAG_CHANNEL_BITMAP) bitmap = readBitmap(r) else values[tag] = r.ea()
+            val start = r.position
+            try {
+                val tag = r.ea()
+                val value = readBitmap(r)
+                if (tag == TAG_CHANNEL_BITMAP) bitmap = value else values[tag] = value
+            } catch (e: MalformedMessageException) {
+                stoppedAt = start
+                break
+            }
         }
-        fun flag(tag: Int): Boolean? = values.remove(tag)?.let { it != 0 }
+        fun flag(tag: Int): Boolean? = values.remove(tag)?.let { it != 0L }
+        val frequency = values.remove(TAG_CONNECTED_FREQUENCY)
         return WifiCapability(
             canBeGroupOwner = flag(TAG_GROUP_OWNER),
             canBeGroupClient = flag(TAG_GROUP_CLIENT),
@@ -127,8 +153,10 @@ internal object DataChannelMessages {
             supports5g = flag(TAG_5G),
             channelBitmap = bitmap,
             dualBand = flag(TAG_DUAL_BAND),
-            connectedFrequencyMhz = values.remove(TAG_CONNECTED_FREQUENCY),
+            connectedFrequencyMhz = frequency?.takeIf { it <= Int.MAX_VALUE }?.toInt(),
             otherFields = values,
+            unparsedFrom = stoppedAt,
+            incompleteRaw = if (stoppedAt != null) bytes else null,
         )
     }
 

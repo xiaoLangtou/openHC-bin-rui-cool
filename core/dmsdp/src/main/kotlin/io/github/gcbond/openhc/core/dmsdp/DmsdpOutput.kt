@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.core.dmsdp
 
+import io.github.gcbond.openhc.core.common.toHex
 import kotlinx.serialization.json.JsonObject
 
 /** DMSDP 层涉及的 TCP 连接。UDP 保活单独走 [DmsdpSession.onDatagram]。 */
@@ -127,6 +128,28 @@ sealed class DmsdpEvent : DmsdpOutput {
      */
     class UnhandledControlMessage(val message: DmsdpMessage) : DmsdpEvent() {
         override fun toString() = "UnhandledControlMessage(${message.startLine})"
+    }
+
+    /**
+     * 加密控制连接上认不出的载荷，已跳过：既不是 `$` 设备记录，也不像文字消息。
+     * 实测（2026-11-22 Mate 70 无线）：手机的声音数据连接还没连上时，会先经控制连接送声音
+     * （手机日志「send binary data … cmd=3」），连上数据端口后就改走数据连接，前后只有一两个声音包（每包约 21 毫秒），
+     * 跳过对听感没影响。看到的格式（一次连接里 3 段，结构是推测）：
+     * `'#'(0x23) ‖ module(BE32，等于声音数据会话号) ‖ type(BE32，0xFEDCBA03) ‖ 1 字节（3 段依次 1、2、3，推测是开头/中间/结尾）
+     * ‖ 序号(BE32) ‖ 分片号(BE16，从 0 起) ‖ 分片长度(BE16) ‖ 数据`；3 段拼起来 4110 字节，开头 14 字节是包头，其后 4096 字节 PCM。
+     * [count] 是本连接里第几个，[size] 是载荷字节数，[head] 是开头最多 [HEAD_BYTES] 字节（十六进制写进日志）。
+     * 只交出前几个和之后每第 100 个。
+     */
+    class UnrecognizedControlPayload(val count: Int, val size: Int, head: ByteArray) : DmsdpEvent() {
+        private val headBytes = head.copyOf()
+
+        val head: ByteArray get() = headBytes.copyOf()
+
+        override fun toString() = "UnrecognizedControlPayload(第 $count 个，$size 字节，开头 ${headBytes.toHex()})"
+
+        companion object {
+            const val HEAD_BYTES = 48
+        }
     }
 
     // ---------- 保活 ----------

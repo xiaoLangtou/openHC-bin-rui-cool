@@ -151,4 +151,22 @@ sealed class NearbyEvent : NearbyAction {
     class InputDiscarded internal constructor(val reason: String, val byteCount: Int) : NearbyEvent() {
         override fun toString(): String = "InputDiscarded($reason，丢弃 $byteCount 字节)"
     }
+
+    /**
+     * 车机主动回连（[NearbySession.requestAuthChannel]）：手机同意为认证开子通道，回了它新开的 RFCOMM 通道号（[port]）。
+     * 调用方据此连手机那个通道，手机在上面先发认证握手。[uuid] 是手机在应答里带的服务 UUID（没带时为 null，默认 FE36），
+     * 手机同时把这个通道按它登记了 SDP，拿不到按通道号直连的接口时可以按它查。
+     */
+    class AuthChannelReady internal constructor(val port: Int, uuid: ByteArray?) : NearbyEvent() {
+        private val uuidBytes = uuid?.copyOf()
+
+        val uuid: ByteArray? get() = uuidBytes?.copyOf()
+
+        override fun toString(): String = "AuthChannelReady(通道号=$port)"
+    }
+
+    /** 主动回连：手机拒绝为认证开子通道，[status] 是它回的状态码（非 0）。 */
+    class AuthChannelRejected internal constructor(val status: Int) : NearbyEvent() {
+        override fun toString(): String = "AuthChannelRejected(状态=$status)"
+    }
 }

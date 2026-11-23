@@ -140,7 +140,7 @@ internal class FakeNearby(private val calls: MutableList<String>) : NearbyLayer 
     }
 }
 
-/** 假的认证：命令 `hello` 回握手（首次配对、连接码 123456），`done` 认证成功（密钥 00..0f）。 */
+/** 假的认证：命令 `hello` 回握手（首次配对、连接码 123456），`done` 认证成功（密钥 00..0f）；`-trusted` 结尾的是免码回连。 */
 internal class FakeAuth(private val calls: MutableList<String>) : AuthLayer {
     var onFeed: (String) -> List<HiCarAuthAction> = { text ->
         when (text) {
@@ -151,6 +151,15 @@ internal class FakeAuth(private val calls: MutableList<String>) : AuthLayer {
             "done" -> listOf(
                 HiCarAuthAction.Send("done-reply".bytes()),
                 HiCarAuthAction.Succeeded(Synthetic.KEY.copyOf(), "peer", AuthMode.PIN_PAIRING),
+            )
+            // 再次连接（免码）：握手不带连接码。
+            "hello-trusted" -> listOf(
+                HiCarAuthAction.Send("hello-reply".bytes()),
+                HiCarAuthAction.HandshakeAnswered("peer", AuthMode.TRUSTED_RECONNECT, null),
+            )
+            "done-trusted" -> listOf(
+                HiCarAuthAction.Send("done-reply".bytes()),
+                HiCarAuthAction.Succeeded(Synthetic.KEY.copyOf(), "peer", AuthMode.TRUSTED_RECONNECT),
             )
             else -> emptyList()
         }

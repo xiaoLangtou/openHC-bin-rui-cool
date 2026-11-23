@@ -28,6 +28,7 @@
     <string name="wireless_hint_waiting_auth">握手完成，等待手机发起认证…</string>
     <string name="wireless_hint_auth_pairing">第一次连接这台车机，正在配对…</string>
     <string name="wireless_hint_auth_trusted">正在认证（免码回连）…</string>
+    <string name="wireless_hint_confirm_on_phone">手机上弹出了确认框，请在手机上点「连接」。（手机开着热点时会这样问一次）</string>
     <string name="wireless_hint_wifi_handshake">手机已经从 WiFi 连上，正在握手…</string>
     <string name="wireless_hint_device_session">正在建立设备会话…</string>
     <string name="wireless_hint_waiting_projection">设备会话已建立，等待手机开始投屏…</string>
@@ -57,6 +58,8 @@
     <string name="wireless_end_step_bluetooth">蓝牙连接失败（%1$s）</string>
     <string name="wireless_end_step_auth">认证失败（%1$s）</string>
     <string name="wireless_end_step_negotiation">和手机商量 WiFi 连接失败（%1$s）</string>
+    <string name="wireless_end_reconnect">自动连接手机没成（%1$s）。可以点「开始无线连接」再试。</string>
+    <string name="wireless_end_reconnect_pairing">这台手机不认这台车机了，请点「开始无线连接」重新扫码配对。</string>
     <string name="wireless_end_internal">内部错误（%1$s）</string>
 
     <!-- 通知 -->
