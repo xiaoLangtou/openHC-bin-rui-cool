@@ -111,13 +111,21 @@ class AudioRoutingTest {
     fun pcmCheckNoDataSessionNeedsARequestNoTriggerAndTheWindow() {
         val check = PcmCheck(declaredPcm = true)
         assertNull(check.onClose(100_000), "手机没想出声：不判")
-        check.onFocusRequest(1_000)
-        check.onFocusRequest(9_000)
+        check.onFocusRequest(1, 1_000)
+        check.onFocusRequest(1, 9_000)
         assertNull(check.onClose(1_000 + PcmCheck.WINDOW_MILLIS - 1), "从第一次请求算，不到窗口不判")
         assertEquals(PcmVerdict.NO_DATA_SESSION, check.onClose(1_000 + PcmCheck.WINDOW_MILLIS))
 
+        // 连上时的短暂焦点（提示音）不算想出声；之后的长期焦点从它自己的时间算窗口。
+        val prompt = PcmCheck(declaredPcm = true)
+        for (focusType in listOf(2, 3, 4, null)) prompt.onFocusRequest(focusType, 1_000)
+        assertNull(prompt.onClose(100_000), "只有短暂焦点：不判")
+        prompt.onFocusRequest(1, 95_000)
+        assertNull(prompt.onClose(95_000 + PcmCheck.WINDOW_MILLIS - 1))
+        assertEquals(PcmVerdict.NO_DATA_SESSION, prompt.onClose(95_000 + PcmCheck.WINDOW_MILLIS))
+
         val triggered = PcmCheck(declaredPcm = true)
-        triggered.onFocusRequest(1_000)
+        triggered.onFocusRequest(1, 1_000)
         triggered.onTrigger()
         assertNull(triggered.onClose(60_000), "开过数据会话就不算")
     }
@@ -131,7 +139,7 @@ class AudioRoutingTest {
         assertNull(check.onFraming(AudioCodec.PCM, playable = false))
 
         val aac = PcmCheck(declaredPcm = false)
-        aac.onFocusRequest(0)
+        aac.onFocusRequest(1, 0)
         assertNull(aac.onFraming(AudioCodec.PCM, playable = false))
         repeat(100) { assertNull(aac.onPacket(AudioCodec.PCM, playable = true)) }
         assertNull(aac.onClose(60_000))

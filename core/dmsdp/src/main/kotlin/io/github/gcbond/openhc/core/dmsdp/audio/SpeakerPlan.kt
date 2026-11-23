@@ -46,7 +46,7 @@ enum class PcmVerdict(val label: String, val failure: Boolean) {
     /** 收到够多的、能放的 PCM 包。 */
     WORKS("PCM 能正常出声", false),
 
-    /** 手机发过焦点请求（想出声），但整个连接里一次数据会话都没开。 */
+    /** 手机要过长期焦点（想放歌），但整个连接里一次数据会话都没开。 */
     NO_DATA_SESSION("手机想出声，却始终没有开数据会话", true),
 
     /** 手机发来的 PCM 载荷不像声音（多半两边对编码的理解不一致），被静音不放。 */
@@ -58,9 +58,10 @@ enum class PcmVerdict(val label: String, val failure: Boolean) {
  *
  * - [PcmVerdict.WORKS]：收到 [WORKS_PACKETS] 个能放的 PCM 包（约 0.27 秒的声音）。
  * - [PcmVerdict.UNPLAYABLE]：识别时判定 PCM 载荷不像声音。
- * - [PcmVerdict.NO_DATA_SESSION]：连接结束时才判——手机发过焦点请求，整个连接里却没触发过一次数据会话，
- *   且从第一次请求到结束超过 [WINDOW_MILLIS]（太短的连接不下结论）。只看「始终没有」，不在中途下结论：
- *   手机先发一个短促的系统提示音、过一会儿才开数据会话放歌，不算失败。
+ * - [PcmVerdict.NO_DATA_SESSION]：连接结束时才判——手机要过长期焦点（放歌），整个连接里却没触发过一次数据会话，
+ *   且从第一次长期焦点请求到结束超过 [WINDOW_MILLIS]（太短的连接不下结论）。只看「始终没有」，不在中途下结论。
+ *   短暂焦点不算：手机连上时会要一下短暂焦点、马上放掉，不一定开数据会话；把它算进去，连上后没放歌、
+ *   超过窗口才断开的连接都会被误判成 PCM 不出声。
  */
 internal class PcmCheck(private val declaredPcm: Boolean) {
     private var firstRequestAt = -1L
@@ -69,8 +70,9 @@ internal class PcmCheck(private val declaredPcm: Boolean) {
     private var worksSent = false
     private var unplayableSent = false
 
-    fun onFocusRequest(nowMillis: Long) {
-        if (declaredPcm && firstRequestAt < 0) firstRequestAt = nowMillis
+    /** 手机要焦点；[focusType] 见 [PhoneAudioFocus.focusType]，只有长期焦点（1）算「想出声」。 */
+    fun onFocusRequest(focusType: Int?, nowMillis: Long) {
+        if (declaredPcm && focusType == LONG_TERM_FOCUS && firstRequestAt < 0) firstRequestAt = nowMillis
     }
 
     fun onTrigger() {
@@ -100,5 +102,6 @@ internal class PcmCheck(private val declaredPcm: Boolean) {
     companion object {
         const val WORKS_PACKETS = 50L
         const val WINDOW_MILLIS = 10_000L
+        private const val LONG_TERM_FOCUS = 1
     }
 }

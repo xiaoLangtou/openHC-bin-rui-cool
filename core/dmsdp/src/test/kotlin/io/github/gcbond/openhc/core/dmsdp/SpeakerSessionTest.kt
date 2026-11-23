@@ -514,15 +514,23 @@ class SpeakerSessionTest {
         assertTrue(aac.events.none { it is AudioEvent.CodecVerdict }, "声明 AAC 不判")
     }
 
-    /** 声明 PCM，手机发了焦点请求，整个连接都没开数据会话：结束时判「不出声」；太短的连接、开过数据会话的不判。 */
+    /**
+     * 声明 PCM，手机要过长期焦点，整个连接都没开数据会话：结束时判「不出声」；太短的连接、开过数据会话的不判，
+     * 只要过短暂焦点（连上时的提示音，随即放掉）的也不判。
+     */
     @Test
     fun pcmWithoutAnyDataSessionIsReportedAtClose() {
-        fun run(closeAt: Long, trigger: Boolean): List<PcmVerdict> {
+        fun run(closeAt: Long, trigger: Boolean, longTerm: Boolean = true): List<PcmVerdict> {
             val audio = AudioRecorder()
             val session = speakerSession(DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio)
             session.phoneDeviceInfo()
             session.speakerProfile()
-            session.feed(DmsdpChannel.CONTROL, focus(1, "1"), 1_000)
+            if (longTerm) {
+                session.feed(DmsdpChannel.CONTROL, focus(1, "1"), 1_000)
+            } else {
+                session.feed(DmsdpChannel.CONTROL, focus(2, "5"), 1_000)
+                session.feed(DmsdpChannel.CONTROL, focus(5, "1"), 1_050)
+            }
             if (trigger) session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 2_000)
             session.onTick(closeAt)
             session.close()
@@ -531,6 +539,7 @@ class SpeakerSessionTest {
         assertEquals(listOf(PcmVerdict.NO_DATA_SESSION), run(closeAt = 11_000, trigger = false))
         assertEquals(emptyList(), run(closeAt = 10_999, trigger = false), "不到 10 秒不下结论")
         assertEquals(emptyList(), run(closeAt = 60_000, trigger = true), "开过数据会话就不算")
+        assertEquals(emptyList(), run(closeAt = 60_000, trigger = false, longTerm = false), "只有短暂焦点不算想出声")
     }
 
     /** 声明 PCM，手机发来的载荷不像声音：判「不出声」。 */

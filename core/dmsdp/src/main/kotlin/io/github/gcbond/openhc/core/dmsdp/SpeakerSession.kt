@@ -158,7 +158,7 @@ internal class SpeakerSession(
         val message = PhoneAudioFocus.parse(type, data)
         emit(AudioEvent.PhoneFocus(message))
         router.onFocus(message)?.let { note(current?.info, it) }
-        if (message.action == PhoneAudioFocus.Action.REQUEST) check?.onFocusRequest(nowMillis)
+        if (message.action == PhoneAudioFocus.Action.REQUEST) check?.onFocusRequest(message.focusType, nowMillis)
     }
 
     /**

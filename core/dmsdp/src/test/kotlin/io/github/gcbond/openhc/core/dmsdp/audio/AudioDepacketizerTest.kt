@@ -413,6 +413,57 @@ class AudioDepacketizerTest {
         assertEquals(AudioCodec.AAC, recorder.framing?.payloadCodec, "帧长小于载荷长也算 ADTS")
     }
 
+    /**
+     * ADTS 帧前带 12 字节头（和 PCM 的头一样，分流时包尾多几个字节）：认成 AAC，只交出头后的 ADTS 帧。
+     * 帧长有奇有偶；要的是 PCM 也一样走 AAC；载荷再加一层密也认得出。
+     */
+    @Test
+    fun adtsBehindThePayloadHeaderIsAacWithTheHeaderStripped() {
+        val random = Random(13)
+        for (asked in AudioCodec.entries) for (payloadSealed in listOf(false, true)) {
+            val units = listOf(300, 317, 288, 301, 299).map { AudioSynthetic.adts(ByteArray(it).also { b -> random.nextBytes(b) }) }
+            var bytes = ByteArray(0)
+            units.forEachIndexed { i, unit ->
+                val headed = AudioSynthetic.pcmHeader(timestamp = i * 1_024L, dataLength = unit.size) + unit + byteArrayOf(1, 2, 3, 4)
+                val payload = if (payloadSealed) AudioSynthetic.seal(headed, 30 + i) else headed
+                bytes += AudioSynthetic.frame(FrameKind.LENGTH32, AudioSynthetic.rtp(i, payload))
+            }
+            val recorder = Recorder()
+            val depacketizer = depacketizer(recorder, AudioSynthetic.stream(codec = asked))
+            depacketizer.feedInPieces(bytes)
+            val label = "要 $asked，载荷加密 $payloadSealed"
+            val framing = assertNotNull(recorder.framing, label)
+            assertEquals(AudioCodec.AAC, framing.payloadCodec, label)
+            assertEquals(payloadSealed, framing.payloadEncrypted, label)
+            assertTrue(framing.playable, label)
+            assertEquals(units.size, recorder.payloads.size, label)
+            units.forEachIndexed { i, unit -> assertContentEquals(unit, recorder.payloads[i], "$label：第 $i 包只剩 ADTS 帧") }
+            assertEquals(units.size.toLong(), depacketizer.aacHeadersStripped, label)
+            assertEquals(0L, depacketizer.pcmHeadersStripped, label)
+            assertEquals(1, recorder.notes.count { "AAC 载荷前有 12 字节头" in it }, label)
+            assertTrue("AAC 载荷去掉 12 字节头" in depacketizer.conclusion, label)
+        }
+    }
+
+    @Test
+    fun payloadHeaderRules() {
+        val unit = AudioSynthetic.adts(ByteArray(250)) // 帧长 257，奇数
+        val headed = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = unit.size) + unit
+        assertEquals(unit.size, PayloadHeader.adtsLength(headed, 0, headed.size))
+        assertEquals(-1, PayloadHeader.pcmLength(headed, 0, headed.size), "PCM 的长度必须是偶数")
+        val tail = headed + ByteArray(PayloadHeader.MAX_TRAILER)
+        assertEquals(unit.size, PayloadHeader.adtsLength(tail, 0, tail.size), "包尾多出上限以内的字节")
+        val tooLong = tail + byteArrayOf(0)
+        assertEquals(-1, PayloadHeader.adtsLength(tooLong, 0, tooLong.size), "包尾多出超过上限")
+        val mismatch = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = unit.size + 1) + unit + byteArrayOf(0)
+        assertEquals(-1, PayloadHeader.adtsLength(mismatch, 0, mismatch.size), "ADTS 帧长和头里的长度不一样")
+        assertEquals(-1, PayloadHeader.adtsLength(unit, 0, unit.size), "不带头的 ADTS")
+        val pcm = AudioSynthetic.pcm(0, frames = 64)
+        val headedPcm = AudioSynthetic.pcmHeader(timestamp = 7, dataLength = pcm.size) + pcm
+        assertEquals(pcm.size, PayloadHeader.pcmLength(headedPcm, 0, headedPcm.size))
+        assertEquals(-1, PayloadHeader.adtsLength(headedPcm, 0, headedPcm.size), "头后不是 ADTS")
+    }
+
     @Test
     fun adtsHeaderCheck() {
         val unit = AudioSynthetic.adts(ByteArray(3))
