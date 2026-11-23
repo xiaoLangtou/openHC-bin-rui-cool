@@ -80,7 +80,7 @@ internal fun ConnectOnBluetoothSetting(state: WirelessSettingsState) {
     )
 }
 
-/** 无线方式（默认车机开热点）：「5 GHz 直连」是试验功能，安卓 8 起才有，更早的系统不显示这一行。 */
+/** 无线方式（默认车机开热点）：「5 GHz 直连」是试验功能；系统不支持时不显示这一行。 */
 @Composable
 internal fun WirelessModeSetting(state: WirelessSettingsState) {
     if (!WirelessPreferences.wifiDirectSupported) return

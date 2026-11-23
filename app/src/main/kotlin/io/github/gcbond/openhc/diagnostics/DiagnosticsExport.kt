@@ -129,7 +129,7 @@ internal object DiagnosticsExport {
             "只用数据线连接" to yesNo(wireless.wiredOnly),
             "无线方式" to when {
                 wireless.usesWifiDirect -> "WiFi 直连（试验）"
-                wireless.wifiDirect -> "选了 WiFi 直连，但系统低于安卓 8，实际用热点"
+                wireless.wifiDirect -> "选了 WiFi 直连，但这台车机不支持，实际用热点"
                 else -> "车机开热点"
             },
             "自动连接手机" to yesNo(wireless.connectOnBluetooth),

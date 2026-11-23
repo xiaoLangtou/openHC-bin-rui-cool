@@ -305,6 +305,7 @@ enum class HotspotMacSource(val label: String) {
     CONFIG("系统给的热点配置"),
     REPORTED("系统回报的热点信息"),
     INTERFACE("热点网卡的硬件地址"),
+    LINK_LOCAL("由热点网卡的 IPv6 链路本地地址反推"),
     PLACEHOLDER("读不到真实地址，用占位值"),
 }
 
@@ -505,13 +506,20 @@ object LocalHotspotRules {
 
     /**
      * 写进连接串的 BSSID：系统热点配置里给了就用（多数系统不给），其次系统回报的热点信息（安卓 13 起，[reportedBssid]），
-     * 再次热点网卡的硬件地址（新系统对普通应用常常给不出）；都没有用占位值 [MacText.PLACEHOLDER]。
+     * 再次热点网卡的硬件地址（新系统对普通应用常常给不出），再次由热点网卡 IPv6 链路本地地址反推的（[linkLocalMac]）；
+     * 都没有用占位值 [MacText.PLACEHOLDER]。
      * 有车主在安卓 13 车机上实测：手机按 BSSID 精确找网，占位值找不到。
      */
-    fun pickBssid(configBssid: String?, interfaceMac: ByteArray?, reportedBssid: String? = null): Pair<String, HotspotMacSource> {
+    fun pickBssid(
+        configBssid: String?,
+        interfaceMac: ByteArray?,
+        reportedBssid: String? = null,
+        linkLocalMac: String? = null,
+    ): Pair<String, HotspotMacSource> {
         MacText.normalize(configBssid)?.let { return it to HotspotMacSource.CONFIG }
         MacText.normalize(reportedBssid)?.let { return it to HotspotMacSource.REPORTED }
         MacText.of(interfaceMac)?.let { return it to HotspotMacSource.INTERFACE }
+        MacText.normalize(linkLocalMac)?.let { return it to HotspotMacSource.LINK_LOCAL }
         return MacText.PLACEHOLDER to HotspotMacSource.PLACEHOLDER
     }
 

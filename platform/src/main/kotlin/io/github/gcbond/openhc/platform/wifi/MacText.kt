@@ -30,6 +30,21 @@ object MacText {
         return normalize(bytes.toHex().chunked(2).joinToString(":"))
     }
 
+    /**
+     * 从网卡的 IPv6 链路本地地址反推网卡 MAC（[address] 是 16 字节地址）。按 EUI-64 生成的链路本地地址是
+     * `fe80::` 前缀 + MAC 前 3 字节（第一字节第 2 位取反）+ `ff:fe` + MAC 后 3 字节；不是 `fe80::/64`、中间不是
+     * `ff:fe`（例如按隐私规则随机生成的）就推不出，返回 null。结果再按 [of] 过滤。
+     * 用处：安卓 11 起普通应用读不到网卡 MAC，但还能读到网卡的 IP 地址。
+     */
+    fun fromLinkLocal(address: ByteArray?): String? {
+        if (address == null || address.size != 16) return null
+        if (address[0] != 0xfe.toByte() || address[1] != 0x80.toByte()) return null
+        for (i in 2..7) if (address[i] != 0.toByte()) return null
+        if (address[11] != 0xff.toByte() || address[12] != 0xfe.toByte()) return null
+        val first = (address[8].toInt() xor 0x02).toByte()
+        return of(byteArrayOf(first, address[9], address[10], address[13], address[14], address[15]))
+    }
+
     /** 日志里的 MAC 只留第一段和最后两段：`aa:**:**:**:ee:ff`；格式不对的整个打码，占位值原样。 */
     fun mask(mac: String?): String {
         val parts = mac?.split(':', '-') ?: return "(无)"

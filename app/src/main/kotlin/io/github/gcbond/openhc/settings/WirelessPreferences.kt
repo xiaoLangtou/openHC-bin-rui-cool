@@ -1,7 +1,6 @@
 package io.github.gcbond.openhc.settings
 
 import android.content.Context
-import android.os.Build
 import androidx.core.content.edit
 
 /**
@@ -29,7 +28,7 @@ class WirelessPreferences(context: Context) {
 
     /**
      * 无线方式选「WiFi 直连」（默认关，即车机开热点；试验）：手机认证通过后车机建 WiFi 直连组让手机加入、不开本地热点，
-     * 优先 5 GHz。下一次无线连接生效；系统低于安卓 8 时不起作用（见 [usesWifiDirect]）。
+     * 优先 5 GHz。下一次无线连接生效（见 [usesWifiDirect]）。
      */
     var wifiDirect: Boolean
         get() = prefs.getBoolean(KEY_WIFI_DIRECT, false)
@@ -104,10 +103,10 @@ class WirelessPreferences(context: Context) {
         const val MAX_KNOWN_PHONES = 5
 
         /**
-         * 系统支持「WiFi 直连」这种无线方式：要按指定频率建组。安卓 10 起有公开接口；安卓 8、9 靠系统内部的设信道接口，
-         * 有的车机不认，建组时会明说（见 WifiDirectGroupOwner）。
+         * 系统支持「WiFi 直连」这种无线方式：要按指定频率建组。安卓 10 起有公开接口；安卓 6～9 靠系统内部的设信道接口，
+         * 有的车机不认，建组时会明说（见 WifiDirectGroupOwner）。所以 OpenHC 支持的系统（安卓 6 起）都算支持。
          */
-        val wifiDirectSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+        val wifiDirectSupported: Boolean get() = true
         private const val KEY_REPUBLISH_SECONDS = "debug_beacon_republish_seconds"
         private const val KEY_RANDOM_ADDRESS = "debug_beacon_random_address"
         private const val KEY_GATT = "debug_beacon_gatt"

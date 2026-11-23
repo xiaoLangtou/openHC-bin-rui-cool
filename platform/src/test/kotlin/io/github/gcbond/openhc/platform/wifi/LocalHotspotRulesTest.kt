@@ -427,5 +427,9 @@ class LocalHotspotRulesTest {
         // 系统回报的是占位值：跳过，用网卡地址；都没有才用占位值。
         assertEquals("0a:11:22:33:44:55" to HotspotMacSource.INTERFACE, LocalHotspotRules.pickBssid(null, mac, reportedBssid = MacText.PLACEHOLDER))
         assertEquals(MacText.PLACEHOLDER to HotspotMacSource.PLACEHOLDER, LocalHotspotRules.pickBssid(null, null, reportedBssid = null))
+        // 读不到网卡硬件地址（安卓 11 起）：用 IPv6 链路本地地址反推的；硬件地址读得到时仍用硬件地址。
+        assertEquals("1a:2b:3c:4d:5e:6f" to HotspotMacSource.LINK_LOCAL, LocalHotspotRules.pickBssid(null, null, null, "1a:2b:3c:4d:5e:6f"))
+        assertEquals("0a:11:22:33:44:55" to HotspotMacSource.INTERFACE, LocalHotspotRules.pickBssid(null, mac, null, "1a:2b:3c:4d:5e:6f"))
+        assertEquals(MacText.PLACEHOLDER to HotspotMacSource.PLACEHOLDER, LocalHotspotRules.pickBssid(null, null, null, MacText.PLACEHOLDER))
     }
 }

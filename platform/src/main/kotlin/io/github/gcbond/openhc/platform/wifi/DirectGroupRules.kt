@@ -5,6 +5,7 @@ import kotlin.random.Random
 /** 直连组主的 MAC（写进连接串的组主 MAC）取自哪里。 */
 enum class DirectMacSource(val label: String) {
     INTERFACE("直连网卡的硬件地址"),
+    LINK_LOCAL("由直连网卡的 IPv6 链路本地地址反推"),
     GROUP_OWNER("系统组信息里的组主地址"),
     PLACEHOLDER("读不到真实地址，用占位值"),
 }
@@ -52,7 +53,7 @@ object DirectGroupRules {
     }
 
     /**
-     * 安卓 8、9 依次尝试的频率：同 [plan]，但去掉「交给系统定」（这两个版本读不回组的频率，只能用指定的信道），
+     * 安卓 6～9 依次尝试的频率：同 [plan]，但去掉「交给系统定」（这两个版本读不回组的频率，只能用指定的信道），
      * 车机不支持 5 GHz（[fiveGhz] 为 false）时去掉 5 GHz 的频率。
      */
     fun pinnedPlan(stationMhz: Int?, fiveGhz: Boolean): List<Int> =
@@ -69,11 +70,13 @@ object DirectGroupRules {
     fun passphrase(random: Random): String = token(random, 16)
 
     /**
-     * 写进连接串的组主 MAC：直连网卡的硬件地址（手机按它认组主）；读不到时用系统组信息里的组主地址
+     * 写进连接串的组主 MAC：直连网卡的硬件地址（手机按它认组主，地址不对就不加入，2026-11 实车）；读不到时（安卓 11 起）
+     * 用直连网卡 IPv6 链路本地地址反推的（[linkLocalMac]，见 [MacText.fromLinkLocal]）；再不行用系统组信息里的组主地址
      * （直连设备地址，和网卡地址可能不同）；都没有用占位值 [MacText.PLACEHOLDER]。
      */
-    fun pickOwnerMac(interfaceMac: ByteArray?, ownerAddress: String?): Pair<String, DirectMacSource> {
+    fun pickOwnerMac(interfaceMac: ByteArray?, ownerAddress: String?, linkLocalMac: String? = null): Pair<String, DirectMacSource> {
         MacText.of(interfaceMac)?.let { return it to DirectMacSource.INTERFACE }
+        MacText.normalize(linkLocalMac)?.let { return it to DirectMacSource.LINK_LOCAL }
         MacText.normalize(ownerAddress)?.let { return it to DirectMacSource.GROUP_OWNER }
         return MacText.PLACEHOLDER to DirectMacSource.PLACEHOLDER
     }

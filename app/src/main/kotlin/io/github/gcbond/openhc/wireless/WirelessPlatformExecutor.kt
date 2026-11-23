@@ -299,7 +299,7 @@ internal class WirelessPlatformExecutor(
         handle.stop()
     }
 
-    /** 建直连组：建好后交回组名、口令、频率（安卓 8、9 上频率是指定的信道）；连接串用直连格式。 */
+    /** 建直连组：建好后交回组名、口令、频率（安卓 6～9 上频率是指定的信道）；连接串用直连格式。 */
     private fun startDirectGroup(id: Int, factory: (DirectGroupEvents) -> LocalHotspotHandle) {
         val events = object : DirectGroupEvents {
             override fun onReady(group: DirectGroup) = ifHotspot(id) {

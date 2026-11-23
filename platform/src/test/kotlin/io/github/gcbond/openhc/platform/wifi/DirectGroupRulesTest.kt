@@ -32,7 +32,7 @@ class DirectGroupRulesTest {
         assertEquals(listOf(5745, 5180, 2437, 2412, 2462, null), DirectGroupRules.plan(2472))
     }
 
-    /** 安卓 8、9 只能用指定的信道：不交给系统定；车机不支持 5 GHz 时只试 2.4 GHz，连着的 2.4 GHz 信道排最前。 */
+    /** 安卓 6～9 只能用指定的信道：不交给系统定；车机不支持 5 GHz 时只试 2.4 GHz，连着的 2.4 GHz 信道排最前。 */
     @Test
     fun pinnedPlanDropsSystemChoiceAndUnsupportedFiveGhz() {
         assertEquals(listOf(5745, 5180, 2437, 2412, 2462), DirectGroupRules.pinnedPlan(null, fiveGhz = true))
@@ -63,5 +63,9 @@ class DirectGroupRulesTest {
         assertEquals("1a:2b:3c:4d:5e:6f" to DirectMacSource.GROUP_OWNER,
             DirectGroupRules.pickOwnerMac(byteArrayOf(0x02, 0, 0, 0, 0, 0), "1a:2b:3c:4d:5e:6f"))
         assertEquals(MacText.PLACEHOLDER to DirectMacSource.PLACEHOLDER, DirectGroupRules.pickOwnerMac(null, "02:00:00:00:00:00"))
+        // 安卓 11 起读不到硬件地址、组信息里也是占位值：用 IPv6 链路本地地址反推的（排在组信息之前）。
+        assertEquals("3a:4b:5c:6d:7e:8f" to DirectMacSource.LINK_LOCAL, DirectGroupRules.pickOwnerMac(null, "02:00:00:00:00:00", "3a:4b:5c:6d:7e:8f"))
+        assertEquals("3a:4b:5c:6d:7e:8f" to DirectMacSource.LINK_LOCAL, DirectGroupRules.pickOwnerMac(null, "1a:2b:3c:4d:5e:6f", "3a:4b:5c:6d:7e:8f"))
+        assertEquals("0a:11:22:33:44:55" to DirectMacSource.INTERFACE, DirectGroupRules.pickOwnerMac(mac, null, "3a:4b:5c:6d:7e:8f"))
     }
 }

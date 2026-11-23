@@ -247,7 +247,10 @@ class LocalHotspotOwner private constructor(context: Context) {
             val read = info ?: return fail("热点信息丢了")
             val name = LocalHotspotRules.networkName(read.ssid) ?: return fail("读不到热点的网络名")
             val passphrase = read.passphrase ?: return fail("读不到热点的口令")
-            val (bssid, macSource) = LocalHotspotRules.pickBssid(read.bssid, hardwareAddress(interfaceName), infoWatcher?.bssid)
+            val hardware = hardwareAddress(interfaceName)
+            val linkLocal = InterfaceAddresses.linkLocalMac(interfaceName)
+            val (bssid, macSource) = LocalHotspotRules.pickBssid(read.bssid, hardware, infoWatcher?.bssid, linkLocal)
+            InterfaceAddresses.crossCheck(MacText.of(hardware), linkLocal)?.let { log("热点网卡：$it") }
             val (frequency, frequencySource) = LocalHotspotRules.estimateFrequency(read.hint, infoWatcher?.frequencyMhz ?: 0)
             val hotspot = LocalHotspot(ip, name, bssid, passphrase, frequency, interfaceName, macSource, frequencySource, read.security)
             stage = Stage.READY

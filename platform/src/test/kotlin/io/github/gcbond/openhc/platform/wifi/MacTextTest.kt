@@ -28,6 +28,22 @@ class MacTextTest {
         assertNull(MacText.of(null))
     }
 
+    /** EUI-64：fe80:: + MAC 前 3 字节（第一字节第 2 位取反）+ ff:fe + MAC 后 3 字节。地址都是编的。 */
+    @Test
+    fun macFromAnEui64LinkLocalAddress() {
+        fun v6(vararg b: Int) = ByteArray(16) { b[it].toByte() }
+        val eui = v6(0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x08, 0x1b, 0x2c, 0xff, 0xfe, 0x3d, 0x4e, 0x5f)
+        assertEquals("0a:1b:2c:3d:4e:5f", MacText.fromLinkLocal(eui))
+        // 本地管理位本来是 1 的（随机 MAC），地址里那一位是 0。
+        assertEquals("da:1b:2c:3d:4e:5f", MacText.fromLinkLocal(eui.copyOf().also { it[8] = 0xd8.toByte() }))
+        assertNull(MacText.fromLinkLocal(eui.copyOf().also { it[12] = 0x12 }), "中间不是 ff:fe：随机生成的，推不出")
+        assertNull(MacText.fromLinkLocal(eui.copyOf().also { it[0] = 0x20 }), "不是链路本地地址")
+        assertNull(MacText.fromLinkLocal(eui.copyOf().also { it[5] = 1 }), "前缀不是 fe80::/64")
+        assertNull(MacText.fromLinkLocal(eui.copyOf(4)))
+        assertNull(MacText.fromLinkLocal(null))
+        assertNull(MacText.fromLinkLocal(v6(0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x03, 0, 0, 0xff, 0xfe, 0, 0, 0)), "推出组播地址不算")
+    }
+
     @Test
     fun logsNeverShowWholeMacs() {
         assertEquals("0a:**:**:**:4e:5f", MacText.mask("0a:1b:2c:3d:4e:5f"))

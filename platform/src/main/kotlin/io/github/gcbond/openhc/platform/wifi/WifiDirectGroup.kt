@@ -34,13 +34,13 @@ class DirectGroup(
     val ownerMac: String,
     /** WPA2-PSK 口令。 */
     val passphrase: String,
-    /** 组的频率：安卓 10 起是系统交回的真实值，安卓 8、9 是指定的信道（见 [frequencyReadBack]）。 */
+    /** 组的频率：安卓 10 起是系统交回的真实值，安卓 6～9 是指定的信道（见 [frequencyReadBack]）。 */
     val frequencyMhz: Int,
     val interfaceName: String,
     val macSource: DirectMacSource,
     /** 按哪个频率申请的；null 表示没指定、由系统定。 */
     val requestedMhz: Int?,
-    /** [frequencyMhz] 是系统交回的真实值；false 时是指定的信道（安卓 8、9 读不回组的频率）。 */
+    /** [frequencyMhz] 是系统交回的真实值；false 时是指定的信道（安卓 6～9 读不回组的频率）。 */
     val frequencyReadBack: Boolean = true,
 ) {
     /** 频率从哪来，一句话（日志用）。 */
@@ -69,19 +69,19 @@ interface DirectGroupEvents {
  *
  * 手机要知道组在哪个频率，所以组的频率必须是确定的：
  * - 安卓 10 起：按公开接口指定组名、口令和频率建组，建好后读回实际频率。
- * - 安卓 8、9：没有公开的指定频率的接口，先用系统内部的「设直连信道」接口指定工作信道（见 [LegacyP2pChannels]），
+ * - 安卓 6～9：没有公开的指定频率的接口，先用系统内部的「设直连信道」接口指定工作信道（见 [LegacyP2pChannels]），
  *   再按老接口建组，组名和口令由系统生成；这两个版本读不回组的频率，按指定的信道报给手机。有的车机系统不认这个接口，
  *   建组时明说没建成。指定的信道在拆组后设回不限制。
  *
  * - 建之前先拆掉残留的组（进程被杀后系统可能还留着上次的组），并确认拆干净；
- * - 依次试频率（安卓 10 起按 [DirectGroupRules.plan]，安卓 8、9 按 [DirectGroupRules.pinnedPlan]）：系统拒绝、
+ * - 依次试频率（安卓 10 起按 [DirectGroupRules.plan]，安卓 6～9 按 [DirectGroupRules.pinnedPlan]）：系统拒绝、
  *   或申请后 [GROUP_WAIT_MS] 内组没建好，就拆掉换下一个；
  * - 建好后从系统读回组名、口令、网卡名（安卓 10 起还有实际频率），再读网卡上的 IPv4 和硬件地址（组主 MAC）；
  * - 组在期间按住车机的蜂窝网络请求：有自带 4G 的车机，手机关热点时车机的默认网络会切到 4G，之后 4G 退到后台，
  *   30 秒后系统会清掉当时建的连接，直连上的投屏连接也在内；按住 4G 就不会退到后台（HC 助手在比亚迪车机上实测过）；
  * - 建好后每 [WATCH_MS] 查一次组还在不在，没了报 [DirectGroupEvents.onLost]。
  *
- * 权限：安卓 8～12 要精确位置（无线本来就要），13 起要「附近的 WiFi 设备」，由调用方在开始前确认；没有时系统抛异常，
+ * 权限：安卓 12 及以下要精确位置（无线本来就要），13 起要「附近的 WiFi 设备」，由调用方在开始前确认；没有时系统抛异常，
  * 按没建成报。
  * 线程：自己的工作线程；系统回调和 [DirectGroupEvents] 都在这条线程上。
  */
@@ -111,10 +111,10 @@ class WifiDirectGroupOwner(
     private var pass = ""
     private var deadline = 0L
 
-    /** 安卓 8、9 上本次指定过直连信道，拆组后要设回不限制。 */
+    /** 安卓 6～9 上本次指定过直连信道，拆组后要设回不限制。 */
     private var pinned = false
 
-    /** 安卓 8、9：等系统回话的那次「指定信道」的序号；系统的直连没开时不回话，到点按没建成报。 */
+    /** 安卓 6～9：等系统回话的那次「指定信道」的序号；系统的直连没开时不回话，到点按没建成报。 */
     private var pinRequest = 0
     private var cellular: ConnectivityManager.NetworkCallback? = null
     private val poll = Runnable { pollGroup() }
@@ -130,7 +130,6 @@ class WifiDirectGroupOwner(
 
     private fun begin() {
         if (stopped || stage != Stage.IDLE) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return fail("安卓 8 以下不做直连")
         val m = app.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager ?: return fail("这台车机没有 WiFi 直连服务")
         val ch = try {
             m.initialize(app, thread.looper) { if (!stopped) lose("系统的 WiFi 直连服务断开了") }
@@ -160,7 +159,7 @@ class WifiDirectGroupOwner(
         log(
             "开始建直连组：车机 WiFi ${if (station > 0) "连在 $station MHz" else "没连"}，" +
                 "依次试 ${plan.joinToString("、") { it?.let { mhz -> "$mhz" } ?: "由系统定" }}" +
-                if (legacy) "（安卓 8、9：先用系统内部接口指定信道再建组）" else "",
+                if (legacy) "（安卓 6～9：先用系统内部接口指定信道再建组）" else "",
         )
         stage = Stage.CLEARING
         groupInfo { group ->
@@ -237,7 +236,7 @@ class WifiDirectGroupOwner(
     }
 
     /**
-     * 安卓 8、9：先指定工作信道，系统收下后再按老接口建组。指定不了（系统没有这个接口、调用出错）就不再试别的信道，
+     * 安卓 6～9：先指定工作信道，系统收下后再按老接口建组。指定不了（系统没有这个接口、调用出错）就不再试别的信道，
      * 直接按没建成报：换信道也是同一个接口。系统拒绝某个信道则换下一个。
      */
     private fun attemptPinned(m: WifiP2pManager, ch: WifiP2pManager.Channel, frequency: Int?) {
@@ -356,13 +355,16 @@ class WifiDirectGroupOwner(
             return fail("直连组建在 $frequency MHz，不是 2.4 / 5 GHz 的信道，手机按这套连接方式连不上")
         }
         val interfaceMac = hardwareAddress(iface)
+        val linkLocal = InterfaceAddresses.linkLocalMac(iface)
         val ownerAddress = group.owner?.deviceAddress
-        val (mac, source) = DirectGroupRules.pickOwnerMac(interfaceMac, ownerAddress)
+        val (mac, source) = DirectGroupRules.pickOwnerMac(interfaceMac, ownerAddress, linkLocal)
         log(
             "组主 MAC 的来源：直连网卡 $iface 的硬件地址 ${MacText.mask(MacText.of(interfaceMac) ?: "读不到")}，" +
+                "由它的 IPv6 链路本地地址反推 ${MacText.mask(linkLocal ?: "推不出")}，" +
                 "组信息里的组主地址 ${MacText.mask(MacText.normalize(ownerAddress) ?: ownerAddress ?: "读不到")}；用 ${source.label}",
         )
-        if (source == DirectMacSource.PLACEHOLDER) log("读不到直连网卡的真实 MAC，连接串里的组主 MAC 用占位值（手机可能认不出组）")
+        InterfaceAddresses.crossCheck(MacText.of(interfaceMac), linkLocal)?.let(log)
+        if (source == DirectMacSource.PLACEHOLDER) log("读不到直连网卡的真实 MAC，连接串里的组主 MAC 用占位值（手机认不出组，不会加入）")
         stage = Stage.READY
         holdCellular()
         val built = DirectGroup(ip, networkName, mac, passphrase, frequency, iface, source, requested, frequencyReadBack = !legacy)
@@ -432,7 +434,7 @@ class WifiDirectGroupOwner(
         }
     }
 
-    /** 把安卓 8、9 上指定的直连工作信道设回 0（不限制），免得车机上别的直连功能只能用这一个信道。 */
+    /** 把安卓 6～9 上指定的直连工作信道设回 0（不限制），免得车机上别的直连功能只能用这一个信道。 */
     private fun unpin(m: WifiP2pManager, ch: WifiP2pManager.Channel, then: () -> Unit) {
         pinned = false
         val problem = LegacyP2pChannels.set(
@@ -593,7 +595,7 @@ class WifiDirectGroupOwner(
     private fun now() = SystemClock.elapsedRealtime()
 
     private companion object {
-        /** 安卓 8、9：组的频率只能靠指定信道定下来，读不回。 */
+        /** 安卓 6～9：组的频率只能靠指定信道定下来，读不回。 */
         val legacy: Boolean get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
 
         /** 车机 WiFi 关着时等它开的上限（停本地热点后一两秒才回来）。 */
@@ -619,13 +621,13 @@ class WifiDirectGroupOwner(
         /** 拆组再设回信道时等系统回话的上限。 */
         const val UNPIN_WAIT_MS = 3_000L
 
-        /** 安卓 8、9 指定信道时等系统回话的上限。 */
+        /** 安卓 6～9 指定信道时等系统回话的上限。 */
         const val PIN_WAIT_MS = 3_000L
     }
 }
 
 /**
- * 安卓 8、9 指定直连组的工作信道。系统有「设直连监听信道和工作信道」的接口但没公开（安卓 10 起有公开的按频率建组），
+ * 安卓 6～9 指定直连组的工作信道。系统有「设直连监听信道和工作信道」的接口但没公开（安卓 10 起有公开的按频率建组），
  * 只能按名字找；设了工作信道后，之后建的组只建在这个信道上，设成 0 是不限制。
  *
  * 接口同时要监听信道（直连设备互相发现时用），给 0 表示不动它，只改工作信道。

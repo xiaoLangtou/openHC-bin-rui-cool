@@ -913,7 +913,7 @@ class WirelessController(
         reconnect: ReconnectTarget?,
         /** 有线是为这次让出来的：结束后让有线回到等插线。 */
         val resumeWiredAfter: Boolean = false,
-        /** 这次不开本地热点，改建 WiFi 直连组（设置里「无线方式」选了直连，安卓 8 起）。 */
+        /** 这次不开本地热点，改建 WiFi 直连组（设置里「无线方式」选了直连）。 */
         val directGroup: Boolean = false,
     ) {
         /** 投屏开始过。 */

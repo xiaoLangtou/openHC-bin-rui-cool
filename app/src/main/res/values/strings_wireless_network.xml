@@ -11,7 +11,7 @@
     <string name="settings_wireless_mode_hotspot">车机开热点</string>
     <string name="settings_wireless_mode_direct">5 GHz 直连（试验）</string>
     <string name="settings_wireless_mode_hint">车机开热点：手机连车机开的热点，最稳；车机原来连着的 WiFi 会断开。5 GHz 直连：车机建一个 WiFi 直连组让手机加入，优先用 5 GHz，避开和蓝牙挤在 2.4 GHz 上（手机蓝牙忙的时候画面容易卡）；不开热点，车机原来连着的 WiFi 不用断开。下一次无线连接生效。</string>
-    <string name="settings_wireless_mode_direct_note">试验功能。要先打开车机 WiFi（不用连任何网络）。车机 WiFi 连在某些 5 GHz 信道上、或者建不了 5 GHz 时，会退到 2.4 GHz。安卓 8、9 的车机要靠系统的一个内部设置指定信道，有的车机不支持。连不上或者画面卡，就改回「车机开热点」，报告问题时附上诊断日志。</string>
+    <string name="settings_wireless_mode_direct_note">试验功能。要先打开车机 WiFi（不用连任何网络）。车机 WiFi 连在某些 5 GHz 信道上、或者建不了 5 GHz 时，会退到 2.4 GHz。安卓 9 及更早的车机要靠系统的一个内部设置指定信道，有的车机不支持。连不上或者画面卡，就改回「车机开热点」，报告问题时附上诊断日志。</string>
 
     <!-- 首页无线卡片 -->
     <string name="wireless_network_line">无线方式：车机开热点。手机连上来时，车机原来连着的 WiFi 会断开。</string>
