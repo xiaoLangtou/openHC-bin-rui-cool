@@ -937,6 +937,7 @@ class WirelessController(
          */
         val audio: AudioOutput = AudioOutput(
             app, AUDIO_ID_BASE + id,
+            wireless = true,
             mediaFocusChanged = { held -> MediaKeys.mediaFocus(keys, held) },
         ) { change -> runner.submit { bridge.sendAudioFocus(change) } }
         val session: WirelessReceiverSession = WirelessReceiverSession(config, sink, audio)

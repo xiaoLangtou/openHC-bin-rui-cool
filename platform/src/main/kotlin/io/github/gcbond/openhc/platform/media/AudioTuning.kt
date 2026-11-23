@@ -6,6 +6,7 @@ package io.github.gcbond.openhc.platform.media
  * 默认按有线投屏取低值：攒约 80ms 起播，AudioTrack 自己的缓冲约 40ms（不小于系统最小值），队列长期高于 100ms 就削峰。
  * （起播 60ms、削峰 80ms 在真机上会偶尔放空，所以各加了 20ms。）
  * 「声音延后」[extraDelayMillis] 加在起播门槛、削峰目标和硬上限上：在最低配置之上多攒这么多，声音整体往后挪。
+ * 无线垫底 [cushionMillis] 同样加在这三处，见 [withCushion]。
  * 另外带着媒体、导航两路各放到哪个声道（[AudioStreamChoice]，默认自动），建音轨时用（[streamFor]）。
  */
 class AudioTuning(
@@ -27,6 +28,8 @@ class AudioTuning(
     val trackMillis: Int = 40,
     /** 声音延后：起播门槛、削峰目标和硬上限都加这么多。 */
     val extraDelayMillis: Int = 0,
+    /** 无线垫底：和声音延后一样加在三处，由连接方式决定，不归设置管（[withCushion]）。 */
+    val cushionMillis: Int = 0,
     /** 安卓 8.0 起向系统要低延迟的输出路径（更低版本没有这个选项，照常建）。 */
     val lowLatency: Boolean = true,
     /** 媒体那一路放到哪个声道（[AudioStreamChoice]）。 */
@@ -40,6 +43,7 @@ class AudioTuning(
         require(trimStepMillis > 0) { "每次削峰的时长必须为正" }
         require(trackMillis > 0) { "音轨缓冲必须为正" }
         require(extraDelayMillis in 0..MAX_EXTRA_DELAY_MILLIS) { "声音延后超出范围: $extraDelayMillis" }
+        require(cushionMillis in 0..MAX_EXTRA_DELAY_MILLIS) { "无线垫底超出范围: $cushionMillis" }
         require(AudioStreamChoice.normalize(mediaStream) == mediaStream) { "音乐声道超出范围: $mediaStream" }
         require(AudioStreamChoice.normalize(navigationStream) == navigationStream) { "导航声道超出范围: $navigationStream" }
     }
@@ -51,11 +55,22 @@ class AudioTuning(
         AudioUsage.ASSISTANT, AudioUsage.CALL, AudioUsage.RINGTONE -> AudioStreamChoice.AUTO
     }
 
-    fun startFrames(sampleRate: Int): Int = framesFor(sampleRate, startMillis + extraDelayMillis)
+    fun startFrames(sampleRate: Int): Int = framesFor(sampleRate, startMillis + added)
 
-    fun targetFrames(sampleRate: Int): Int = framesFor(sampleRate, targetMillis + extraDelayMillis)
+    fun targetFrames(sampleRate: Int): Int = framesFor(sampleRate, targetMillis + added)
 
-    fun maxFrames(sampleRate: Int): Int = framesFor(sampleRate, maxMillis + extraDelayMillis)
+    fun maxFrames(sampleRate: Int): Int = framesFor(sampleRate, maxMillis + added)
+
+    private val added: Int get() = extraDelayMillis + cushionMillis
+
+    /**
+     * 同样的参数再垫 [millis]。无线投屏时车机 WiFi 扫描要离开投屏所在的信道，一次停 0.1～0.3 秒（2026-11 比亚迪实车，
+     * 系统应用要定位时触发）；声音走 TCP，数据不丢、只是晚到后一口气补来，多攒这么多就能扛过去不放空。
+     */
+    fun withCushion(millis: Int): AudioTuning = AudioTuning(
+        startMillis, targetMillis, maxMillis, trimHoldMillis, trimSpacingMillis, trimStepMillis, startWindowMillis,
+        trackMillis, extraDelayMillis, millis, lowLatency, mediaStream, navigationStream,
+    )
 
     fun trimStepFrames(sampleRate: Int): Int = framesFor(sampleRate, trimStepMillis)
 
@@ -63,8 +78,9 @@ class AudioTuning(
     fun trackBytes(sampleRate: Int, frameBytes: Int, minimumBytes: Int): Int =
         maxOf(minimumBytes, framesFor(sampleRate, trackMillis) * frameBytes)
 
-    override fun toString() = "起播 ${startMillis + extraDelayMillis}ms、削峰目标 ${targetMillis + extraDelayMillis}ms、" +
-        "上限 ${maxMillis + extraDelayMillis}ms、音轨约 ${trackMillis}ms、声音延后 +${extraDelayMillis}ms、" +
+    override fun toString() = "起播 ${startMillis + added}ms、削峰目标 ${targetMillis + added}ms、" +
+        "上限 ${maxMillis + added}ms、音轨约 ${trackMillis}ms、声音延后 +${extraDelayMillis}ms、" +
+        (if (cushionMillis > 0) "无线垫底 +${cushionMillis}ms、" else "") +
         "低延迟输出${if (lowLatency) "开" else "关"}、音乐声道 ${AudioStreamChoice.label(mediaStream)}、" +
         "导航声道 ${AudioStreamChoice.label(navigationStream)}"
 

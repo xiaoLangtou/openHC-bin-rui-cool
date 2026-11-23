@@ -39,6 +39,8 @@ import java.util.EnumMap
 internal class AudioOutput(
     context: Context,
     private val attemptId: Int,
+    /** 无线连接：音乐和导航多垫 [WIRELESS_CUSHION_MILLIS]（[AudioTuning.withCushion]），电话、提示与语音、铃声不垫。 */
+    private val wireless: Boolean = false,
     /** 我们是不是在替手机拿着媒体焦点，变化时在焦点线程上回调（媒体按钮会话跟着它建和关）。 */
     private val mediaFocusChanged: (Boolean) -> Unit = {},
     /** 把车机的焦点变化告诉手机（实现方投到协议线程上发）。 */
@@ -290,13 +292,14 @@ internal class AudioOutput(
         }
         val usage = usageOf(packet.route)
         val stream = Stream(key, usage, packet.bus)
-        stream.player = AudioPlayer(format, stream, tuning, usage)
+        val cushioned = wireless && (usage == AudioUsage.MEDIA || usage == AudioUsage.NAVIGATION)
+        stream.player = AudioPlayer(format, stream, if (cushioned) tuning.withCushion(WIRELESS_CUSHION_MILLIS) else tuning, usage)
         volumes[usage]?.let { stream.player.setVolume(it) }
         streams[key] = stream
         Log.i(
             TAG,
             "[$attemptId] 建播放器：${stream.label()}，$format，音轨用途 ${usage.label}" +
-                "（按载荷判断是 ${packet.codec.label}，声明的是 ${info.codec.label}）；$tuning",
+                "（按载荷判断是 ${packet.codec.label}，声明的是 ${info.codec.label}）；${stream.player.tuning}",
         )
         return stream
     }
@@ -324,6 +327,9 @@ internal class AudioOutput(
 
         /** 每一路每这么多包记一行统计（媒体 AAC 约 10 秒）。 */
         const val STATS_EVERY = 500L
+
+        /** 无线时音乐和导航多攒的毫秒数：车机扫描 WiFi 时投屏信道一次停 0.1～0.3 秒，留点余量。 */
+        const val WIRELESS_CUSHION_MILLIS = 300
 
         fun encodingOf(codec: AudioCodec): AudioPlayer.Encoding =
             if (codec == AudioCodec.PCM) AudioPlayer.Encoding.PCM_16 else AudioPlayer.Encoding.AAC

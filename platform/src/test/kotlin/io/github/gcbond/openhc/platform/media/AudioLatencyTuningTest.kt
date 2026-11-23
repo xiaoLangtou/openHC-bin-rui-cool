@@ -41,6 +41,20 @@ class AudioLatencyTuningTest {
     }
 
     @Test
+    fun wirelessCushionStacksOnTheUserDelay() {
+        val user = AudioTuning(extraDelayMillis = 100, mediaStream = AudioStreamChoice.AUTO)
+        val tuning = user.withCushion(300)
+        assertEquals(AudioTuning.framesFor(48_000, 80 + 100 + 300), tuning.startFrames(48_000))
+        assertEquals(AudioTuning.framesFor(48_000, 100 + 100 + 300), tuning.targetFrames(48_000))
+        assertEquals(AudioTuning.framesFor(48_000, 300 + 100 + 300), tuning.maxFrames(48_000))
+        assertEquals(user.trackBytes(48_000, 4, 0), tuning.trackBytes(48_000, 4, 0), "音轨缓冲不跟着垫")
+        assertEquals(user.lowLatency, tuning.lowLatency)
+        assertTrue("无线垫底 +300ms" in tuning.toString() && "声音延后 +100ms" in tuning.toString(), tuning.toString())
+        assertTrue("无线垫底" !in user.toString())
+        assertFailsWith<IllegalArgumentException> { user.withCushion(-1) }
+    }
+
+    @Test
     fun tuningRejectsBadValues() {
         assertFailsWith<IllegalArgumentException> { AudioTuning(startMillis = 0) }
         assertFailsWith<IllegalArgumentException> { AudioTuning(startMillis = 120, targetMillis = 100) }
