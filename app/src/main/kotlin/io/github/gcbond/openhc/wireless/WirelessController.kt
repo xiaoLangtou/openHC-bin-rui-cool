@@ -541,6 +541,9 @@ class WirelessController(
                 mediaKeyInput = MediaKeyPreferences(app).enabled,
                 timeouts = WirelessNetworkPlan.timeouts(),
                 audio = audio,
+                // 514/515 元数据（歌词/歌曲信息）单独开启：不带 "_launcher"、不带屏幕参数键——v29 拆分验证
+                // （2026-11-24）。若实车发现它也触发窗口化，这里改回 false。
+                requestMetadata = true,
             )
         } catch (e: IllegalArgumentException) {
             return blocked(kind, WirelessNotice.StartFailed("配置不合法：${e.message}"), AutoHold.START_FAILED)

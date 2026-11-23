@@ -56,6 +56,10 @@ class DmsdpSession(
 
     // 扬声器的 2102 要看连上的是哪台手机，所以在回服务声明时才问扬声器（它在下面才建，用到时早已建好）。
     private val devices = DeviceMessageHandler(config) { speaker?.declaredProfile() ?: "" }
+    // 514/515 元数据线（v29）：**不带** "_launcher" 和屏幕参数键单独开启——请求-应答是管理层的独立机制，
+    // 理论上不依赖融合桌面；实弹验证时 _launcher 也在场，这次单独开就是验证它到底依不依赖（2026-11-24）。
+    // 若实车发现它也触发窗口化，就证明元数据真的挂在融合桌面上，只能等桌面参数修对后一起回来。
+    private var metadataRequested = false
     private val files = config.fileShare?.let { IncomingFileTransfer(config, it) }
     private val speaker = config.speaker?.let {
         SpeakerSession(it, cipher, audioListener, ::sendSpeakerText) { nextCSeq++ }
@@ -518,9 +522,18 @@ class DmsdpSession(
                         speaker?.onPeerDevice(event.deviceId, name)
                     }
                     out.event(event)
-                    // **不再**在服务协商完成时主动请求应用元数据（514/RequestAAData）：它和 "_launcher"、
-                    // 物理宽高键一起构成 v23→v27 全屏变窗口化的手机可见差异，2026-11-24 一并回退。
-                    // 515 元数据线挂起，等 _launcher 相关屏幕参数实锤后再加回来。
+                    // 服务请求 104 = 连接协商完成。此刻向手机请求应用元数据（华为官方协议 dataType=514）：
+                    // 手机不会主动推音频元数据/歌词，必须车机先请求（2026-11-23 实弹验证，当时 _launcher 在场）。
+                    if (config.requestMetadata && event is DmsdpEvent.ServicesRequested && !metadataRequested) {
+                        metadataRequested = true
+                        sendRecord(
+                            MODULE_MANAGEMENT,
+                            ManagementMessages.METADATA_REQUEST_TYPE,
+                            JsonCodec.encodeToUtf8(ManagementMessages.metadataRequest(config.host.fullModel)),
+                            out,
+                        )
+                        out.event(DmsdpEvent.ManagementParsed(ManagementMessages.METADATA_REQUEST_TYPE, "已请求应用元数据（RequestAAData=7，RequestCaller=${config.host.fullModel}）"))
+                    }
                 },
             )
             deviceData && record.module == DeviceMessageHandler.MODULE_DISPLAY -> {
@@ -556,13 +569,17 @@ class DmsdpSession(
             record.module == MODULE_MANAGEMENT && ManagementMessages.accepts(record.type) -> {
                 when (val parsed = ManagementMessages.parse(record.type, record.data)) {
                     null -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
-                    else ->
+                    else -> {
+                        // 515 音频元数据要求回执（{"MediaDataResp":{"RespCode":100000}}），不回手机可能停推。
+                        // 元数据到达走 MediaDataReceived 事件（诊断日志可见），后续接 UI/歌词消费方。
+                        parsed.reply?.let { sendRecord(MODULE_MANAGEMENT, record.type, JsonCodec.encodeToUtf8(it), out) }
+                        parsed.mediaData?.let { out.event(DmsdpEvent.MediaDataReceived(it)) }
                         if (parsed.carDesktop) {
                             out.event(DmsdpEvent.CarDesktopRequested(parsed.summary))
                         } else {
                             out.event(DmsdpEvent.ManagementParsed(parsed.type, parsed.summary))
                         }
-                    // v23 行为：515 元数据回执（MediaDataResp）不再发——2026-11-24 随 _launcher 一并回退。
+                    }
                 }
             }
             else -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))

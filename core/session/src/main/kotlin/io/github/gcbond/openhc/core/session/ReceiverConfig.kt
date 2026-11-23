@@ -58,6 +58,11 @@ class ReceiverConfig(
     val pin: String? = null,
     /** 向手机声明可以接受触摸；开了才能用 [ReceiverSession.sendInput] 发触摸。 */
     val touchInput: Boolean = false,
+    /**
+     * 服务协商完成后主动请求应用元数据（514/515，歌词/歌曲信息）。默认关——它是不带
+     * "_launcher" 时仍然手机可见的行为，v29 起由 app 层显式打开（2026-11-24 拆分验证）。
+     */
+    val requestMetadata: Boolean = false,
     /** 向手机声明可以接受物理按键。 */
     val keyInput: Boolean = false,
     /**
@@ -115,6 +120,7 @@ class ReceiverConfig(
         bluetoothMac = bluetoothText,
         localIp = localIp,
         phoneIp = phoneIp,
+        requestMetadata = requestMetadata,
         display = DmsdpConfig.Display(
             width = display.width,
             height = display.height,

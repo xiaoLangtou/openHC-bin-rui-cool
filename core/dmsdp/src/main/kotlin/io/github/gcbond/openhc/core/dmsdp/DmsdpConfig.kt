@@ -45,6 +45,12 @@ class DmsdpConfig(
     /** OPTIONS 里是否声明支持 UDP 保活（`UdpKA: 1`）。最终用哪种由手机选。 */
     val advertiseUdpKeepAlive: Boolean = true,
     /**
+     * 服务协商完成（104）后是否主动向手机请求应用元数据（514 RequestAAData，515 MediaData 回推）。
+     * 手机不会主动推音频元数据/歌词，必须车机先请求。默认关：这是手机可见的行为，golden 向量按
+     * 「不发请求」的形状断言输出帧序列（2026-11-24）；app 层显式打开。
+     */
+    val requestMetadata: Boolean = false,
+    /**
      * OPTIONS 的 `KaRetry`，同时是 UDP 保活检测窗口的系数（窗口 = 周期参数 × 该值 ÷ 2 轮）。
      * 有线、无线的 HiCar 连接都是 160。
      */

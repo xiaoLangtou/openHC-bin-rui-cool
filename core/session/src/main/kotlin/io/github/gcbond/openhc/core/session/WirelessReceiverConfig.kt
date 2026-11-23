@@ -49,6 +49,8 @@ class WirelessReceiverConfig(
     val audio: AudioSettings? = null,
     /** 额外声明的 DMSDP 服务（104 掩码命中时回 102），规则与有线的 [ReceiverConfig.extraDmsdpServices] 相同。 */
     val extraDmsdpServices: List<DmsdpConfig.Service> = emptyList(),
+    /** 服务协商完成后主动请求应用元数据（514/515）。手机可见的行为，由 app 层显式打开。 */
+    val requestMetadata: Boolean = false,
 ) {
     /** 本机 deviceId（64 位大写十六进制），与有线同一算法。 */
     val deviceId: String
@@ -81,6 +83,7 @@ class WirelessReceiverConfig(
         trustStore = trustStore,
         controlBindHost = localIp,
         controlLocalFilter = false,
+        requestMetadata = requestMetadata,
         random = random,
         wallClock = wallClock,
         timeZone = timeZone,
