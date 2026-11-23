@@ -95,38 +95,21 @@ class WirelessReceiverConfig(
         HiCarAuthConfig(identity.authService, deviceId, authEnvelopeVersion, pinCode, usbConnection = false)
 
     /**
-     * 认证握手应答里回给手机的车机信息。键名与官方 SDK 完全对齐（吉利 Link 包内 com.huawei.hicarsdk
-     * CarAuthentication.setCarInfo/setCarDetail 反汇编实锤，2026-11-23）：
-     * - CONNECT_ABILITY_KEY：只无线 1，无线和 USB 都支持 3（官方默认就是 3）；
-     * - CAR_MODE_ID：完整车型编号 8 位，手机拆成前 6 位 moduleId + 后 2 位 submodule（即回连
-     *   Intent extras 的 DEVICE_MODULE_ID/SUB_MODULE_ID），是融合桌面磁贴判定链的输入；
-     * - CarBrand/DayNightMode/InputFeatures/PrimaryInput/isOnlyParkAllow：官方 hicar_config.json
-     *   initialConfig 五键原样透传（键名区分大小写，不是旧版反汇编的 DAY_NIGHT_MODE 全大写形）；
-     * - FPS/WIDTH/HEIGHT/BITRATE/CODECS/MIN_BITRATE/MAX_BITRATE/DPI/SCREEN_WIDTH/SCREEN_HEIGHT：
-     *   官方 setCarDetail 十个能力键，值取自本机显示配置（CODECS=1 即 H.264，与官方星瑞配置同值）。
+     * 认证握手应答里回给手机的车机信息：连接能力（只无线 1，无线和 USB 都支持 3）、完整车型编号、品牌。
+     *
+     * **只回这 3 个键，是实测得出的**（2026-11-24）：上游 0.2.4 曾在这里对齐官方 SDK 补进 15 个能力键
+     * （CarBrand/DayNightMode/InputFeatures/PrimaryInput/isOnlyParkAllow + setCarDetail 的 FPS/WIDTH/HEIGHT/
+     * BITRATE/CODECS/MIN/MAX_BITRATE/DPI/SCREEN_WIDTH/SCREEN_HEIGHT），结果手机 HiCar 按这些键走「融合桌面」
+     * 判定链，投屏从全屏变成窗口化（1920x720 屏，桌面缩在中间带黑边），v23→v27 升级后立刻复现。
+     * 官方星瑞 hicar_config.json 里 WIDTH/HEIGHT/FPS/BITRATE/CODECS 本来就是 null，这些键的语义（尤其
+     * WIDTH/HEIGHT 的方向约定、DPI 的取值口径）没有实锤前不能带。以后要加回这些键（比如做音乐元数据需要
+     * DAY_NIGHT_MODE），必须一次只加一个、连车验证全屏不回退。
      */
-    internal fun authDeviceInfo(): Map<String, String> {
-        val bitrate = display.bitrate ?: 15_000_000
-        return linkedMapOf(
-            "CONNECT_ABILITY_KEY" to if (supportsUsb) CONNECT_ABILITY_BOTH else CONNECT_ABILITY_WIRELESS,
-            "CAR_MODE_ID" to identity.host.fullModel,
-            "CarBrand" to identity.host.brand,
-            "DayNightMode" to "day",
-            "InputFeatures" to "7",
-            "PrimaryInput" to "1",
-            "isOnlyParkAllow" to "1",
-            "FPS" to display.fps.toString(),
-            "WIDTH" to display.width.toString(),
-            "HEIGHT" to display.height.toString(),
-            "BITRATE" to bitrate.toString(),
-            "CODECS" to "1",
-            "MIN_BITRATE" to (bitrate / 2).toString(),
-            "MAX_BITRATE" to bitrate.toString(),
-            "DPI" to display.dpi.toString(),
-            "SCREEN_WIDTH" to display.width.toString(),
-            "SCREEN_HEIGHT" to display.height.toString(),
-        )
-    }
+    internal fun authDeviceInfo(): Map<String, String> = linkedMapOf(
+        "CONNECT_ABILITY_KEY" to if (supportsUsb) CONNECT_ABILITY_BOTH else CONNECT_ABILITY_WIRELESS,
+        "CAR_MODE_ID" to identity.host.fullModel,
+        "CAR_BRAND" to identity.host.brand,
+    )
 
     override fun toString() = "WirelessReceiverConfig(画布=${display.width}x${display.height}@${display.fps})"
 
