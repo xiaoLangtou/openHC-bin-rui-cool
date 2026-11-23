@@ -406,7 +406,7 @@ class AudioPlayer(
     // ---------------- AAC ----------------
 
     private fun decode(unit: ByteArray) {
-        val adts = AacConfig.parseAdts(unit, 0, unit.size)
+        val adts = AacConfig.parseAdts(unit, 0, unit.size) ?: scanAdts(unit)
         val from = adts?.headerLength ?: 0
         val to = adts?.frameLength ?: unit.size
         if (to <= from) return
@@ -559,5 +559,20 @@ class AudioPlayer(
         const val MAX_DECODER_ERRORS = 5
         const val PCM_SCRATCH = 16 * 1024
         const val UINT32 = 0xFFFF_FFFFL
+
+        /** ADTS 不在载荷开头时最多往前找几个字节：有的封装在 ADTS 前垫了固定长度的头。 */
+        const val MAX_ADTS_PREFIX = 16
+
+        /**
+         * 载荷开头不是 ADTS 时，在前 [MAX_ADTS_PREFIX] 个字节里找 ADTS 并把它前面那段垫头跳过；
+         * 要求找出的帧几乎吃满整个载荷，防止裸 AAC 数据里碰巧出现 0xFFF1 被误认。找不到返回 null（按裸 AAC 放）。
+         */
+        fun scanAdts(data: ByteArray): AacConfig.Adts? {
+            for (p in 1 until minOf(MAX_ADTS_PREFIX, data.size)) {
+                val adts = AacConfig.parseAdts(data, p, data.size - p) ?: continue
+                if (adts.frameLength >= data.size - p - MAX_ADTS_PREFIX) return adts
+            }
+            return null
+        }
     }
 }

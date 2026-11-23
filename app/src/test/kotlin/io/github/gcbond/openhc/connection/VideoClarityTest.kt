@@ -10,8 +10,10 @@ import kotlin.test.assertTrue
 class VideoClarityTest {
 
     @Test
-    fun standardIsTheDefaultAndDeclaresNoBitrate() {
-        assertEquals(VideoClarity.STANDARD, VideoClarity.DEFAULT)
+    fun highIsTheDefaultAndDeclaresTwelveMbps() {
+        // v7 起默认 HIGH（12 Mbps）：车机解码满血，瓶颈在手机编码端，直接要高码率。
+        assertEquals(VideoClarity.HIGH, VideoClarity.DEFAULT)
+        assertEquals(12_000_000, VideoClarity.HIGH.bitrate)
         assertNull(VideoClarity.STANDARD.bitrate, "标准不声明，手机按自己的默认码率")
     }
 
@@ -31,10 +33,10 @@ class VideoClarityTest {
     }
 
     @Test
-    fun storedKeysRoundTripAndUnknownTextFallsBackToStandard() {
+    fun storedKeysRoundTripAndUnknownTextFallsBackToDefault() {
         for (clarity in VideoClarity.entries) assertEquals(clarity, VideoClarity.parse(clarity.key))
-        for (bad in listOf(null, "", "HIGH", "high ", "max", "12000000")) {
-            assertEquals(VideoClarity.STANDARD, VideoClarity.parse(bad), "$bad")
+        for (bad in listOf(null, "", "high ", "max", "12000000")) {
+            assertEquals(VideoClarity.DEFAULT, VideoClarity.parse(bad), "$bad")
         }
     }
 

@@ -18,7 +18,7 @@ class CommittedIdentityTest {
     @Test
     fun committedIdentityParsesWithTheFixedValues() {
         val assets = IdentityJson.parseText(committedFile().readText())
-        assertEquals("00048000", assets.host.fullModel)
+        assertEquals("00048900", assets.host.fullModel)
         assertEquals("car", assets.host.brand)
         assertEquals("OpenHC", assets.host.deviceName)
         assertTrue(assets.nearbyKeys.rootKey.size >= 5)

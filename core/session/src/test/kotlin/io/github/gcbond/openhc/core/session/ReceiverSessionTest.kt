@@ -210,7 +210,7 @@ class ReceiverSessionTest {
 
         // SETUP 之后先只连视频；视频连上再连回控；两条都连上才发 PLAY。
         assertEquals(
-            listOf("write HISIGHT_CONTROL setup-ok", "event VideoNegotiated(1280x720@30)", "connect VIDEO $phone:7001"),
+            listOf("write HISIGHT_CONTROL setup-ok", "event VideoNegotiated(1280x720@30，触摸关，按键关)", "connect VIDEO $phone:7001"),
             d.data(SessionChannel.HISIGHT_CONTROL, "setup"),
         )
         assertEquals(listOf("connect REMOTE_CONTROL $phone:7002"), d.connected(SessionChannel.VIDEO))
@@ -218,7 +218,7 @@ class ReceiverSessionTest {
         assertEquals(listOf("event PlayAccepted"), d.data(SessionChannel.HISIGHT_CONTROL, "play-ok"))
 
         // 视频帧原样交给回调（同一个对象，不复制），第一帧时报开始出画面。
-        assertEquals(listOf("event VideoStarted(1280x720@30)"), d.data(SessionChannel.VIDEO, "frame"))
+        assertEquals(listOf("event VideoStarted(1280x720@30，触摸关，按键关)"), d.data(SessionChannel.VIDEO, "frame"))
         assertEquals(emptyList(), d.data(SessionChannel.VIDEO, "frame"))
         assertEquals(2, frames.size)
         assertSame(d.layers.hisight.unit, frames[0])

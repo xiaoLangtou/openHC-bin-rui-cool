@@ -108,6 +108,8 @@ internal class DeviceMessageHandler(
                 d.gop?.let { put("1016", it) }
                 d.bitrate?.let { put("1017", it) }
             }
+            // 手机按这个值（设备信息 detail 里的 CAR_MODE_ID）比对 ConvergedLauncherController
+            // 白名单，决定 HiCar 应用列表"车辆"磁贴是否可点；必须用白名单内的型号（v10 起 00048900）。
             put("2003", config.host.fullModel)
         })
     }

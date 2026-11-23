@@ -83,16 +83,27 @@ class RfcommServer(
     // ---------------------------------------------------------------- 监听线程
 
     // 权限由调用方在开始前确认；没有时系统抛 SecurityException，下面按开监听失败上报。
+    // 开监听的 IOException/RuntimeException（典型：快速重启后通道或 SDP 记录还没释放，IDException -7）
+    // 通常是瞬时的：有限次退避重试（issue #12），权限问题不重试。
     @SuppressLint("MissingPermission")
     private fun run() {
-        val opened = try {
-            adapter.listenUsingInsecureRfcommWithServiceRecord(serviceName, uuid)
-        } catch (e: IOException) {
-            return failListen("开监听失败：${describe(e)}")
-        } catch (e: SecurityException) {
-            return failListen("没有蓝牙权限（安卓 12 起要「附近的设备」权限）：${describe(e)}")
-        } catch (e: RuntimeException) {
-            return failListen("开监听失败：${describe(e)}")
+        var opened: BluetoothServerSocket? = null
+        var attempt = 0
+        while (opened == null) {
+            attempt++
+            try {
+                opened = adapter.listenUsingInsecureRfcommWithServiceRecord(serviceName, uuid)
+            } catch (e: SecurityException) {
+                return failListen("没有蓝牙权限（安卓 12 起要「附近的设备」权限）：${describe(e)}")
+            } catch (e: IOException) {
+                if (attempt > LISTEN_RETRY_LIMIT || isListenerClosed()) return failListen("开监听失败：${describe(e)}")
+            } catch (e: RuntimeException) {
+                if (attempt > LISTEN_RETRY_LIMIT || isListenerClosed()) return failListen("开监听失败：${describe(e)}")
+            }
+            if (opened == null) {
+                sleepQuietly(attempt * LISTEN_RETRY_DELAY_MS)
+                if (isListenerClosed()) return
+            }
         }
         val keep = synchronized(lock) {
             if (!listenerClosed) server = opened
@@ -187,6 +198,10 @@ class RfcommServer(
 
         /** RFCOMM 一帧通常不到 1 KB，读缓冲给足。 */
         const val READ_BUFFER_BYTES = 4096
+
+        /** 开监听瞬时失败（通道/SDP 记录未释放）的重试次数与基础退避：1s、2s、3s、4s。 */
+        const val LISTEN_RETRY_LIMIT = 4
+        const val LISTEN_RETRY_DELAY_MS = 1_000L
 
         const val PEER_CLOSED_TEXT = "read return: -1"
 

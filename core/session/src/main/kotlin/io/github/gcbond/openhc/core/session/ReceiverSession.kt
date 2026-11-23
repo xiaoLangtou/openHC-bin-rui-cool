@@ -551,6 +551,13 @@ class ReceiverSession internal constructor(
         handleDmsdp(call(SessionLayer.DMSDP) { layer.feed(channel, data, offset, length, now) }, out)
     }
 
+    /** 主动给手机发一条设备数据（经 DMSDP 层加密打包，写到设备控制连接）。要在协议线程上调用（SocketRunner.submit）。 */
+    fun sendDeviceData(module: Long, type: Int, data: ByteArray): List<SessionOutput> {
+        val out = Out()
+        handleDmsdp(dmsdp?.sendDeviceData(module, type, data) ?: emptyList(), out)
+        return out.list
+    }
+
     private fun handleDmsdp(outputs: List<DmsdpOutput>, out: Out) {
         for (o in outputs) {
             if (ended) return
@@ -575,6 +582,8 @@ class ReceiverSession internal constructor(
                 is DmsdpEvent.EncryptionEnabled -> out.add(SessionEvent.DeviceSessionReady(o.keepAliveMode))
                 is DmsdpEvent.KeepAliveTimeout -> finish(EndReason.KeepAliveTimeout(o.mode), out)
                 is DmsdpEvent.DisplayPortAnnounced -> beginHiSight(o.port, out)
+                // 车辆磁贴（"car"）点击：结束整个连接，界面的状态监听会自动回车机桌面（backToLauncherWhenEnded）。
+                is DmsdpEvent.CarDesktopRequested -> finish(EndReason.CarDesktopRequested(o.detail), out)
                 is DmsdpEvent -> diag(SessionLayer.DMSDP, o.toString(), out)
             }
         }

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system">
 
     <!-- 和手机之间的 TCP/UDP（经 USB 网卡）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -73,6 +74,13 @@
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
+
+    <!--
+        车机 GOC 定制蓝牙栈在 GattService 广播入口调 enforceAdminPermission()（查 BLUETOOTH_PRIVILEGED），
+        没有该权限的三方应用请求被静默丢弃（无日志、无回调）。本应用用 platform 密钥签名并共享
+        android.uid.system（与官方 CarLink 同款打包方式），此 signature 级权限即可自动授予，广播放行。
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
 
     <application
         android:name=".OpenHcApp"

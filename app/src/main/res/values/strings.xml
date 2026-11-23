@@ -93,6 +93,7 @@
     <string name="end_session_not_trusted">手机要求免码回连，但车机上没有它的配对记录。请在手机上删除这台车机，再重新连接配对。</string>
     <string name="end_session_auth_failed">认证失败（%1$s）</string>
     <string name="end_session_keepalive">手机没有响应（保活超时）</string>
+    <string name="end_car_desktop">手机请求回车机桌面（车辆磁贴）</string>
     <string name="end_projection_teardown">手机结束了投屏</string>
     <string name="end_projection_control_closed">手机关闭了投屏控制连接</string>
     <string name="end_projection_video_closed">视频连接结束</string>

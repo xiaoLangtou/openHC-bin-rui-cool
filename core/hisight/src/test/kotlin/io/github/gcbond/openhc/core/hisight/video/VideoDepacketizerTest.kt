@@ -19,6 +19,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -79,7 +80,12 @@ class VideoDepacketizerTest {
                 }
                 assertEquals(expectedFrames.size, frames.size, "$label：帧数")
                 for ((expected, actual) in expectedFrames.zip(frames)) compareFrame(expected, actual, label)
-                if (referenceErrorAt < 0 && errorAt < 0) assertEquals(case.long("packets"), video.packetsReceived, label)
+                if (referenceErrorAt < 0 && errorAt < 0) {
+                    assertEquals(case.long("packets"), video.packetsReceived, label)
+                    // 容错语义（issue #3）：丢包类用例断言重对齐与丢弃包计数。
+                    (case["resyncs"] as? JsonPrimitive)?.longOrNull?.let { assertEquals(it, video.resyncs, label) }
+                    (case["dropped"] as? JsonPrimitive)?.longOrNull?.let { assertEquals(it, video.packetsDropped, label) }
+                }
             }
         }
     }
@@ -158,5 +164,72 @@ class VideoDepacketizerTest {
         unit.pts90k = 90_000
         assertEquals(1_000_000L, unit.presentationTimeUs)
         assertContentEquals(unit.data.copyOfRange(1, 14), unit.copyBytes())
+    }
+
+    // ---------------------------------------------------------------- 丢包容错（issue #3 Bug 1）
+
+    private val key = ByteArray(16) { it.toByte() }
+
+    /** 构造一个单包帧（marker 置位）的 RTP 流：seq 从 [seq] 开始，ts 用 [ts]。 */
+    private fun singlePacketFrame(seq: Int, ts: Int = 0x0BB8): ByteArray {
+        val es = byteArrayOf(0, 0, 0, 1, 0x65, 1, 2, 3, 4)
+        val sealed = AesCtr(key).seal(es, FixedRandom(listOf(ByteArray(16) { (0xA0 + it).toByte() })))
+        val pes = byteArrayOf(0, 0, 1, 0xE0.toByte(), 0, 0, 0x84.toByte(), 0x80.toByte(), 5, 0x21, 0, 1, 0, 1) + sealed
+        val rtp = byteArrayOf(
+            0x80.toByte(), (96 or 0x80).toByte(), (seq ushr 8).toByte(), seq.toByte(),
+            (ts ushr 24).toByte(), (ts ushr 16).toByte(), (ts ushr 8).toByte(), ts.toByte(), 1, 2, 3, 4,
+        ) + pes
+        val out = java.io.ByteArrayOutputStream()
+        out.write(byteArrayOf((rtp.size ushr 24).toByte(), (rtp.size ushr 16).toByte(), (rtp.size ushr 8).toByte(), rtp.size.toByte()))
+        out.write(rtp)
+        return out.toByteArray()
+    }
+
+    private fun feedAll(video: VideoDepacketizer, vararg chunks: ByteArray) {
+        for (chunk in chunks) video.feed(chunk, 0, chunk.size)
+    }
+
+    @Test
+    fun sequenceGapDropsOneFrameAndResyncs() {
+        val frames = ArrayList<Frame>()
+        val video = VideoDepacketizer(key, collector(frames))
+        feedAll(video, singlePacketFrame(100), singlePacketFrame(105), singlePacketFrame(106))
+        video.finish()
+        // 中间跳号的那帧被丢弃，会话不终结，后续帧正常交付。
+        assertEquals(2L, video.framesDelivered)
+        assertEquals(1L, video.resyncs)
+        assertEquals(1L, video.packetsDropped)
+        assertEquals(listOf(100, 100), listOf(frames[0].first, frames[0].last))
+        assertEquals(listOf(106, 106), listOf(frames[1].first, frames[1].last))
+    }
+
+    @Test
+    fun duplicatePacketDropsOneFrameAndResyncs() {
+        val frames = ArrayList<Frame>()
+        val video = VideoDepacketizer(key, collector(frames))
+        feedAll(video, singlePacketFrame(100), singlePacketFrame(100), singlePacketFrame(101))
+        video.finish()
+        assertEquals(2L, video.framesDelivered)
+        assertEquals(1L, video.resyncs)
+    }
+
+    @Test
+    fun standardWrapAt65535IsContiguous() {
+        val frames = ArrayList<Frame>()
+        val video = VideoDepacketizer(key, collector(frames))
+        feedAll(video, singlePacketFrame(65535), singlePacketFrame(0))
+        video.finish()
+        assertEquals(2L, video.framesDelivered)
+        assertEquals(0L, video.resyncs)
+    }
+
+    @Test
+    fun huaweiWrapAt64999IsStillContiguous() {
+        val frames = ArrayList<Frame>()
+        val video = VideoDepacketizer(key, collector(frames))
+        feedAll(video, singlePacketFrame(64999), singlePacketFrame(0))
+        video.finish()
+        assertEquals(2L, video.framesDelivered)
+        assertEquals(0L, video.resyncs)
     }
 }

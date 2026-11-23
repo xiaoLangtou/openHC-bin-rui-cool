@@ -294,7 +294,8 @@ class ControlSessionTest {
         assertEquals(2, assertIs<DmsdpEvent.DisconnectTypeNotified>(out[1]).disconnectType)
         assertEquals(17, assertIs<DmsdpEvent.UnhandledDeviceData>(out[2]).type)
         assertEquals(40078, assertIs<DmsdpEvent.DisplayPortAnnounced>(out[3]).port)
-        assertEquals(546, assertIs<DmsdpEvent.UnhandledDeviceData>(out[4]).type)
+        // module 1 / type 546 是 JSON，现在解析成结构化管理消息（见 ManagementMessages）。
+        assertEquals(546, assertIs<DmsdpEvent.ManagementParsed>(out[4]).type)
 
         val truncated = phone.record(3, -1, hex("e900000002")).copyOf(12)
         assertFailsWith<MalformedMessageException> { session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(truncated)) }

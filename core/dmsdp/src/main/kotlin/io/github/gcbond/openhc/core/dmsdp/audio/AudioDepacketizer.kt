@@ -51,11 +51,15 @@ internal class AudioDepacketizer(
     private var leadingSkipped = 0
     private var oddPcmNoted = false
 
-    /** 去掉过 12 字节头的 PCM 包数、带不上头（原样交出）的 PCM 包数。 */
+    /** 去掉过 12 字节头的音频包数（PCM / AAC 分开记）、带不上头（原样交出）的包数。 */
     var pcmHeadersStripped = 0L
+    var aacHeadersStripped = 0L
+        private set
     private var pcmTrailerNoted = false
         private set
     var pcmWithoutHeader = 0L
+        private set
+    var aacWithoutHeader = 0L
         private set
 
     private val head = ByteArray(HEAD_BYTES)
@@ -304,15 +308,15 @@ internal class AudioDepacketizer(
             from = 0
         }
         if (payloadCodec == AudioCodec.PCM) {
-            val declared = PcmPacketHeader.dataLength(payload, from, length)
+            val declared = AudioPacketHeader.dataLength(payload, from, length, adts = false)
             if (declared >= 0) {
                 onPcmHeader(payload, from)
-                val trailer = length - PcmPacketHeader.SIZE - declared
+                val trailer = length - AudioPacketHeader.SIZE - declared
                 if (trailer > 0 && !pcmTrailerNoted) {
                     pcmTrailerNoted = true
                     note("PCM 包尾比头里声明的多 $trailer 字节（序号 ${rtp.sequence}，载荷 $length 字节），只放声明的 $declared 字节")
                 }
-                from += PcmPacketHeader.SIZE
+                from += AudioPacketHeader.SIZE
                 length = declared
             } else {
                 pcmWithoutHeader++
@@ -325,6 +329,20 @@ internal class AudioDepacketizer(
             if (length % frameBytes != 0 && !oddPcmNoted) {
                 oddPcmNoted = true
                 note("PCM 载荷 $length 字节不是整帧（$frameBytes 字节）的倍数：播放时每包的尾巴会被丢掉，可能错位成噪声")
+            }
+        } else if (payloadCodec == AudioCodec.AAC) {
+            // 手机在 ADTS 前也垫了同一个 12 字节头（第 10～11 字节声明 ADTS 整帧长）：不剥掉的话解码器收到
+            // 「头 + ADTS」的混合数据解不出 PCM，音乐和导航就都没声（实测 HarmonyOS NEXT 15.2.0.255）。
+            val declared = AudioPacketHeader.dataLength(payload, from, length, adts = true)
+            if (declared >= 0) {
+                onAacHeader(payload, from)
+                from += AudioPacketHeader.SIZE
+                length = declared
+            } else {
+                aacWithoutHeader++
+                if (aacHeadersStripped > 0 && aacWithoutHeader == 1L) {
+                    note("有 AAC 包对不上 12 字节头的规则，这样的包原样放（序号 ${rtp.sequence}，$length 字节）")
+                }
             }
         }
         packet.sequence = rtp.sequence
@@ -375,7 +393,20 @@ internal class AudioDepacketizer(
         }
         val index = packets + 1
         if (pcmHeadersStripped <= HEADER_SAMPLES || index % HEADER_SAMPLE_EVERY == 0L) {
-            note("PCM 头（第 $index 包，序号 ${rtp.sequence}）：${payload.copyOfRange(from, from + PcmPacketHeader.SIZE).toHex()}")
+            note("PCM 头（第 $index 包，序号 ${rtp.sequence}）：${payload.copyOfRange(from, from + AudioPacketHeader.SIZE).toHex()}")
+        }
+    }
+
+    /** AAC 的 12 字节头：同样只记一次规则说明，头部照 PCM 的方式抽样。 */
+    private fun onAacHeader(payload: ByteArray, from: Int) {
+        aacHeadersStripped++
+        if (aacHeadersStripped == 1L) {
+            conclusion += "，AAC 载荷去掉 12 字节头"
+            note("AAC 载荷前有 12 字节头（第 10～11 字节按大端是其后的 ADTS 整帧长度，包尾可能多几个字节），去掉头再送解码器、只放声明的长度；对不上的包原样放")
+        }
+        val index = packets + 1
+        if (aacHeadersStripped <= HEADER_SAMPLES || index % HEADER_SAMPLE_EVERY == 0L) {
+            note("AAC 头（第 $index 包，序号 ${rtp.sequence}）：${payload.copyOfRange(from, from + AudioPacketHeader.SIZE).toHex()}")
         }
     }
 
@@ -587,26 +618,32 @@ internal enum class FrameKind(val label: String, val headerBytes: Int) {
 }
 
 /**
- * PCM 载荷前面的 12 字节头：实测形如 `00 0N ‖ 8 字节 ‖ 04 00`（N 为 1～3），最后两个字节按大端是其后 PCM 的字节数。
+ * 音频载荷（PCM / AAC 都实测有）前面的 12 字节头：形如 `00 0N ‖ 8 字节 ‖ BE16 长度`（N 为 1～3），
+ * 最后两个字节按大端是其后音频帧的字节数——PCM 是裸采样数据，AAC 是含 ADTS 头的整帧。
  * 手机分流（多音频总线）时包尾还会多出几个字节（实测 4 字节），所以只放头里声明的那段，头和尾都不放。
  * 其余字段的含义没有确认，不解释。
  */
-internal object PcmPacketHeader {
+internal object AudioPacketHeader {
     const val SIZE = 12
 
     /** 头后实际字节数比声明多出的上限：多出更多就不当成带头的包。 */
     const val MAX_TRAILER = 16
 
     /**
-     * 带头时返回头里声明的 PCM 字节数，不带头返回 -1。判据：第 1 字节为 0、第 2 字节为 1～3，
-     * 第 10～11 字节（大端）是正的偶数，不超过头后剩下的长度，且剩下的比它多出不到 [MAX_TRAILER] 字节。
+     * 带头时返回头里声明的音频字节数，不带头返回 -1。判据：第 1 字节为 0、第 2 字节为 1～3，
+     * 第 10～11 字节（大端）是正数，不超过头后剩下的长度，且剩下的比它多出不到 [MAX_TRAILER] 字节。
+     * PCM 还要求声明的长度是偶数（16 位采样的整帧）；AAC 额外要求头后紧跟 ADTS，
+     * 且声明的长度正好是那个 ADTS 帧长（否则裸 AAC 数据碰巧长这样会被误剥）。
      */
-    fun dataLength(data: ByteArray, offset: Int, length: Int): Int {
+    fun dataLength(data: ByteArray, offset: Int, length: Int, adts: Boolean): Int {
         if (length <= SIZE) return -1
         if (data[offset].toInt() != 0 || (data[offset + 1].toInt() and 0xFF) !in 1..3) return -1
         val declared = be16(data, offset + SIZE - 2)
         val rest = length - SIZE
-        return if (declared > 0 && declared % 2 == 0 && declared <= rest && rest - declared <= MAX_TRAILER) declared else -1
+        if (declared <= 0 || declared > rest || rest - declared > MAX_TRAILER) return -1
+        return if (adts) {
+            Adts.frameLength(data, offset + SIZE, rest).takeIf { it == declared } ?: -1
+        } else if (declared % 2 == 0) declared else -1
     }
 }
 
@@ -615,14 +652,17 @@ internal object PcmPacketHeader {
  * 头长（7 或带 CRC 的 9）≤ 帧长 ≤ 数据长度。帧长不要求正好等于数据长度：尾部多几个字节也算。
  */
 internal object Adts {
-    fun looksLike(data: ByteArray, offset: Int, length: Int): Boolean {
-        if (length < HEADER) return false
+    fun looksLike(data: ByteArray, offset: Int, length: Int): Boolean = frameLength(data, offset, length) >= 0
+
+    /** 是 ADTS 就返回头里声明的整帧长（含头），不是返回 -1。 */
+    fun frameLength(data: ByteArray, offset: Int, length: Int): Int {
+        if (length < HEADER) return -1
         fun u8(i: Int) = data[offset + i].toInt() and 0xFF
-        if (u8(0) != 0xFF || u8(1) and 0xF6 != 0xF0) return false
+        if (u8(0) != 0xFF || u8(1) and 0xF6 != 0xF0) return -1
         val header = if (u8(1) and 0x01 != 0) HEADER else HEADER_WITH_CRC
-        if ((u8(2) ushr 2) and 0x0F > MAX_SAMPLE_RATE_INDEX) return false
+        if ((u8(2) ushr 2) and 0x0F > MAX_SAMPLE_RATE_INDEX) return -1
         val frameLength = ((u8(3) and 0x03) shl 11) or (u8(4) shl 3) or (u8(5) ushr 5)
-        return frameLength in header..length
+        return if (frameLength in header..length) frameLength else -1
     }
 
     private const val HEADER = 7

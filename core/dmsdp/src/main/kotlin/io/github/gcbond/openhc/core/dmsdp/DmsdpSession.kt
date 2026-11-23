@@ -533,6 +533,19 @@ class DmsdpSession(
                 )
                 if (!handled) out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
             }
+            // 管理通道的 JSON 消息（500 能力查询、533 应用状态等）：解析成结构化事件，方便诊断和接功能；
+            // 不是 JSON 的照旧走 UnhandledDeviceData。type 17 不认（上面文件分享分支管，或没开分享时保持旧路径）。
+            record.module == MODULE_MANAGEMENT && ManagementMessages.accepts(record.type) -> {
+                when (val parsed = ManagementMessages.parse(record.type, record.data)) {
+                    null -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
+                    else ->
+                        if (parsed.carDesktop) {
+                            out.event(DmsdpEvent.CarDesktopRequested(parsed.summary))
+                        } else {
+                            out.event(DmsdpEvent.ManagementParsed(parsed.type, parsed.summary))
+                        }
+                }
+            }
             else -> out.event(DmsdpEvent.UnhandledDeviceData(record.module, record.type, record.data))
         }
     }

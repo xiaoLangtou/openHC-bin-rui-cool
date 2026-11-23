@@ -230,7 +230,7 @@ class RealLayersFlowTest {
         val video = negotiated.filterIsInstance<SessionAction.Connect>().single()
         assertEquals(SessionChannel.VIDEO, video.channel, "SETUP 之后先只连视频")
         assertEquals(setup.getValue("serverPort").jsonPrimitive.int, video.port)
-        assertEquals("VideoNegotiated(640x480@30)", negotiated.filterIsInstance<SessionEvent.VideoNegotiated>().single().toString())
+        assertEquals("VideoNegotiated(640x480@30，触摸关，按键关)", negotiated.filterIsInstance<SessionEvent.VideoNegotiated>().single().toString())
 
         val remote = assertIs<SessionAction.Connect>(run(session.onConnected(video.id, now)).single())
         assertEquals(SessionChannel.REMOTE_CONTROL, remote.channel)

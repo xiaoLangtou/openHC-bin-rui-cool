@@ -53,6 +53,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 /**
@@ -107,6 +108,9 @@ class ConnectionController(context: Context) {
 
     /** 每次加一，投屏视图就清一次本地触摸状态（发送端报告状态对不上、或回控刚就绪时）。 */
     val touchResets: StateFlow<Int> = mutableTouchResets.asStateFlow()
+
+    /** 触摸被丢弃的原因只警告一次，之后同样的丢弃不再刷日志。 */
+    private val inputDropNoted = AtomicBoolean(false)
 
     /** 前台服务应该在前台：用户要求连接期间为 true。 */
     @Volatile
@@ -189,8 +193,18 @@ class ConnectionController(context: Context) {
      * 任务里抛出的异常会让整个执行器退出。
      */
     fun sendInput(input: HiSightInput) {
-        val current = inputTarget ?: return
-        if (!current.inputReady) return
+        val current = inputTarget ?: run {
+            if (inputDropNoted.compareAndSet(false, true)) {
+                Log.w(TAG, "收到触摸但还没有可回控的连接，丢弃（协商结果见 VideoNegotiated）")
+            }
+            return
+        }
+        if (!current.inputReady) {
+            if (inputDropNoted.compareAndSet(false, true)) {
+                Log.w(TAG, "收到触摸但这条连接的回控还没就绪（inputReady=false，多半是手机没选触摸事件），丢弃")
+            }
+            return
+        }
         current.runner.submit {
             try {
                 current.session.sendInput(input)

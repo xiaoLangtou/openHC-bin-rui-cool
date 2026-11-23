@@ -10,7 +10,7 @@ import io.github.gcbond.openhc.connection.VideoClarity
 class ClarityPreferences(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
-    /** 默认「标准」：不声明码率。 */
+    /** 未设置时按 [VideoClarity] 的默认档（高）。 */
     var clarity: VideoClarity
         get() = VideoClarity.parse(prefs.getString(KEY_CLARITY, null))
         set(value) = prefs.edit { putString(KEY_CLARITY, value.key) }

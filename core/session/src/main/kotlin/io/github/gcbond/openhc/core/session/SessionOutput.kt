@@ -120,7 +120,7 @@ class VideoParameters(
     /** 本次可以发成文输入（实验）。 */
     val textInput: Boolean,
 ) {
-    override fun toString() = "${width}x$height@$fps"
+    override fun toString() = "${width}x$height@$fps，触摸${if (touchInput) "开" else "关"}，按键${if (keyInput) "开" else "关"}${if (textInput) "，成文输入开" else ""}"
 }
 
 /**
@@ -228,6 +228,11 @@ sealed class EndReason {
 
     class KeepAliveTimeout(val mode: KeepAliveMode) : EndReason() {
         override fun toString() = "设备会话保活超时（$mode）"
+    }
+
+    /** 手机要求退出投屏回车机桌面（HiCar 应用列表的车辆磁贴，识别规则见 dmsdp 的 ManagementMessages）。 */
+    class CarDesktopRequested(val detail: String) : EndReason() {
+        override fun toString() = "手机请求回车机桌面（$detail）"
     }
 
     /** 投屏层结束了会话（手机要求结束、视频或回控连接被关等），整个连接随之结束。 */

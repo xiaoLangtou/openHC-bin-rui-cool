@@ -13,8 +13,10 @@ import io.github.gcbond.openhc.core.hisight.crypto.AesCtr
  * 计数跳过；RTP 载荷从调用方的数组直接拷进可复用的 PES 缓冲（每个字节只拷这一次）；marker 到达后
  * 把 ES 解密到另一块可复用的输出缓冲，经 [AccessUnit] 交出。两块缓冲按需倍增、不缩小，上限 10MiB。
  *
- * 丢包、重复包、同一 PES 内时间戳变化、连接中 SSRC 变化都直接判失败，失败后不能继续使用。
- * 序号在 64999 之后回到 0（不是 65535）。
+ * 容错策略（见上游 issue #3 的偶发断连）：丢包、重复包、乱序、SSRC 变化、同一 PES 内时间戳变化
+ * 都按「丢掉半截 PES、丢弃载荷直到下一个 marker、重新对齐」处理——最多丢一帧，绝不终结会话。
+ * 结构性错误（版本/包长/PES 头/缓冲超限）仍然判失败，失败后不能继续使用。
+ * 序号回绕按模 65536 计算，同时兼容华为的 64999→0 与标准 RTP 的 65535→0。
  */
 internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: AccessUnitSink) {
     private val cipher = AesCtr(sessionKey)
@@ -40,6 +42,9 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
     private var pesTimestamp = 0L
     private var pesFirstSequence = 0
 
+    /** 丢包重对齐中：丢弃载荷直到下一个 marker（该 marker 属于已损坏的帧，同样丢弃）。 */
+    private var discardUntilMarker = false
+
     private var pes = ByteArray(INITIAL_BUFFER)
     private var pesLength = 0
     private var es = ByteArray(INITIAL_BUFFER)
@@ -51,6 +56,13 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
     var packetsReceived = 0L
         private set
     var bytesReceived = 0L
+        private set
+
+    /** 丢包重对齐次数（每次最多丢一帧；频繁增长说明链路质量差，不影响会话存活）。 */
+    var resyncs = 0L
+        private set
+    /** 因重对齐丢弃的 RTP 包总数。 */
+    var packetsDropped = 0L
         private set
 
     fun feed(data: ByteArray, offset: Int, length: Int) {
@@ -122,16 +134,24 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
                         if (skipRemaining > 0) state = STATE_SKIP_EXTENSION else beginPayload()
                     }
                 }
-                STATE_PAYLOAD -> {
+                STATE_PAYLOAD, STATE_DISCARD_PAYLOAD -> {
                     val n = minOf(payloadRemaining, to - pos)
-                    System.arraycopy(data, pos, pes, pesLength, n)
-                    pesLength += n
+                    if (state == STATE_PAYLOAD) {
+                        System.arraycopy(data, pos, pes, pesLength, n)
+                        pesLength += n
+                    }
                     pos += n
                     payloadRemaining -= n
                     if (payloadRemaining == 0) {
-                        packetsReceived++
+                        if (state == STATE_PAYLOAD) packetsReceived++ else packetsDropped++
                         state = STATE_LENGTH
-                        if (marker) deliver()
+                        if (marker) {
+                            if (discardUntilMarker) {
+                                // 损坏帧的收尾包也丢弃，下一个包从干净的 PES 头开始。
+                                discardUntilMarker = false
+                                pesLength = 0
+                            } else deliver()
+                        }
                     }
                 }
             }
@@ -168,22 +188,36 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
         }
     }
 
-    /** RTP 头读完：先做连续性检查，再开始把载荷拷进 PES。 */
+    /**
+     * RTP 头读完：连续性检查不通过就进入丢弃重对齐（不终结会话），通过则把载荷拷进 PES。
+     * 序号按模 65536 判断连续，天然兼容标准 65535→0 回绕；华为的 64999→0 回绕单独特判。
+     */
     private fun beginPayload() {
         val payloadLength = packetLength - headerLength
-        if (lastSequence >= 0) {
-            val expected = if (lastSequence == LAST_SEQUENCE) 0 else lastSequence + 1
-            if (sequence != expected) throw MalformedMessageException("视频 RTP 序号不连续（丢包或重复）")
+        val delta = (sequence - lastSequence) and 0xFFFF
+        val contiguous = delta == 1 || (lastSequence == HUAWEI_LAST_SEQUENCE && sequence == 0)
+        val resync = !discardUntilMarker && lastSequence >= 0 && (
+            !contiguous ||                                      // 丢包、重复、乱序
+                (streamSsrc >= 0 && ssrc != streamSsrc) ||      // SSRC 变化
+                (pesLength > 0 && timestamp != pesTimestamp)    // 同一 PES 内时间戳变化
+            )
+        if (resync) {
+            resyncs++
+            discardUntilMarker = true
+            pesLength = 0
         }
-        if (streamSsrc >= 0 && ssrc != streamSsrc) throw MalformedMessageException("视频 RTP 的 SSRC 在连接中改变")
-        if (pesLength > 0 && timestamp != pesTimestamp) throw MalformedMessageException("同一 PES 内 RTP 时间戳改变")
-        if (pesLength.toLong() + payloadLength > MAX_PES) throw MalformedMessageException("未完成的 PES 超过 10MiB")
         if (pesLength == 0) {
             pesFirstSequence = sequence
             pesTimestamp = timestamp
         }
         lastSequence = sequence
         streamSsrc = ssrc
+        if (discardUntilMarker) {
+            payloadRemaining = payloadLength
+            state = STATE_DISCARD_PAYLOAD
+            return
+        }
+        if (pesLength.toLong() + payloadLength > MAX_PES) throw MalformedMessageException("未完成的 PES 超过 10MiB")
         if (pes.size < pesLength + payloadLength) pes = grow(pes, pesLength, pesLength + payloadLength)
         payloadRemaining = payloadLength
         state = STATE_PAYLOAD
@@ -255,7 +289,8 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
         /** 本机资源限制（不是协议字段）：未完成的 PES 最多 10MiB。 */
         const val MAX_PES = MAX_PACKET
         private const val PAYLOAD_TYPE = 96
-        private const val LAST_SEQUENCE = 64999
+        /** 华为手机 RTP 序号回绕点（不是标准 65535）。 */
+        const val HUAWEI_LAST_SEQUENCE = 64999
         private const val INITIAL_BUFFER = 256 * 1024
 
         private const val STATE_LENGTH = 0
@@ -264,5 +299,6 @@ internal class VideoDepacketizer(sessionKey: ByteArray, private val sink: Access
         private const val STATE_EXTENSION_HEADER = 3
         private const val STATE_SKIP_EXTENSION = 4
         private const val STATE_PAYLOAD = 5
+        private const val STATE_DISCARD_PAYLOAD = 6
     }
 }

@@ -275,14 +275,19 @@ class HiSightReceiver(
         }
         if (message.body.any { it < 0 }) throw MalformedMessageException("加密选择正文含非 ASCII 字节")
         val text = String(message.body, Charsets.US_ASCII)
-        if (!text.endsWith("\r\n") || countCrlf(text) != 1) throw MalformedMessageException("加密选择必须是单独一行")
-        val line = text.substring(0, text.length - 2)
-        val colon = line.indexOf(':')
-        if (colon < 0 || line.substring(0, colon) != "encrypt_description") {
-            throw MalformedMessageException("加密选择缺少 encrypt_description")
+        // 容错（见 issue #4/#10/#11）：部分手机只发 LF、或正文末尾多一个空行。
+        // 14.2.0.355 实测还会在正文里夹带别的参数行（曾致「加密选择必须是单独一行」断连）。
+        // 因此按行拆、忽略空行，从里面挑唯一一行 encrypt_description；夹带的其他行不算协议破坏。
+        val lines = text.split("\r\n", "\n").map { it.trim('\r', ' ', '\t') }.filter { it.isNotEmpty() }
+        val candidates = lines.filter {
+            val colon = it.indexOf(':')
+            colon >= 0 && ParameterText.trimSpaceTab(it.substring(0, colon)) == "encrypt_description"
         }
+        if (candidates.isEmpty()) throw MalformedMessageException("加密选择缺少 encrypt_description")
+        if (candidates.size > 1) throw MalformedMessageException("加密选择出现多行 encrypt_description")
+        val line = candidates[0]
         val fields = HashMap<String, String>()
-        for (item in ParameterText.trimSpaceTab(line.substring(colon + 1)).split(";")) {
+        for (item in ParameterText.trimSpaceTab(line.substring(line.indexOf(':') + 1)).split(";")) {
             val eq = item.indexOf('=')
             val name = if (eq >= 0) item.substring(0, eq) else item
             if (eq < 0 || name in fields) throw MalformedMessageException("加密选择字段缺失或重复")
@@ -424,16 +429,6 @@ class HiSightReceiver(
     private fun nextCseq(): Int = ++lastCseq
 
     private fun date(wallClockMillis: Long) = RtspTemplates.date(wallClockMillis, timeZone)
-
-    private fun countCrlf(text: String): Int {
-        var count = 0
-        var i = text.indexOf("\r\n")
-        while (i >= 0) {
-            count++
-            i = text.indexOf("\r\n", i + 2)
-        }
-        return count
-    }
 
     private fun checkRange(data: ByteArray, offset: Int, length: Int) {
         require(offset >= 0 && length >= 0 && offset + length <= data.size) { "范围非法" }

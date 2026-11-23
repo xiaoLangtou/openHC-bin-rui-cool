@@ -28,6 +28,8 @@ internal class DesktopOptions(
     val videoOut: Path,
     val carInfoOut: Path?,
     val durationSeconds: Long?,
+    /** 声明手机请求的实验服务（1/3/5/9，空属性），观察数据通道（媒体卡片 515 等）是否建立。 */
+    val extraServices: Boolean,
 ) {
     companion object {
         val USAGE = """
@@ -53,12 +55,14 @@ internal class DesktopOptions(
             |  --bind-ip <IPv4>         控制监听绑定的地址，默认 0.0.0.0（只接受连到 --ip 的连接）
             |  --local-filter on|off    通配监听时是否只接受连到 --ip 的连接，默认 on；筛选误判时可以关掉
             |  --duration <秒>          运行这么久后自动结束，默认一直运行到会话结束或 Ctrl-C
+            |  --extra-services on|off  声明手机请求的实验服务（1/3/5/9），观察媒体卡片数据通道是否建立，默认 off
             |  -h, --help               显示本说明
             """.trimMargin()
 
         private val FLAGS = setOf(
             "identity", "trust-dir", "ip", "port", "bt", "video-out", "carinfo-out",
             "width", "height", "fps", "dpi", "density", "gop", "bitrate", "bind-ip", "local-filter", "duration",
+            "extra-services",
         )
 
         /** 支持 `--名字 值` 和 `--名字=值` 两种写法。 */
@@ -129,6 +133,11 @@ internal class DesktopOptions(
                 videoOut = path("video-out")!!,
                 carInfoOut = path("carinfo-out"),
                 durationSeconds = duration,
+                extraServices = when (val raw = values["extra-services"] ?: "off") {
+                    "on" -> true
+                    "off" -> false
+                    else -> throw UsageException("--extra-services 只能是 on 或 off：$raw")
+                },
             )
         }
     }

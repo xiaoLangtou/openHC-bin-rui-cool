@@ -307,6 +307,47 @@ class AudioDepacketizerTest {
         }
     }
 
+    /** 手机在 ADTS 前也垫了 PCM 同款的 12 字节头（头里声明 ADTS 整帧长，包尾多 4 字节）：剥掉头，只交 ADTS 帧。 */
+    @Test
+    fun aacPayloadWithTwelveByteHeaderIsStripped() {
+        val random = Random(21)
+        val units = (0 until 4).map { AudioSynthetic.adts(ByteArray(300).also { random.nextBytes(it) }) }
+        var bytes = ByteArray(0)
+        units.forEachIndexed { i, unit ->
+            val payload = AudioSynthetic.pcmHeader(i.toLong(), unit.size) + unit + ByteArray(4)
+            bytes += AudioSynthetic.frame(FrameKind.LENGTH32, AudioSynthetic.rtp(i, payload))
+        }
+        val recorder = Recorder()
+        val depacketizer = depacketizer(recorder, AudioSynthetic.stream(codec = AudioCodec.AAC))
+        depacketizer.feedInPieces(bytes)
+        depacketizer.finish()
+        val framing = assertNotNull(recorder.framing)
+        assertTrue(framing.playable)
+        assertEquals(AudioCodec.AAC, framing.payloadCodec)
+        assertEquals(units.size.toLong(), depacketizer.aacHeadersStripped)
+        assertEquals(0, depacketizer.aacWithoutHeader)
+        units.forEachIndexed { i, unit -> assertContentEquals(unit, recorder.payloads[i]) }
+        assertTrue(recorder.notes.any { "AAC 载荷前有 12 字节头" in it }, recorder.notes.toString())
+    }
+
+    /** 头里声明的长度对不上头后的 ADTS 帧长：不算带头的包，整个载荷原样交出（宁可交垃圾也不能错剥）。 */
+    @Test
+    fun aacPayloadWithMismatchingHeaderLengthPassesThrough() {
+        val random = Random(22)
+        val unit = AudioSynthetic.adts(ByteArray(300).also { random.nextBytes(it) })
+        val payload = AudioSynthetic.pcmHeader(0, unit.size - 1) + unit + ByteArray(6)
+        var bytes = ByteArray(0)
+        repeat(4) { i -> bytes += AudioSynthetic.frame(FrameKind.LENGTH32, AudioSynthetic.rtp(i, payload)) }
+        val recorder = Recorder()
+        val depacketizer = depacketizer(recorder, AudioSynthetic.stream(codec = AudioCodec.AAC))
+        depacketizer.feedInPieces(bytes)
+        depacketizer.finish()
+        assertEquals(0, depacketizer.aacHeadersStripped)
+        assertEquals(4, depacketizer.aacWithoutHeader)
+        assertEquals(4, recorder.payloads.size)
+        repeat(4) { i -> assertContentEquals(payload, recorder.payloads[i]) }
+    }
+
     /** 按载荷判断实际编码，不看车机要的：要 PCM 来了 ADTS 走 AAC，要 AAC 来了 PCM 走 PCM。 */
     @Test
     fun actualCodecFollowsThePayloadNotTheRequest() {

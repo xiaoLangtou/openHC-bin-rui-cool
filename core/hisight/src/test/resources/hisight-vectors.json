@@ -9834,95 +9834,118 @@
    "stream": "0000004090e0000500015f901234567800010000000001e0002a848005210005bf2196999c9fa2a5a8abaeb1b4b7babdc0c394f2d59c055deb0484ec741315a6b1026ff0"
   },
   {
-   "finishError": null,
+   "finishError": false,
    "frames": [],
    "name": "loss",
    "packets": 1,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       36,
       44
      ]
     },
     {
-     "errorAt": 0,
+     "errorAt": -1,
      "split": [
       80
      ]
     }
    ],
-   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000c00015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1"
+   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000c00015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1",
+   "resyncs": 1,
+   "dropped": 1
   },
   {
-   "finishError": null,
+   "finishError": false,
    "frames": [],
    "name": "duplicate",
    "packets": 1,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       36,
       44
      ]
     },
     {
-     "errorAt": 0,
+     "errorAt": -1,
      "split": [
       80
      ]
     }
    ],
-   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000a00015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1"
+   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000a00015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1",
+   "resyncs": 1,
+   "dropped": 1
   },
   {
-   "finishError": null,
-   "frames": [],
+   "finishError": false,
+   "frames": [
+    {
+     "es": "000000016742001e00000168ce0000016588",
+     "esLength": 18,
+     "esSha256": "03bd25041854949e728fd9a8dba3748a145b6d8b5954901dbedc2af07903e6a1",
+     "nal": [
+      7,
+      8,
+      5
+     ],
+     "pts": 90000,
+     "seqEnd": 0,
+     "seqStart": 65535,
+     "ts": 90000
+    }
+   ],
    "name": "wrap-65536",
-   "packets": 1,
+   "packets": 2,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       36,
       44
      ]
     },
     {
-     "errorAt": 0,
+     "errorAt": -1,
      "split": [
       80
      ]
     }
    ],
-   "stream": "000000208060ffff00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000000015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1"
+   "stream": "000000208060ffff00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000000015f9012345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1",
+   "resyncs": 0,
+   "dropped": 0
   },
   {
-   "finishError": null,
+   "finishError": false,
    "frames": [],
    "name": "ts-change",
    "packets": 1,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       36,
       44
      ]
     },
     {
-     "errorAt": 0,
+     "errorAt": -1,
      "split": [
       80
      ]
     }
    ],
-   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000b00015f9112345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1"
+   "stream": "000000208060000a00015f9012345678000001e0002a848005210005bf21b3b6b9bcbfc20000002880e0000b00015f9112345678c5c8cbced1d4d7dadde0ac1df2bd686462ce2e429a5d347f5df48bc1",
+   "resyncs": 1,
+   "dropped": 1
   },
   {
-   "finishError": null,
+   "finishError": false,
    "frames": [
     {
      "es": "000000016742001e00000168ce0000016588",
@@ -9943,17 +9966,19 @@
    "packets": 1,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       64,
       64
      ]
     }
    ],
-   "stream": "0000003c80e0000a00015f9012345678000001e0002a848005210005bf21d0d3d6d9dcdfe2e5e8ebeef1f4f7fafd9d812da50c653118374ebcc75fdd5a354d9f0000003c80e0000b00015f9061626364000001e0002a848005210005bf21edf0f3f6f9fcff0205080b0e1114171a1efbc0980bc23f05b51a5b4dc039ccdab0e9"
+   "stream": "0000003c80e0000a00015f9012345678000001e0002a848005210005bf21d0d3d6d9dcdfe2e5e8ebeef1f4f7fafd9d812da50c653118374ebcc75fdd5a354d9f0000003c80e0000b00015f9061626364000001e0002a848005210005bf21edf0f3f6f9fcff0205080b0e1114171a1efbc0980bc23f05b51a5b4dc039ccdab0e9",
+   "resyncs": 1,
+   "dropped": 1
   },
   {
-   "finishError": null,
+   "finishError": false,
    "frames": [
     {
      "es": "000000016742001e00000168ce0000016588",
@@ -9974,14 +9999,16 @@
    "packets": 1,
    "splits": [
     {
-     "errorAt": 1,
+     "errorAt": -1,
      "split": [
       64,
       64
      ]
     }
    ],
-   "stream": "0000003c80e0000a00015f9012345678000001e0002a848005210005bf21d0d3d6d9dcdfe2e5e8ebeef1f4f7fafd9d812da50c653118374ebcc75fdd5a354d9f0000003c80e0000d00015f9012345678000001e0002a848005210005bf21edf0f3f6f9fcff0205080b0e1114171a1efbc0980bc23f05b51a5b4dc039ccdab0e9"
+   "stream": "0000003c80e0000a00015f9012345678000001e0002a848005210005bf21d0d3d6d9dcdfe2e5e8ebeef1f4f7fafd9d812da50c653118374ebcc75fdd5a354d9f0000003c80e0000d00015f9012345678000001e0002a848005210005bf21edf0f3f6f9fcff0205080b0e1114171a1efbc0980bc23f05b51a5b4dc039ccdab0e9",
+   "resyncs": 1,
+   "dropped": 1
   },
   {
    "finishError": null,

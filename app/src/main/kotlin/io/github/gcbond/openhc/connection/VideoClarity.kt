@@ -28,7 +28,9 @@ enum class VideoClarity(
     ;
 
     companion object {
-        val DEFAULT = STANDARD
+        /** 默认「高」：车机是常供电设备，码率高一点不心疼；12 Mbps 在无线热点的 TCP 承载内也稳。
+         *  「标准」（不声明，手机约 9 Mbps）作为兜底档保留。 */
+        val DEFAULT = HIGH
 
         /** 协议允许声明的目标码率下限、上限（bit/s）。 */
         const val MIN_BITRATE = 500_000

@@ -74,6 +74,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: AppSettings
     private var pendingStart: StartKind? = null
 
+    /** 上次控制器回调时有没有投屏在进行（无线或有线任一）。 */
+    private var wasProjecting = false
+
+    /** 投屏状态监听：控制器状态每次变化都会在主线程回调（见两个控制器的 [HostListener]）。 */
+    private val onControllerChanged = WirelessController.HostListener { backToLauncherWhenEnded() }
+    private val wiredListener = ConnectionController.HostListener { backToLauncherWhenEnded() }
+
     private val controller: ConnectionController get() = (application as OpenHcApp).connection
     private val wireless: WirelessController get() = (application as OpenHcApp).wireless
 
@@ -127,6 +134,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = AppSettings(this)
+        // 投屏结束回车机：参照官方 CarLink 的 backToHome——不拉起某个具体桌面，只把自己退到后台，
+        // 露出底下原来的任务（从哪个桌面进来的就回哪个）。监听在 onCreate 注册，随界面生死，投屏时界面在前台。
+        wireless.addHostListener(onControllerChanged)
+        controller.addHostListener(wiredListener)
         val identity = IdentityLoader.load(this)
         val actions = HomeActions(
             onStart = { requestStart(StartKind.START) },
@@ -148,6 +159,26 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         wireless.onAppForeground()
+    }
+
+    override fun onDestroy() {
+        wireless.removeHostListener(onControllerChanged)
+        controller.removeHostListener(wiredListener)
+        super.onDestroy()
+    }
+
+    /**
+     * 投屏结束（手机退出 PEER_TEARDOWN 或本机停止）回车机桌面：同官方 CarLink 的 backToHome()，
+     * 只把 OpenHC 的任务退到后台，不指定回哪个应用。投屏中界面在前台，从桌面进来的就回到桌面。
+     */
+    private fun backToLauncherWhenEnded() {
+        val projecting = wireless.state.value.phase == WirelessPhase.PROJECTING ||
+            controller.state.value.phase == Phase.PROJECTING
+        if (wasProjecting && !projecting) {
+            Log.i(TAG, "投屏结束：回车机（moveTaskToBack）")
+            moveTaskToBack(true)
+        }
+        wasProjecting = projecting
     }
 
     override fun onNewIntent(intent: Intent) {

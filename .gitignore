@@ -34,3 +34,6 @@ release-signing.properties
 *.pcap
 *.pcapng
 captures/
+
+# Kotlinc 直接编译产物
+bin/

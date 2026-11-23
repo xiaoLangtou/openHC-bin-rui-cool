@@ -15,6 +15,8 @@ import io.github.gcbond.openhc.core.nearby.NearbyGatt
 import io.github.gcbond.openhc.core.nearby.NearbyGattResponder
 import io.github.gcbond.openhc.platform.wifi.MacText
 import java.util.ArrayDeque
+import java.util.Timer
+import java.util.TimerTask
 
 /**
  * 和 BLE 广播一起挂出来的 GATT 服务端：按 [NearbyGatt] 的布局加两个主服务（前一个的添加回调到了再加下一个），
@@ -23,6 +25,11 @@ import java.util.ArrayDeque
  * 只「照布局挂好、按规则回应」，**不在 GATT 上跑控制通道**：实测的手机回连时不连 GATT；另一类手机系统可能会连上来
  * 取车机地址，那条路要先在真机上看到再做。所以每次连接、MTU、读、写、CCCD 都经 [log] 记下来
  * （特征、长度、是否像控制帧，不记内容），真机上据此判断有没有手机在用。
+ *
+ * **加服务有超时兜底**：本车机的 GOC 定制蓝牙栈（吉利/亿咖通 IHU536G 实测）对个别服务（046A，Nearby 的
+ * legacy 服务）的添加请求会静默吞掉——既不回调成功也不回调失败，按「回调到了再加下一个」的顺序加就会永远卡住、
+ * 广播也跟着起不来。所以每个服务挂上看门狗：超过 [ADD_TIMEOUT_MS] 没等到 onServiceAdded 就记日志跳过它，继续加
+ * 后面的，保证 onReady 必达（跳过的服务在 GATT 表里不存在，走主服务 FE35 的通路不受影响）。
  *
  * 线程：[open]、[close] 任意线程；系统回调在系统的线程上，[Events] 也在那里回调，里面不要阻塞。[close] 可重复调用，
  * 之后不再回调。
@@ -54,6 +61,12 @@ class BeaconGattServer(
     private var retries = 0
     private var started = false
     private var closed = false
+
+    /** 当前这次 addService 的代号：回调或超时先核对代号再行动，过期的不再理。 */
+    private var addSeq = 0
+
+    /** 加服务看门狗（懒建）。 */
+    private var addTimer: Timer? = null
 
     /** 开服务端、加服务。只能调用一次。 */
     // 权限由调用方在开始前确认；没有时系统抛 SecurityException，下面按失败上报。
@@ -91,6 +104,9 @@ class BeaconGattServer(
             closed = true
             pending.clear()
             current = null
+            addSeq++
+            addTimer?.cancel()
+            addTimer = null
             server.also { server = null }
         } ?: return
         closeQuietly(s)
@@ -100,34 +116,76 @@ class BeaconGattServer(
 
     @SuppressLint("MissingPermission")
     private fun addNext() {
-        val s: BluetoothGattServer
-        val next: NearbyGatt.Service?
-        synchronized(lock) {
-            s = server ?: return
-            next = pending.pollFirst()
-            current = next
-            retries = 0
-        }
-        if (next == null) {
-            log("GATT：${NearbyGatt.SERVICES.size} 个服务都加好了")
-            if (!isClosed()) events.onReady()
+        while (true) {
+            val s: BluetoothGattServer
+            val next: NearbyGatt.Service?
+            synchronized(lock) {
+                s = server ?: return
+                next = pending.pollFirst()
+                current = next
+                retries = 0
+            }
+            if (next == null) {
+                log("GATT：${NearbyGatt.SERVICES.size} 个服务都处理完了")
+                if (!isClosed()) events.onReady()
+                return
+            }
+            val short = NearbyGatt.short(next.uuid)
+            if (short in swallowedServices) {
+                log("GATT：服务 $short 上次就被 GOC 栈吞了，这次直接跳过")
+                continue
+            }
+            add(s, next)
             return
         }
-        add(s, next)
     }
 
     @SuppressLint("MissingPermission")
     private fun add(s: BluetoothGattServer, spec: NearbyGatt.Service) {
+        val short = NearbyGatt.short(spec.uuid)
+        val seq: Int
         val ok = try {
+            seq = synchronized(lock) { addSeq++; addSeq }
             s.addService(build(spec))
         } catch (e: RuntimeException) {
-            log("GATT：加服务 ${NearbyGatt.short(spec.uuid)} 出错：${describe(e)}")
-            false
+            log("GATT：加服务 $short 出错：${describe(e)}")
+            return fail("加服务 $short 失败")
         }
-        if (!ok) fail("加服务 ${NearbyGatt.short(spec.uuid)} 失败")
+        if (!ok) {
+            fail("加服务 $short 失败")
+        } else {
+            armAddTimeout(seq, short)
+        }
+    }
+
+    /**
+     * 给这次 addService 挂看门狗：超过时限还没等到 onServiceAdded（GOC 定制栈对个别服务会静默吞掉，
+     * 见类注释），就当作失败跳过，继续加下一个——顺序不能被一个不响应的服务堵死。
+     */
+    private fun armAddTimeout(seq: Int, uuid: String) {
+        val task = object : TimerTask() {
+            override fun run() {
+                val proceed = synchronized(lock) {
+                    seq == addSeq && current != null && server != null && !closed
+                }
+                if (!proceed) return
+                swallowedServices.add(uuid)
+                log("GATT：服务 $uuid 加了 $ADD_TIMEOUT_MS 毫秒还没等到系统回调（GOC 定制栈把它吞了），跳过继续，之后不再试")
+                addNext()
+            }
+        }
+        val timer = synchronized(lock) {
+            addTimer ?: Timer("openhc-gatt-add-watchdog").also { addTimer = it }
+        }
+        try {
+            timer.schedule(task, ADD_TIMEOUT_MS)
+        } catch (e: IllegalStateException) {
+            // Timer 已被 cancel（close 之后才触发的补挂）：不看了。
+        }
     }
 
     private fun onServiceAdded(status: Int, uuid: String) {
+        synchronized(lock) { addSeq++ } // 让还挂着的看门狗作废。
         if (status == BluetoothGatt.GATT_SUCCESS) {
             log("GATT：服务 $uuid 已加上")
             addNext()
@@ -300,6 +358,15 @@ class BeaconGattServer(
     private companion object {
         /** 同一个服务加失败时最多再试几次。 */
         const val MAX_ADD_RETRIES = 2
+
+        /** 加服务的看门狗时限：正常回调远快于此（实测约 200 毫秒）；只有被 GOC 栈吞掉的才等到超时。 */
+        const val ADD_TIMEOUT_MS = 1_000L
+
+        /**
+         * 被 GOC 栈吞掉过的服务（进程内记忆）：第一次等到超时确认后记进来，之后每次开服务端直接跳过，
+         * 不再白等。健康设备上永远不会有条目，跳过逻辑等于不存在。
+         */
+        val swallowedServices = java.util.Collections.synchronizedSet(HashSet<String>())
 
         @SuppressLint("MissingPermission")
         fun closeQuietly(s: BluetoothGattServer) {

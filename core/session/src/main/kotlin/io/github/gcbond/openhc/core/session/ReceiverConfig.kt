@@ -76,6 +76,12 @@ class ReceiverConfig(
      * 声明了手机录音时就改用车机麦克风，车机采不到时对方听不到，所以默认关，由应用按设置和录音权限打开。
      */
     val mic: MicSettings? = null,
+    /**
+     * 额外声明的 DMSDP 服务（104 服务请求掩码里对应位有请求时回 102 服务信息）。
+     * 实验用：手机请求了掩码 0x31f（服务 1/2/3/4/5/8/9），核心流程只认 display/speaker/mic，
+     * 其他服务（媒体卡片、集成等）由这里声明。
+     */
+    val extraDmsdpServices: List<DmsdpConfig.Service> = emptyList(),
 ) {
     /** 本机 deviceId（64 位大写十六进制）：认证里的本机身份、设备会话里的本机标识都用它。 */
     val deviceId: String = NearbySession.deviceId(identity.host, bluetoothAddress)
@@ -120,6 +126,7 @@ class ReceiverConfig(
         ),
         speaker = audio?.let { DmsdpConfig.Speaker(it.transport, it.codec, it.multiBus, it.aacPhones) },
         mic = mic?.let { DmsdpConfig.Mic(it.profile) },
+        additionalServices = extraDmsdpServices,
     )
 
     /** 投屏能力：屏幕和允许的编码尺寸都取画布尺寸（编码尺寸不超过画布）。 */

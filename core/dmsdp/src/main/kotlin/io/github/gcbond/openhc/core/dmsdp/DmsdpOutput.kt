@@ -191,7 +191,34 @@ sealed class DmsdpEvent : DmsdpOutput {
      * 以及没开文件分享时的 module 1 / type 17。要回复时用 [DmsdpSession.sendDeviceData]。
      */
     class UnhandledDeviceData(val module: Long, val type: Int, val data: ByteArray) : DmsdpEvent() {
-        override fun toString() = "UnhandledDeviceData(module=$module, type=$type, ${data.size} 字节)"
+        override fun toString(): String {
+            // 未知消息（module 1 上尤其如此）多半是 UTF-8 JSON，带上内容预览方便对照协议；解析不出就
+            // 给前 32 字节的十六进制（驾驶模式/卡片数据等二进制帧要靠它认帧头）。
+            val text = runCatching { String(data, Charsets.UTF_8) }.getOrDefault("")
+            val printable = text.isNotEmpty() && text.all { it == '\n' || it == '\r' || it == '\t' || it.code >= 0x20 }
+            return "UnhandledDeviceData(module=$module, type=$type, ${data.size} 字节" +
+                (if (printable) "，内容：${text.take(160).replace("\n", " ")}）" else "，头 ${data.take(32).toHexString()}）")
+        }
+
+        private fun List<Byte>.toHexString(): String =
+            joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+    }
+
+    /**
+     * 管理通道（module 1）JSON 消息的解析结果（见 [ManagementMessages]）：只是通知，会话继续。
+     */
+    class ManagementParsed(val type: Int, val summary: String) : DmsdpEvent() {
+        override fun toString() = "ManagementParsed(type=$type, $summary)"
+    }
+
+    /**
+     * 手机要求退出投屏、回车机桌面（HiCar 应用列表的车辆磁贴）。主识别是 type 529 的
+     * `{"RequestApp":{"Action":"start","AppPackage":"com.huawei.hicar"}}`（逆向官方车机 APK 确认），
+     * 未知形态的兜底规则见 [ManagementMessages.CAR_DESKTOP_KEYS]；
+     * 收到即结束整个连接，走回车机桌面链路。
+     */
+    class CarDesktopRequested(val detail: String) : DmsdpEvent() {
+        override fun toString() = "CarDesktopRequested($detail)"
     }
 
     // ---------- 音频数据会话（详情经 [io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamListener] 交出）----------

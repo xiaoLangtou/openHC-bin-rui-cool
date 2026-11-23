@@ -27,6 +27,7 @@ import io.github.gcbond.openhc.core.hisight.AccessUnitSink
 import io.github.gcbond.openhc.core.hisight.HiSightInput
 import io.github.gcbond.openhc.core.nearby.BleAdvertisement
 import io.github.gcbond.openhc.core.session.SessionEvent
+import io.github.gcbond.openhc.core.session.SessionOutput
 import io.github.gcbond.openhc.core.session.SocketRunner
 import io.github.gcbond.openhc.core.session.VideoParameters
 import io.github.gcbond.openhc.core.session.WirelessEvent
@@ -57,6 +58,8 @@ import java.io.File
 import java.io.IOException
 import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -119,6 +122,23 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
     val decoder: StateFlow<VideoDecoder?> = mutableDecoder.asStateFlow()
 
     private val mutableTouchResets = MutableStateFlow(0)
+
+    /** 触摸被丢弃的原因只警告一次，之后同样的丢弃不再刷日志。 */
+    private val inputDropNoted = AtomicBoolean(false)
+
+    /** 第一次触摸成功写出时记一次。 */
+    private val inputSentNoted = AtomicBoolean(false)
+
+    /** 触摸采样：前 [TOUCH_SAMPLES] 个输入逐个记（动作、点位、画布尺寸），用来核对发给手机的触摸内容。 */
+    private val touchSamples = AtomicLong(0)
+
+    /** 记录前几次发给手机的触摸，看动作顺序和坐标映射对不对。 */
+    private fun noteTouchSample(input: HiSightInput) {
+        val touch = input as? HiSightInput.Touch ?: return
+        if (touchSamples.getAndIncrement() >= TOUCH_SAMPLES) return
+        val points = touch.points.joinToString { "${it.id}:(${it.x},${it.y})" }
+        Log.i(TAG, "触摸采样 #${touchSamples.get()}：${touch.action} $points，画布 ${touch.width}x${touch.height}")
+    }
 
     /** 每次加一，投屏视图就清一次本地触摸状态（回控刚就绪、或发送端报告状态对不上时）。 */
     val touchResets: StateFlow<Int> = mutableTouchResets.asStateFlow()
@@ -364,11 +384,26 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
 
     /** 投屏视图换算好的触摸（主线程）。回控就绪前不发；发送在协议线程上做，异常就地接住。 */
     fun sendInput(input: HiSightInput) {
-        val current = inputTarget ?: return
-        if (!current.inputReady) return
+        val current = inputTarget ?: run {
+            if (inputDropNoted.compareAndSet(false, true)) {
+                Log.w(TAG, "收到触摸但还没有可回控的连接，丢弃（协商结果见 VideoNegotiated）")
+            }
+            return
+        }
+        if (!current.inputReady) {
+            if (inputDropNoted.compareAndSet(false, true)) {
+                Log.w(TAG, "收到触摸但这条连接的回控还没就绪（inputReady=false，多半是手机没选触摸事件），丢弃")
+            }
+            return
+        }
         current.runner.submit {
-            try {
-                current.bridge.sendInput(input)
+            val result: List<SessionOutput> = try {
+                val outputs = current.bridge.sendInput(input)
+                if (outputs.isNotEmpty() && inputSentNoted.compareAndSet(false, true)) {
+                    Log.i(TAG, "第一次触摸已写出（${outputs.size} 个包），之后触摸不再逐次记日志")
+                }
+                noteTouchSample(input)
+                outputs
             } catch (e: IllegalStateException) {
                 Log.d(TAG, "触摸状态对不上，清掉重来：${e.message}")
                 mutableTouchResets.update { it + 1 }
@@ -377,6 +412,7 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
                 Log.w(TAG, "触摸不合法，丢弃：${e.message}")
                 emptyList()
             }
+            result
         }
     }
 
@@ -1073,6 +1109,9 @@ class WirelessController(context: Context, private val wiredActive: () -> Boolea
 
     private companion object {
         const val TAG = "OpenHC-Wireless"
+
+        /** 触摸采样最多记几个输入。 */
+        const val TOUCH_SAMPLES = 10L
 
         /** 与有线共用同一份配对记录：同一台手机有线、无线配一次就行。 */
         const val TRUST_DIR = "trust"

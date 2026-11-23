@@ -131,6 +131,7 @@ private fun sessionEndText(reason: EndReason): String = when (reason) {
         else -> stringResource(R.string.end_session_auth_failed, reason.failure.toString())
     }
     is EndReason.KeepAliveTimeout -> stringResource(R.string.end_session_keepalive)
+    is EndReason.CarDesktopRequested -> stringResource(R.string.end_car_desktop)
     is EndReason.ProjectionEnded -> when (reason.reason) {
         HiSightEndReason.LOCAL_SHUTDOWN -> stringResource(R.string.end_user_stop)
         HiSightEndReason.PEER_TEARDOWN -> stringResource(R.string.end_projection_teardown)

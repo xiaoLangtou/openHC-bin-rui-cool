@@ -530,8 +530,9 @@ class LocalHotspotOwner private constructor(context: Context) {
     private fun now() = SystemClock.elapsedRealtime()
 
     companion object {
-        /** 热点开好后等网卡上出现地址的上限。 */
-        const val ADDRESS_WAIT_MS = 3_000L
+        /** 热点开好后等网卡上出现地址的上限。本车机实测：ap0 的地址有时要 3 秒以上才出现（刚关过一次热点
+         *  或预热被间隔挡住时更慢），3 秒会把系统只是慢、并非失败的情况误判成失败，放宽到 10 秒。 */
+        const val ADDRESS_WAIT_MS = 10_000L
         const val ADDRESS_POLL_MS = 100L
 
         /** 停掉后过这么久才关热点：让会话收尾时最后几个包先发出去。 */

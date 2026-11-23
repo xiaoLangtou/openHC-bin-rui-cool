@@ -2,6 +2,8 @@ package io.github.gcbond.openhc.tools.desktop
 
 import io.github.gcbond.openhc.core.auth.AuthMode
 import io.github.gcbond.openhc.core.common.identity.IdentityAssets
+import kotlinx.serialization.json.JsonObject
+import io.github.gcbond.openhc.core.dmsdp.DmsdpConfig
 import io.github.gcbond.openhc.core.session.DisplaySettings
 import io.github.gcbond.openhc.core.session.EndReason
 import io.github.gcbond.openhc.core.session.ReceiverConfig
@@ -46,11 +48,15 @@ private class StartupFailure(message: String) : Exception(message)
  */
 internal class DesktopApp(private val options: DesktopOptions, private val out: PrintStream) {
     private val startNanos = System.nanoTime()
+    private lateinit var session: ReceiverSession
+    private lateinit var runner: SocketRunner
 
     @Volatile private var phoneAt = 0L
     @Volatile private var playAt = 0L
     @Volatile private var firstFrameAt = 0L
     @Volatile private var endReason: EndReason? = null
+    @Volatile private var phoneIp: String? = null
+    @Volatile private var dataSocket: java.net.Socket? = null
 
     private class Prepared(val config: ReceiverConfig, val video: VideoFileSink)
 
@@ -64,8 +70,8 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
             return 1
         }
         val video = prepared.video
-        val session = ReceiverSession(prepared.config, video)
-        val runner = SocketRunner(session, ::onEvent, SocketRunner.Options(log = { log("[执行器] $it") }))
+        session = ReceiverSession(prepared.config, video)
+        runner = SocketRunner(session, ::onEvent, SocketRunner.Options(log = { log("[执行器] $it") }))
 
         // Ctrl-C：先让会话按协议收尾（TEARDOWN 等），再等主线程打完统计。
         val finished = CountDownLatch(1)
@@ -79,6 +85,39 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
         Runtime.getRuntime().addShutdownHook(exitHook)
 
         runner.start()
+        // 实验命令端口（仅本机回环）：nc 127.0.0.1 32499 后发 `send <module> <type> <payload>` 直接发设备数据，`quit` 结束会话。
+        thread(isDaemon = true, name = "openhc-desktop-cmd") {
+            val server = java.net.ServerSocket()
+            server.reuseAddress = true
+            server.bind(java.net.InetSocketAddress("127.0.0.1", 32499))
+            while (true) {
+                val conn = server.accept()
+                try {
+                    conn.use { sock ->
+                        val reader = sock.getInputStream().bufferedReader()
+                        val writer = sock.getOutputStream().bufferedWriter()
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            val parts = line.trim().split(' ', limit = 4)
+                            when {
+                                parts[0] == "quit" -> { runner.stop(); return@use }
+                                parts[0] == "send" && parts.size == 4 -> {
+                                    val module = parts[1].toLongOrNull()
+                                    val type = parts[2].toIntOrNull()
+                                    if (module == null || type == null) {
+                                        writer.write("用法：send <module> <type> <payload>\n"); writer.flush(); continue
+                                    }
+                                    log("[实验] 发送 module=$module type=$type payload=\"${parts[3]}\"")
+                                    runner.submit { session.sendDeviceData(module, type, parts[3].toByteArray(Charsets.UTF_8)) }
+                                    writer.write("OK\n"); writer.flush()
+                                }
+                                line.isNotBlank() -> { writer.write("命令：send <module> <type> <payload> | quit\n"); writer.flush() }
+                            }
+                        }
+                    }
+                } catch (e: java.io.IOException) { /* 连接断开，继续等下一个 */ }
+            }
+        }
         options.durationSeconds?.let { seconds ->
             thread(isDaemon = true, name = "openhc-desktop-duration") {
                 if (!runner.awaitTermination(TimeUnit.SECONDS.toMillis(seconds))) {
@@ -119,6 +158,10 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
         log("信任库：${trustStore.file}（已配对的手机 ${trustStore.peerCount} 台）")
 
         val config = try {
+            // 实验服务：手机 104 请求掩码 0x31f 里有 1/3/5/9；属性留空，观察手机对声明出的服务的反应。
+            val extra = if (options.extraServices) listOf(1, 3, 5, 9).map { type ->
+                DmsdpConfig.Service(type, "extra$type", JsonObject(emptyMap()))
+            } else emptyList()
             ReceiverConfig(
                 identity = identity,
                 bluetoothAddress = options.bluetooth,
@@ -137,6 +180,7 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
                 trustStore = trustStore,
                 controlBindHost = options.bindIp,
                 controlLocalFilter = options.localFilter,
+                extraDmsdpServices = extra,
             )
         } catch (e: IllegalArgumentException) {
             throw StartupFailure("配置不合法：${e.message}")
@@ -181,6 +225,7 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
             }
             is SessionEvent.PhoneConnected -> {
                 phoneAt = System.nanoTime()
+                phoneIp = event.phoneIp
                 log("手机已连上控制通道（手机地址 ${event.phoneIp}）")
             }
             is SessionEvent.ControlHandshakeCompleted ->
@@ -204,13 +249,73 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
                 firstFrameAt = System.nanoTime()
                 log("收到首帧" + (if (phoneAt != 0L) "（距手机连上 ${seconds(firstFrameAt - phoneAt)}）" else ""))
             }
-            is SessionEvent.Diagnostic -> log("诊断（${event.layer}）：${event.message}")
+            is SessionEvent.Diagnostic -> {
+                log("诊断（${event.layer}）：${event.message}")
+                // 实验钩子：数据通道敲门（手机发 module=4 type=1 内容"1"）→ 回"2"，观察 SocketDataChannel 是否建立。
+                if (event.message.contains("UnhandledDeviceData(module=4, type=1, 1 字节，内容：1）")) {
+                    log("[实验] 回应数据通道敲门：module=4 type=1 → \"2\"")
+                    runner.submit { session.sendDeviceData(4, 1, "2".toByteArray()) }
+                }
+                // 硬件管理通道应答器（module=1 type=17，managementsdk 协议）：
+                // 手机问硬件信息（cmdId 1）/网络信息（cmdId 2），必须毫秒级回复，超时手机就放弃了。
+                val dataMsg = Regex("UnhandledDeviceData\\(module=1, type=17, \\d+ 字节，内容：(.*)）$").find(event.message)
+                if (dataMsg != null) onHardwareChannelData(dataMsg.groupValues[1])
+            }
             is SessionEvent.Ended -> {
                 endReason = event.reason
                 log("会话结束：${event.reason}")
             }
         }
     }
+
+    /** 硬件管理通道（module=1 type=17）收到的数据：请求→立即回复；端口通告→连接数据 Socket。 */
+    private fun onHardwareChannelData(content: String) {
+        when {
+            content == "1" || content.contains("\"cmdId\":\"1\"") -> {
+                // 硬件信息回复。managementsdk 的 queryHardwareInfo 只回 {cmdId, version, hash}，
+                // hash = SHA-256（大写 hex）签名的拼接串，这里用固定文本，手机若校验失败再迭代。
+                val reply = "{\"cmdId\":\"1\",\"version\":\"3.0\",\"hash\":\"${sha256Hex("OpenHC")}\"}"
+                log("[数据通道] 硬件信息请求 → 回复 $reply")
+                runner.submit { session.sendDeviceData(1, 17, reply.toByteArray(Charsets.UTF_8)) }
+            }
+            content == "2" || content.contains("\"cmdId\":\"2\"") -> {
+                // 网络信息回复。按 managementsdk getNetworkInfo：carIp=对端（手机）、phoneIp=本机。
+                val ip = phoneIp ?: return
+                val reply = "{\"cmdId\":\"2\",\"version\":\"3.0\",\"info\":{\"carIp\":\"$ip\",\"phoneIp\":\"${options.ip}\"}}"
+                log("[数据通道] 网络信息请求 → 回复 $reply")
+                runner.submit { session.sendDeviceData(1, 17, reply.toByteArray(Charsets.UTF_8)) }
+            }
+            content.contains("\"port\"") -> {
+                val port = Regex("\"port\":(\\d+)").find(content)?.groupValues?.get(1) ?: return
+                val ip = phoneIp ?: return
+                log("[数据通道] ⭐ 手机通告 SocketDataChannel 端口 $port，开始连接")
+                Thread {
+                    try {
+                        java.net.Socket(ip, port.toInt()).use { sock ->
+                            dataSocket = sock
+                            log("[数据通道] 已连上手机数据 Socket $ip:$port，开始读取")
+                            val buf = ByteArray(4096)
+                            val input = sock.getInputStream()
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                log("[数据通道] 收到 ${n} 字节：${String(buf, 0, n, Charsets.UTF_8)}")
+                            }
+                            log("[数据通道] 手机数据 Socket 已关闭")
+                        }
+                    } catch (e: Exception) {
+                        log("[数据通道] 连接失败：${e.message}")
+                    } finally {
+                        dataSocket = null
+                    }
+                }.apply { isDaemon = true; name = "openhc-desktop-datachannel" }.start()
+            }
+        }
+    }
+
+    private fun sha256Hex(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02X".format(it) }
 
     private fun printStats(video: VideoFileSink) {
         out.println()

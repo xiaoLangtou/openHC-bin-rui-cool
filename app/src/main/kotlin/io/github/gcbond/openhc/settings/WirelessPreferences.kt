@@ -19,12 +19,12 @@ class WirelessPreferences(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_WIRED_ONLY, value) }
 
     /**
-     * 蓝牙连上自动连接（默认关）：手机和车机的经典蓝牙一连上（打电话、听歌用的那种连接），就进入「等已配对的手机回连」，
+     * 蓝牙连上自动连接（默认开）：手机和车机的经典蓝牙一连上（打电话、听歌用的那种连接），就进入「等已配对的手机回连」，
      * 本应用没在运行时由系统拉起来；已经在等的，换一个序列号重新发布一次广播，让手机再看一眼。
      * 和「无线自动回连」相互独立：那个关着时，蓝牙连上触发的这一轮等到手机蓝牙断开、用户停止或手机连上为止。
      */
     var connectOnBluetooth: Boolean
-        get() = prefs.getBoolean(KEY_CONNECT_ON_BLUETOOTH, false)
+        get() = prefs.getBoolean(KEY_CONNECT_ON_BLUETOOTH, true)
         set(value) = prefs.edit { putBoolean(KEY_CONNECT_ON_BLUETOOTH, value) }
 
     /**

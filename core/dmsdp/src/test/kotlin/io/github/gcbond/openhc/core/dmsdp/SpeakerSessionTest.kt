@@ -489,7 +489,8 @@ class SpeakerSessionTest {
         assertTrue(audio.events.none { it is AudioEvent.PhoneFocus }, "type 504 在 module 4 上不当焦点消息")
 
         val (plain, _) = encryptedSession()
-        assertIs<DmsdpEvent.UnhandledDeviceData>(
+        // 没声明扬声器时 module 1 / type 504 不当焦点消息；它是合法 JSON，落成结构化管理消息。
+        assertIs<DmsdpEvent.ManagementParsed>(
             plain.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).single(),
         )
     }

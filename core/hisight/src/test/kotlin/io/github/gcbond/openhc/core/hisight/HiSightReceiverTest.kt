@@ -66,6 +66,50 @@ class HiSightReceiverTest {
     }
 
     @Test
+    fun announceToleratesLfAndBlankLines() {
+        // issue #4/#10/#11：部分手机（鸿蒙 4.x）的 ANNOUNCE 正文不带 CR、或末尾多一个空行，也要能协商。
+        val phone = Phone()
+        val s = session()
+        s.start()
+        val body = "encrypt_description: encrypt_list=aes128ctr;version=1\n\n"
+        s.feed(phone.frame("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n") +
+            phone.frame("ANNOUNCE * RTSP/1.0\r\nCSeq: 8\r\nContent-Type: text/parameters\r\nContent-Length: ${body.length}\r\n\r\n$body"))
+        phone.encrypted = true
+        assertEquals(
+            listOf("RTSP/1.0 200 OK#9", "OPTIONS * RTSP/1.0#2"),
+            phone.read(s.feed(phone.frame("OPTIONS * RTSP/1.0\r\nCSeq: 9\r\n\r\n"))),
+        )
+    }
+
+    @Test
+    fun announceToleratesForeignLines() {
+        // 14.2.0.355 实测：正文夹带别的参数行（曾以「加密选择必须是单独一行」断连）。挑出 encrypt_description 行即可。
+        val phone = Phone()
+        val s = session()
+        s.start()
+        val body = "encrypt_description: encrypt_list=aes128ctr;version=1\nhis_extra_param: unknown\n\n"
+        s.feed(phone.frame("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n") +
+            phone.frame("ANNOUNCE * RTSP/1.0\r\nCSeq: 8\r\nContent-Type: text/parameters\r\nContent-Length: ${body.length}\r\n\r\n$body"))
+        phone.encrypted = true
+        assertEquals(
+            listOf("RTSP/1.0 200 OK#9", "OPTIONS * RTSP/1.0#2"),
+            phone.read(s.feed(phone.frame("OPTIONS * RTSP/1.0\r\nCSeq: 9\r\n\r\n"))),
+        )
+    }
+
+    @Test
+    fun announceRejectsMissingEncryptDescription() {
+        val phone = Phone()
+        val s = session()
+        s.start()
+        val body = "his_extra_param: unknown\n"
+        assertFailsWith<MalformedMessageException> {
+            s.feed(phone.frame("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n") +
+                phone.frame("ANNOUNCE * RTSP/1.0\r\nCSeq: 8\r\nContent-Type: text/parameters\r\nContent-Length: ${body.length}\r\n\r\n$body"))
+        }
+    }
+
+    @Test
     fun playWaitsForBothConnectionsInEitherOrder() {
         for (videoFirst in listOf(true, false)) {
             val phone = Phone()
@@ -195,10 +239,19 @@ class HiSightReceiverTest {
         s.feedVideo(packet, 0, packet.size)
         assertEquals(1, frames.size)
         assertTrue(es.contentEquals(frames[0]))
-        // 同一序号再来一次 = 重复包，视频流失败。
-        assertFailsWith<MalformedMessageException> { s.feedVideo(packet, 0, packet.size) }
-        assertFailsWith<MalformedMessageException> { s.onVideoClosed() }
-        assertEquals(listOf("TEARDOWN  RTSP/1.0#4"), phone.read(s.shutdown()))
+        // 同一序号再来一次 = 重复包：丢帧重对齐，会话不终结（issue #3 的容错语义）。
+        s.feedVideo(packet, 0, packet.size)
+        assertEquals(1, frames.size)
+        // 序号连续（seq 2）的下一帧照常交付。
+        val rtp2 = byteArrayOf(0x80.toByte(), 0xE0.toByte(), 0, 2, 0, 0, 0, 0, 0, 0, 0, 1) + pes
+        val packet2 = byteArrayOf(0, 0, 0, rtp2.size.toByte()) + rtp2
+        s.feedVideo(packet2, 0, packet2.size)
+        assertEquals(2, frames.size)
+        // 视频没失败，主动关连接：干净结束并带出 TEARDOWN。
+        val closed = s.onVideoClosed()
+        assertEquals(listOf("TEARDOWN  RTSP/1.0#4"), phone.read(closed))
+        // 会话已终止，shutdown 不再重复发。
+        assertTrue(s.shutdown().isEmpty())
     }
 
     @Test
