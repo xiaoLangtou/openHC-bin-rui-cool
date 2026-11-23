@@ -111,19 +111,15 @@ internal class DeviceMessageHandler(
                 put("1006", d.videoHeight)
                 put("1012", d.width)
                 put("1013", d.height)
-                // 物理宽高（毫米），官方 CarInfoUtils 公式：像素宽 × 25.4 ÷ DPI（INCH_MM）。
-                if (d.dpi > 0) {
-                    put("1018", Math.round(d.width * 25.4 / d.dpi))
-                    put("1019", Math.round(d.height * 25.4 / d.dpi))
-                }
+                // **不声明** 1018/1019（物理宽高毫米）和 1028/1029（码率上下限）：v25 加过，手机拿物理宽高
+                // 按错误口径排版（我们的 DPI 是车机系统 densityDpi，乘出来的毫米数和真实面板差一个量级），
+                // 与 "_launcher" 一起构成 v23→v27 全屏变窗口化的三个手机可见差异之一，2026-11-24 回退。
+                // 官方星瑞 hicar_config.json 的 PhysicsWidth/PhysicsHeight 也是 null。
                 put("1011", d.dpi)
                 put("1015", d.fps)
                 put("1014", d.codec)
                 d.gop?.let { put("1016", it) }
                 d.bitrate?.let { put("1017", it) }
-                // 码率上下限（官方 addVideoProperties 的 1028/1029，>0 才声明）。
-                d.maxBitrate?.takeIf { it > 0 }?.let { put("1028", it) }
-                d.minBitrate?.takeIf { it > 0 }?.let { put("1029", it) }
             }
             // 手机按这个值（设备信息 detail 里的 CAR_MODE_ID）比对 ConvergedLauncherController
             // 白名单，决定 HiCar 应用列表"车辆"磁贴是否可点；必须用白名单内的型号（v10 起 00048900）。

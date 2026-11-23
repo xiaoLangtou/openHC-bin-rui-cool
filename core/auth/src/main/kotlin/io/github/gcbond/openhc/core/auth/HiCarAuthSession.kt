@@ -92,9 +92,9 @@ class HiCarAuthSession(
         val hasPin = body.booleanField("has_pin")
         val usbConnection = body.booleanField("usb_connection")
         val version = root.exactString("version")
-        // 诊断记全部字段：手机握手 JSON 里还有 _launcher（超级桌面支持）、auto_connect_state、
-        // synctime 等我们此前一直忽略的声明（官方常量见 ConstantDevicePair 反汇编）。
-        val flags = "has_pin=$hasPin，usb_connection=$usbConnection，version=${version ?: "无"}；完整字段=$data"
+        // 诊断只记这几个标志，不记 deviceId（测试锁了这个隐私约束）。v25 一度把完整 JSON 也打进日志，
+        // 泄漏手机身份，2026-11-24 随 _launcher 一并回退；要看的字段（_launcher 等）显式挑出来记。
+        val flags = "has_pin=$hasPin，usb_connection=$usbConnection，version=${version ?: "无"}"
         handshake?.let { previous ->
             throw MalformedMessageException("本轮认证出现重复的设备握手（上次 has_pin=${previous.hasPin}；这次 $flags）")
         }
@@ -122,11 +122,10 @@ class HiCarAuthSession(
         val info = CompactJson.writeStringMap(deviceInfo(phone))
         val response = StringBuilder(envelopeHead(OPER_HANDSHAKE, info))
             .append(",\"usb_connection\":").append(config.usbConnection)
-        // 官方握手 JSON 顶层有 _launcher 布尔（com.huawei.authagent ConstantDevicePair.SUPER_LAUNCHER，
-        // 吉利 Link 包反汇编实锤 2026-11-23）：车机侧按它存 <手机MAC>_launcher 决定是否走应用列表互通
-        // （AppTransManager.isRemoteSupport）；手机对车机同理——缺了它手机判定车机不支持超级桌面，
-        // 融合桌面「车辆」磁贴点击零发送（当天实弹验证：官方形状 CarInfo 都给齐仍死寂）。
-        response.append(",\"_launcher\":true")
+        // **不能**声明 "_launcher":true（超级桌面/融合桌面支持，2026-11-24 实锤）：声明了手机就切融合桌面渲染
+        // （带小组件的 HiCar 桌面），其布局跟我们的画布对不上，投屏从全屏变窗口化（v23→v27 升级后立刻复现）。
+        // 车辆磁贴、应用列表互通、515 元数据这些依赖 _launcher 的能力，等屏幕参数键（WIDTH/HEIGHT/DPI/
+        // 物理宽高）按官方语义一条条实锤后再一起加回来。
         // 无线时手机已经从二维码或用户输入拿到连接码，车机不下发。
         if (pin != null && config.usbConnection) response.append(",\"pin_code\":").append(CompactJson.quote(pin))
         response.append('}')
