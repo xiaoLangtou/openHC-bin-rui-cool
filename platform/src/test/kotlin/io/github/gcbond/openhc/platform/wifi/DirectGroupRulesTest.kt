@@ -32,6 +32,16 @@ class DirectGroupRulesTest {
         assertEquals(listOf(5745, 5180, 2437, 2412, 2462, null), DirectGroupRules.plan(2472))
     }
 
+    /** 安卓 8、9 只能用指定的信道：不交给系统定；车机不支持 5 GHz 时只试 2.4 GHz，连着的 2.4 GHz 信道排最前。 */
+    @Test
+    fun pinnedPlanDropsSystemChoiceAndUnsupportedFiveGhz() {
+        assertEquals(listOf(5745, 5180, 2437, 2412, 2462), DirectGroupRules.pinnedPlan(null, fiveGhz = true))
+        assertEquals(listOf(2437, 2412, 2462), DirectGroupRules.pinnedPlan(null, fiveGhz = false))
+        assertEquals(listOf(2447, 2437, 2412, 2462), DirectGroupRules.pinnedPlan(2447, fiveGhz = false))
+        assertEquals(listOf(5745, 2437, 2412, 2462), DirectGroupRules.pinnedPlan(5745, fiveGhz = true))
+        assertEquals(listOf(2437, 2412, 2462), DirectGroupRules.pinnedPlan(5745, fiveGhz = false))
+    }
+
     @Test
     fun nameAndPassphraseFollowTheRules() {
         val random = Random(42)

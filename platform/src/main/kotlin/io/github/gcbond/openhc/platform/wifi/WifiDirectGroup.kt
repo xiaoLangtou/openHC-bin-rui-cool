@@ -14,6 +14,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
+import io.github.gcbond.openhc.core.nearby.WifiChannels
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.SocketException
@@ -31,15 +34,20 @@ class DirectGroup(
     val ownerMac: String,
     /** WPA2-PSK 口令。 */
     val passphrase: String,
-    /** 组实际的频率（系统交回的真实值）。 */
+    /** 组的频率：安卓 10 起是系统交回的真实值，安卓 8、9 是指定的信道（见 [frequencyReadBack]）。 */
     val frequencyMhz: Int,
     val interfaceName: String,
     val macSource: DirectMacSource,
     /** 按哪个频率申请的；null 表示没指定、由系统定。 */
     val requestedMhz: Int?,
+    /** [frequencyMhz] 是系统交回的真实值；false 时是指定的信道（安卓 8、9 读不回组的频率）。 */
+    val frequencyReadBack: Boolean = true,
 ) {
+    /** 频率从哪来，一句话（日志用）。 */
+    val frequencySource: String get() = if (frequencyReadBack) "系统交回的真实频率" else "指定的信道（这版系统读不回组的实际频率）"
+
     override fun toString() =
-        "DirectGroup($localIp，$frequencyMhz MHz（申请 ${requestedMhz ?: "由系统定"}），网卡 $interfaceName，" +
+        "DirectGroup($localIp，$frequencyMhz MHz（申请 ${requestedMhz ?: "由系统定"}，$frequencySource），网卡 $interfaceName，" +
             "组主 MAC ${MacText.mask(ownerMac)}（${macSource.label}），组名与口令不显示)"
 }
 
@@ -56,17 +64,25 @@ interface DirectGroupEvents {
 }
 
 /**
- * 车机建 WiFi 直连组、自己当组主（安卓 10 起才能指定组名、口令和频率）。用法同 [LocalHotspotHandle]：[start] 开始建，
- * [stop] 拆掉；每次连接新建一个，用完即弃。手机作为组成员加入，车机自己连着的 WiFi 不断。
+ * 车机建 WiFi 直连组、自己当组主。用法同 [LocalHotspotHandle]：[start] 开始建，[stop] 拆掉；每次连接新建一个，用完即弃。
+ * 手机作为组成员加入，车机自己连着的 WiFi 不断。
+ *
+ * 手机要知道组在哪个频率，所以组的频率必须是确定的：
+ * - 安卓 10 起：按公开接口指定组名、口令和频率建组，建好后读回实际频率。
+ * - 安卓 8、9：没有公开的指定频率的接口，先用系统内部的「设直连信道」接口指定工作信道（见 [LegacyP2pChannels]），
+ *   再按老接口建组，组名和口令由系统生成；这两个版本读不回组的频率，按指定的信道报给手机。有的车机系统不认这个接口，
+ *   建组时明说没建成。指定的信道在拆组后设回不限制。
  *
  * - 建之前先拆掉残留的组（进程被杀后系统可能还留着上次的组），并确认拆干净；
- * - 按 [DirectGroupRules.plan] 依次试频率：系统拒绝、或申请后 [GROUP_WAIT_MS] 内组没建好，就拆掉换下一个；
- * - 建好后从系统读回组名、口令、实际频率、网卡名，再读网卡上的 IPv4 和硬件地址（组主 MAC）；
+ * - 依次试频率（安卓 10 起按 [DirectGroupRules.plan]，安卓 8、9 按 [DirectGroupRules.pinnedPlan]）：系统拒绝、
+ *   或申请后 [GROUP_WAIT_MS] 内组没建好，就拆掉换下一个；
+ * - 建好后从系统读回组名、口令、网卡名（安卓 10 起还有实际频率），再读网卡上的 IPv4 和硬件地址（组主 MAC）；
  * - 组在期间按住车机的蜂窝网络请求：有自带 4G 的车机，手机关热点时车机的默认网络会切到 4G，之后 4G 退到后台，
  *   30 秒后系统会清掉当时建的连接，直连上的投屏连接也在内；按住 4G 就不会退到后台（HC 助手在比亚迪车机上实测过）；
  * - 建好后每 [WATCH_MS] 查一次组还在不在，没了报 [DirectGroupEvents.onLost]。
  *
- * 权限：安卓 10～12 要精确位置，13 起要「附近的 WiFi 设备」，由调用方在开始前确认；没有时系统抛异常，按没建成报。
+ * 权限：安卓 8～12 要精确位置（无线本来就要），13 起要「附近的 WiFi 设备」，由调用方在开始前确认；没有时系统抛异常，
+ * 按没建成报。
  * 线程：自己的工作线程；系统回调和 [DirectGroupEvents] 都在这条线程上。
  */
 @SuppressLint("MissingPermission")
@@ -94,6 +110,12 @@ class WifiDirectGroupOwner(
     private var name = ""
     private var pass = ""
     private var deadline = 0L
+
+    /** 安卓 8、9 上本次指定过直连信道，拆组后要设回不限制。 */
+    private var pinned = false
+
+    /** 安卓 8、9：等系统回话的那次「指定信道」的序号；系统的直连没开时不回话，到点按没建成报。 */
+    private var pinRequest = 0
     private var cellular: ConnectivityManager.NetworkCallback? = null
     private val poll = Runnable { pollGroup() }
     private val watch = Runnable { watchGroup() }
@@ -108,7 +130,7 @@ class WifiDirectGroupOwner(
 
     private fun begin() {
         if (stopped || stage != Stage.IDLE) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return fail("安卓 10 以下不能按指定频率建直连组")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return fail("安卓 8 以下不做直连")
         val m = app.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager ?: return fail("这台车机没有 WiFi 直连服务")
         val ch = try {
             m.initialize(app, thread.looper) { if (!stopped) lose("系统的 WiFi 直连服务断开了") }
@@ -134,10 +156,11 @@ class WifiDirectGroupOwner(
         }
         if (!on) return fail("车机 WiFi 关着，建不了直连组（等了 ${WIFI_ON_WAIT_MS / 1000} 秒也没开）")
         val station = stationFrequency()
-        plan = DirectGroupRules.plan(station)
+        plan = if (legacy) DirectGroupRules.pinnedPlan(station, fiveGhzSupported()) else DirectGroupRules.plan(station)
         log(
             "开始建直连组：车机 WiFi ${if (station > 0) "连在 $station MHz" else "没连"}，" +
-                "依次试 ${plan.joinToString("、") { it?.let { mhz -> "$mhz" } ?: "由系统定" }}",
+                "依次试 ${plan.joinToString("、") { it?.let { mhz -> "$mhz" } ?: "由系统定" }}" +
+                if (legacy) "（安卓 8、9：先用系统内部接口指定信道再建组）" else "",
         )
         stage = Stage.CLEARING
         groupInfo { group ->
@@ -162,7 +185,6 @@ class WifiDirectGroupOwner(
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.Q)
     private fun attempt(i: Int) {
         if (stopped) return
         if (i >= plan.size) return fail("试过的频率都没建成直连组（经过见日志）")
@@ -171,9 +193,22 @@ class WifiDirectGroupOwner(
         index = i
         val frequency = plan[i]
         requested = frequency
-        name = DirectGroupRules.networkName(random)
-        pass = DirectGroupRules.passphrase(random)
         stage = Stage.CREATING
+        if (legacy) {
+            // 组名和口令由系统生成，建好后读回。
+            name = ""
+            pass = ""
+            attemptPinned(m, ch, frequency)
+        } else {
+            name = DirectGroupRules.networkName(random)
+            pass = DirectGroupRules.passphrase(random)
+            attemptConfigured(m, ch, i, frequency)
+        }
+    }
+
+    /** 安卓 10 起：按配置建组（指定组名、口令和频率；[frequency] 为 null 时交给系统定）。 */
+    @TargetApi(Build.VERSION_CODES.Q)
+    private fun attemptConfigured(m: WifiP2pManager, ch: WifiP2pManager.Channel, i: Int, frequency: Int?) {
         val listener = object : WifiP2pManager.ActionListener {
             override fun onSuccess() = onCreateAccepted()
 
@@ -186,7 +221,7 @@ class WifiDirectGroupOwner(
                 m.createGroup(ch, config(frequency), listener)
             }
         } catch (e: SecurityException) {
-            fail("没有建直连组的权限（安卓 10～12 要精确位置，13 起要附近的 WiFi 设备）：${describe(e)}")
+            fail("没有建直连组的权限（安卓 12 及以下要精确位置，13 起要附近的 WiFi 设备）：${describe(e)}")
         } catch (e: IllegalArgumentException) {
             log("按 ${label(frequency)} 的配置建不起来（${describe(e)}），换下一个")
             next()
@@ -198,6 +233,65 @@ class WifiDirectGroupOwner(
             log("这台车机的系统不支持按指定频率建组（${describe(e)}），改为交给系统定")
             plan = plan.take(i) + listOf<Int?>(null)
             handler.post { attempt(i) }
+        }
+    }
+
+    /**
+     * 安卓 8、9：先指定工作信道，系统收下后再按老接口建组。指定不了（系统没有这个接口、调用出错）就不再试别的信道，
+     * 直接按没建成报：换信道也是同一个接口。系统拒绝某个信道则换下一个。
+     */
+    private fun attemptPinned(m: WifiP2pManager, ch: WifiP2pManager.Channel, frequency: Int?) {
+        val number = frequency?.let(WifiChannels::channelOf)
+        if (number == null) {
+            log("${label(frequency)} 换不成信道号，跳过")
+            return next()
+        }
+        val request = ++pinRequest
+        val problem = LegacyP2pChannels.set(
+            m,
+            ch,
+            number,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    if (stopped || stage != Stage.CREATING || request != pinRequest) return
+                    pinRequest++
+                    log("直连工作信道指定为 $number（${frequency} MHz）：系统收下了，建组")
+                    createLegacy(m, ch)
+                }
+
+                override fun onFailure(reason: Int) {
+                    if (stopped || stage != Stage.CREATING || request != pinRequest) return
+                    pinRequest++
+                    log("指定直连工作信道 $number（${frequency} MHz）被系统拒绝（${reasonText(reason)}），换下一个")
+                    next()
+                }
+            },
+        )
+        if (problem != null) return fail("这台车机的系统不能指定直连信道（$problem），用不了直连，请改回「车机开热点」")
+        // 设置已经发给系统：不论结果如何，收尾时都设回不限制。系统里直连没开时，这个设置不回话（成功失败都不回）。
+        pinned = true
+        handler.postDelayed({
+            if (stopped || stage != Stage.CREATING || request != pinRequest) return@postDelayed
+            pinRequest++
+            fail("指定直连信道 ${PIN_WAIT_MS / 1000} 秒没有回话（车机的 WiFi 直连多半没开），用不了直连，请改回「车机开热点」")
+        }, PIN_WAIT_MS)
+    }
+
+    private fun createLegacy(m: WifiP2pManager, ch: WifiP2pManager.Channel) {
+        try {
+            m.createGroup(
+                ch,
+                object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() = onCreateAccepted()
+
+                    override fun onFailure(reason: Int) = onCreateRejected(reason)
+                },
+            )
+        } catch (e: SecurityException) {
+            fail("没有建直连组的权限：${describe(e)}")
+        } catch (e: RuntimeException) {
+            log("按 ${label(requested)} 建组出错（${describe(e)}），换下一个")
+            next()
         }
     }
 
@@ -228,14 +322,13 @@ class WifiDirectGroupOwner(
         handler.postDelayed({ attempt(nextIndex) }, RETRY_GAP_MS)
     }
 
-    @TargetApi(Build.VERSION_CODES.Q)
     private fun pollGroup() {
         if (stopped || stage != Stage.WAITING_GROUP) return
         groupInfo { group ->
             if (stopped || stage != Stage.WAITING_GROUP) return@groupInfo
             val iface = group?.`interface`?.takeIf { it.isNotEmpty() }
             val ip = iface?.let(::ipv4Of)
-            val frequency = group?.frequency ?: 0
+            val frequency = if (legacy) requested ?: 0 else group?.let(::groupFrequency) ?: 0
             if (group != null && group.isGroupOwner && iface != null && ip != null && frequency > 0) {
                 return@groupInfo ready(group, iface, ip, frequency)
             }
@@ -252,9 +345,13 @@ class WifiDirectGroupOwner(
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.Q)
+    private fun groupFrequency(group: WifiP2pGroup): Int = group.frequency
+
     private fun ready(group: WifiP2pGroup, iface: String, ip: String, frequency: Int) {
         val passphrase = group.passphrase?.takeIf { it.isNotEmpty() } ?: pass
         val networkName = group.networkName?.takeIf { it.isNotEmpty() } ?: name
+        if (passphrase.isEmpty() || networkName.isEmpty()) return fail("读不到直连组的组名或口令，手机加不进来")
         if (!LocalHotspotRules.isWifiChannelFrequency(frequency)) {
             return fail("直连组建在 $frequency MHz，不是 2.4 / 5 GHz 的信道，手机按这套连接方式连不上")
         }
@@ -268,7 +365,7 @@ class WifiDirectGroupOwner(
         if (source == DirectMacSource.PLACEHOLDER) log("读不到直连网卡的真实 MAC，连接串里的组主 MAC 用占位值（手机可能认不出组）")
         stage = Stage.READY
         holdCellular()
-        val built = DirectGroup(ip, networkName, mac, passphrase, frequency, iface, source, requested)
+        val built = DirectGroup(ip, networkName, mac, passphrase, frequency, iface, source, requested, frequencyReadBack = !legacy)
         log("直连组建好了：$built" + if (requested != null && requested != frequency) "；实际频率和申请的不一样" else "")
         if (!stopped) events.onReady(built)
         handler.postDelayed(watch, WATCH_MS)
@@ -309,22 +406,54 @@ class WifiDirectGroupOwner(
             }
             thread.quitSafely()
         }
+        // 拆完组再把指定过的信道设回不限制（没指定过就直接收尾）。
+        var removed = false
+        val afterRemove = Runnable {
+            if (removed) return@Runnable
+            removed = true
+            if (pinned) unpin(m, ch) { handler.post(finish) } else finish.run()
+        }
+        handler.postDelayed(finish, if (pinned) UNPIN_WAIT_MS else REMOVE_WAIT_MS)
         try {
             m.removeGroup(
                 ch,
                 object : WifiP2pManager.ActionListener {
                     override fun onSuccess() {
-                        handler.post(finish)
+                        handler.post(afterRemove)
                     }
 
                     override fun onFailure(reason: Int) {
-                        handler.post(finish)
+                        handler.post(afterRemove)
                     }
                 },
             )
-            handler.postDelayed(finish, REMOVE_WAIT_MS)
         } catch (e: RuntimeException) {
-            finish.run()
+            afterRemove.run()
+        }
+    }
+
+    /** 把安卓 8、9 上指定的直连工作信道设回 0（不限制），免得车机上别的直连功能只能用这一个信道。 */
+    private fun unpin(m: WifiP2pManager, ch: WifiP2pManager.Channel, then: () -> Unit) {
+        pinned = false
+        val problem = LegacyP2pChannels.set(
+            m,
+            ch,
+            0,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    log("直连工作信道已设回不限制")
+                    then()
+                }
+
+                override fun onFailure(reason: Int) {
+                    log("直连工作信道没能设回不限制（${reasonText(reason)}）：车机 WiFi 重开后会恢复")
+                    then()
+                }
+            },
+        )
+        if (problem != null) {
+            log("直连工作信道没能设回不限制（$problem）：车机 WiFi 重开后会恢复")
+            then()
         }
     }
 
@@ -410,6 +539,12 @@ class WifiDirectGroupOwner(
         }
     }
 
+    private fun fiveGhzSupported(): Boolean = try {
+        (app.getSystemService(Context.WIFI_SERVICE) as? WifiManager)?.is5GHzBandSupported == true
+    } catch (e: RuntimeException) {
+        false
+    }
+
     private fun wifiEnabled(): Boolean = try {
         (app.getSystemService(Context.WIFI_SERVICE) as? WifiManager)?.isWifiEnabled == true
     } catch (e: RuntimeException) {
@@ -458,6 +593,9 @@ class WifiDirectGroupOwner(
     private fun now() = SystemClock.elapsedRealtime()
 
     private companion object {
+        /** 安卓 8、9：组的频率只能靠指定信道定下来，读不回。 */
+        val legacy: Boolean get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+
         /** 车机 WiFi 关着时等它开的上限（停本地热点后一两秒才回来）。 */
         const val WIFI_ON_WAIT_MS = 3_000L
 
@@ -477,5 +615,53 @@ class WifiDirectGroupOwner(
 
         /** 拆组时等系统回话的上限，到点照样收尾。 */
         const val REMOVE_WAIT_MS = 1_500L
+
+        /** 拆组再设回信道时等系统回话的上限。 */
+        const val UNPIN_WAIT_MS = 3_000L
+
+        /** 安卓 8、9 指定信道时等系统回话的上限。 */
+        const val PIN_WAIT_MS = 3_000L
+    }
+}
+
+/**
+ * 安卓 8、9 指定直连组的工作信道。系统有「设直连监听信道和工作信道」的接口但没公开（安卓 10 起有公开的按频率建组），
+ * 只能按名字找；设了工作信道后，之后建的组只建在这个信道上，设成 0 是不限制。
+ *
+ * 接口同时要监听信道（直连设备互相发现时用），给 0 表示不动它，只改工作信道。
+ */
+private object LegacyP2pChannels {
+    const val LISTEN_CHANNEL = 0
+
+    private val method: Method? by lazy {
+        try {
+            WifiP2pManager::class.java.getMethod(
+                "setWifiP2pChannels",
+                WifiP2pManager.Channel::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                WifiP2pManager.ActionListener::class.java,
+            )
+        } catch (e: NoSuchMethodException) {
+            null
+        } catch (e: SecurityException) {
+            null
+        }
+    }
+
+    /** 发出设置，结果交给 [listener]（在建 [channel] 时给的线程上）。发不出去时返回原因，[listener] 不会被调用。 */
+    fun set(manager: WifiP2pManager, channel: WifiP2pManager.Channel, operatingChannel: Int, listener: WifiP2pManager.ActionListener): String? {
+        val m = method ?: return "系统里找不到设直连信道的接口"
+        return try {
+            m.invoke(manager, channel, LISTEN_CHANNEL, operatingChannel, listener)
+            null
+        } catch (e: InvocationTargetException) {
+            val cause = e.targetException ?: e
+            cause.javaClass.simpleName + (cause.message?.let { "：$it" } ?: "")
+        } catch (e: IllegalAccessException) {
+            "调用被拒绝：${e.message}"
+        } catch (e: IllegalArgumentException) {
+            "调用出错：${e.message}"
+        }
     }
 }

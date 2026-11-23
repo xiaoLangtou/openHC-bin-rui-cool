@@ -51,6 +51,13 @@ object DirectGroupRules {
         return out.toList()
     }
 
+    /**
+     * 安卓 8、9 依次尝试的频率：同 [plan]，但去掉「交给系统定」（这两个版本读不回组的频率，只能用指定的信道），
+     * 车机不支持 5 GHz（[fiveGhz] 为 false）时去掉 5 GHz 的频率。
+     */
+    fun pinnedPlan(stationMhz: Int?, fiveGhz: Boolean): List<Int> =
+        plan(stationMhz).filterNotNull().filter { fiveGhz || !isFiveGhz(it) }
+
     fun isFiveGhz(mhz: Int): Boolean = mhz in 5150..5895
 
     private fun isAlignable24(mhz: Int): Boolean = mhz in 2412..2462 && (mhz - 2412) % 5 == 0

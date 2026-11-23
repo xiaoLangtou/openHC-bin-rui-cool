@@ -110,7 +110,7 @@ internal class WirelessPlatformExecutor(
                     val group = readyDirect
                     log(
                         "连接串已发给手机（端口 ${output.port}，直连格式），等手机加入直连组（以手机连上 TCP 端口为准）" +
-                            "（手机报的 MAC ${MacText.mask(output.phoneMac)}；组在 ${group?.frequencyMhz ?: "?"} MHz，系统交回的真实频率）",
+                            "（手机报的 MAC ${MacText.mask(output.phoneMac)}；组在 ${group?.frequencyMhz ?: "?"} MHz，${group?.frequencySource ?: "来源未知"}）",
                     )
                 } else if (output is WirelessEvent.ConnectionInfoSent) {
                     log(
@@ -299,7 +299,7 @@ internal class WirelessPlatformExecutor(
         handle.stop()
     }
 
-    /** 建直连组：组名、口令、频率都由本机定，建好后交回系统读回的实际值；连接串用直连格式。 */
+    /** 建直连组：建好后交回组名、口令、频率（安卓 8、9 上频率是指定的信道）；连接串用直连格式。 */
     private fun startDirectGroup(id: Int, factory: (DirectGroupEvents) -> LocalHotspotHandle) {
         val events = object : DirectGroupEvents {
             override fun onReady(group: DirectGroup) = ifHotspot(id) {
