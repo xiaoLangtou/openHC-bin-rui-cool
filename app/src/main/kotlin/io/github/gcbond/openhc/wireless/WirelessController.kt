@@ -238,6 +238,9 @@ class WirelessController(
         }
         // 清单里「手机蓝牙连上」的入口按设置启停（安装后第一次启动、设置在别处被改过时对齐）。
         handler.post { syncBluetoothReceiver() }
+        // 本地热点强制 5 GHz 信道 36（设置开关，见 WirelessPreferences.hotspot5g）。直连方式不走这里（自带指定信道）。
+        LocalHotspotOwner.forcedChannel = if (wirelessPrefs.hotspot5g) HOTSPOT_FORCED_CHANNEL else null
+        Log.i(TAG, "热点频段：" + if (wirelessPrefs.hotspot5g) "强制 5 GHz 信道 $HOTSPOT_FORCED_CHANNEL" else "交给系统定")
     }
 
     /** 发触摸用，主线程读。 */
@@ -1308,6 +1311,9 @@ class WirelessController(
         /** 投屏没成就自己断掉后的自动重拨：间隔与连续次数上限（实测手机要抽风 2~3 次才肯连）。 */
         const val AUTO_RETRY_DELAY_MS = 3_000L
         const val AUTO_RETRY_MAX = 3
+
+        /** 本地热点强制开的 5 GHz 信道（见 [WirelessPreferences.hotspot5g]；同吉利 CarLink 的选择）。 */
+        const val HOTSPOT_FORCED_CHANNEL = 36
 
         const val TAG = "OpenHC-Wireless"
 

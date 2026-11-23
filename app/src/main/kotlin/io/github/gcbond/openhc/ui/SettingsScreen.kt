@@ -133,6 +133,7 @@ private fun SettingsRightColumn(
     SettingsGroup(stringResource(R.string.settings_group_connection)) {
         WiredOnlySetting(wireless)
         WirelessModeSetting(wireless)
+        if (!wireless.wifiDirect) Hotspot5gSetting(wireless)
         BluetoothAddressSection(settings, systemBluetoothAddress)
         LePairingSetting()
         UsbAutoConnectSettingsSection()

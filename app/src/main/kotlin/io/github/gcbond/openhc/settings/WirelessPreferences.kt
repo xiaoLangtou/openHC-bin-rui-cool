@@ -85,6 +85,16 @@ class WirelessPreferences(context: Context) {
         get() = prefs.getBoolean(KEY_GATT, true)
         set(value) = prefs.edit { putBoolean(KEY_GATT, value) }
 
+    /**
+     * 本地热点强制开在 5 GHz 信道 36（默认开，下一次申请热点生效）。申请热点前把系统热点配置的频段/信道改写成
+     * 5 GHz/36，系统开本地热点时继承它；系统不吃这套时仍落 2.4 GHz，手机按 BSSID 找网、信道报错也能自己找到（实车核对）。
+     * 副作用：车机设置里的个人热点配置也会被改到 5 GHz/36。对照：吉利 CarLink（com.geely.linkhmi）的 WifiApService
+     * 就是这么干的（apBand=1 + apChannel=36），车机 5 GHz 频段支持已实测（日志「5G=支持」）。
+     */
+    var hotspot5g: Boolean
+        get() = prefs.getBoolean(KEY_HOTSPOT_5G, true)
+        set(value) = prefs.edit { putBoolean(KEY_HOTSPOT_5G, value) }
+
     companion object {
         const val DEFAULT_REPUBLISH_SECONDS = 120
         const val MAX_REPUBLISH_SECONDS = 3600
@@ -110,5 +120,6 @@ class WirelessPreferences(context: Context) {
         private const val KEY_REPUBLISH_SECONDS = "debug_beacon_republish_seconds"
         private const val KEY_RANDOM_ADDRESS = "debug_beacon_random_address"
         private const val KEY_GATT = "debug_beacon_gatt"
+        private const val KEY_HOTSPOT_5G = "hotspot_5g"
     }
 }

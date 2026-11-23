@@ -401,6 +401,7 @@ class VideoDecoder @JvmOverloads constructor(
         if (closed) return false
         lastArrivalMs = now()
         stats.onInput()
+        stats.onInputBytes(length.toLong())
         scan.scan(data, offset, length)
         if (scan.sliceCount > 0) stats.onArrival(System.nanoTime(), streamPtsUs)
         return try {

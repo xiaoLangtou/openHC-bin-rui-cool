@@ -74,11 +74,13 @@ class VideoStats(
     /** 本窗口手机时间戳间隔的最小、最大值（毫秒），没有为 -1。 */
     val minPhoneIntervalMs: Float = -1f,
     val maxPhoneIntervalMs: Float = -1f,
+    /** 本窗口收到的码流字节折算的码率（Mbps，收到就计，含丢掉的）；没有收到为 -1。 */
+    val inputMbps: Float = -1f,
 ) {
     /** 两行：第一行是解码与上屏，第二行是上屏节拍和到达抖动。 */
     override fun toString(): String = String.format(
         Locale.ROOT,
-        "输入 %.1f 解码 %.1f 上屏 %s 丢 %d（累计 %d）延迟 均 %s 最大 %s ms 积压 %d%s%s %dx%d %s%s",
+        "输入 %.1f 解码 %.1f 上屏 %s 丢 %d（累计 %d）延迟 均 %s 最大 %s ms 积压 %d%s%s 码率 %s %dx%d %s%s",
         inputFps,
         decodedFps,
         if (renderedFps < 0) "-" else String.format(Locale.ROOT, "%.1f", renderedFps),
@@ -89,6 +91,7 @@ class VideoStats(
         pendingFrames,
         if (waitingForInput > 0) " 待送 $waitingForInput" else "",
         if (replayed > 0) " 重放 $replayed" else "",
+        if (inputMbps < 0) "-" else String.format(Locale.ROOT, "%.1f Mbps", inputMbps),
         width,
         height,
         codecName ?: "无解码器",
@@ -140,6 +143,10 @@ internal class VideoStatsCounter {
     private var totalDropped = 0L
     private var pending = 0
 
+    // 收流字节（码率）：收到就计（含后来丢掉的），按窗口清零，累计保留。
+    private var inputBytes = 0L
+    private var totalInputBytes = 0L
+
     // 上屏节拍（见 FramePacer），按窗口清零。
     private var sameLatch = 0
     private var deferred = 0
@@ -182,6 +189,14 @@ internal class VideoStatsCounter {
     fun onInput() {
         input++
         totalInput++
+    }
+
+    /** 收到一个访问单元的 [bytes] 字节：收流码率统计（收到就计，含丢掉的）。 */
+    @Synchronized
+    fun onInputBytes(bytes: Long) {
+        if (bytes <= 0) return
+        inputBytes += bytes
+        totalInputBytes += bytes
     }
 
     @Synchronized
@@ -303,6 +318,7 @@ internal class VideoStatsCounter {
         val stats = VideoStats(
             windowMs = windowMs,
             inputFps = input * perSecond,
+            inputMbps = if (inputBytes > 0) inputBytes * 8f * perSecond / 1_000_000f else -1f,
             decodedFps = decoded * perSecond,
             renderedFps = if (renderReported) rendered * perSecond else -1f,
             dropped = dropped,
@@ -337,6 +353,7 @@ internal class VideoStatsCounter {
         decoded = 0
         rendered = 0
         dropped = 0
+        inputBytes = 0
         latencySumUs = 0
         latencyMaxUs = -1
         latencySamples = 0

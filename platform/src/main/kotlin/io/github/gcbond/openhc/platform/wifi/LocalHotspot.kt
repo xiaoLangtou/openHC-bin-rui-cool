@@ -328,6 +328,13 @@ class LocalHotspotOwner private constructor(context: Context) {
         val stationOn = stationEnabled()
         if (stationOn) stationNote = true
         note("向系统申请本地热点（车机 WiFi ${if (stationOn) "开着，当前连接 ${stationFrequency()} MHz" else "关着"}）")
+        forcedChannel?.let { channel ->
+            val failure = forceSystemApBand(manager, channel)
+            note(
+                if (failure == null) "强制热点频段：5 GHz 信道 $channel 已写进系统热点配置（系统开本地热点时继承；个人热点配置也被改到这一频段）"
+                else "强制热点频段没成（$failure），交给系统定"
+            )
+        }
         // 看门狗在另一条线程上跑：写到哪个日志在这里先取好，调用返回后它不再记、也不再排下一次。
         val log = currentLog()
         val returned = AtomicBoolean(false)
@@ -383,6 +390,24 @@ class LocalHotspotOwner private constructor(context: Context) {
     private fun rejected(message: String) {
         lastFailure = message
         drive { machine.onRequestRejected(now()) }
+    }
+
+    /**
+     * 把系统热点配置的频段改写成 5 GHz、信道 [channel]（反射，特权接口）。写成返回 null，否则给说明。
+     * 只改频段和信道，网络名、密码等其余字段原样保留（本地热点反正由系统随机生成，个人热点的名字密码不动）。
+     */
+    @Suppress("DEPRECATION")
+    private fun forceSystemApBand(manager: WifiManager, channel: Int): String? = try {
+        val config = WifiManager::class.java.getMethod("getWifiApConfiguration").invoke(manager)
+            as? android.net.wifi.WifiConfiguration ?: return "读不到系统热点配置"
+        config.javaClass.getDeclaredField("apBand").apply { isAccessible = true }.set(config, 1)
+        config.javaClass.getDeclaredField("apChannel").apply { isAccessible = true }.set(config, channel)
+        val ok = WifiManager::class.java
+            .getMethod("setWifiApConfiguration", android.net.wifi.WifiConfiguration::class.java)
+            .invoke(manager, config) as? Boolean ?: false
+        if (ok) null else "系统拒绝写入热点配置"
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}：${e.message ?: "原因不明"}"
     }
 
     /** 系统回话：热点开好了（[held] 是系统给的热点）。 */
@@ -598,5 +623,13 @@ class LocalHotspotOwner private constructor(context: Context) {
 
         /** 本进程用过热点才有；没用过返回 null（不为此建工作线程）。 */
         fun existing(): LocalHotspotOwner? = instance
+
+        /**
+         * 强制热点频段：申请热点前把系统热点配置的信道改写成 [value]（5 GHz 信道号，如 36），
+         * 系统开本地热点时继承频段/信道；null = 不强制，交给系统定（这台车机落 2.4 GHz 信道 6）。
+         * 对照吉利 CarLink：同样反射写系统热点配置（apBand=1 + apChannel=36）。由调用方（app 层）按设置给值。
+         */
+        @Volatile
+        var forcedChannel: Int? = null
     }
 }

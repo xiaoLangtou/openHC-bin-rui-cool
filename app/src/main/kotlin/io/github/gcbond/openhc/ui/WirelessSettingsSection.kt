@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.R
+import io.github.gcbond.openhc.platform.wifi.LocalHotspotOwner
 import io.github.gcbond.openhc.settings.WirelessPreferences
 
 /**
@@ -30,6 +31,8 @@ internal class WirelessSettingsState(context: Context) {
         private set
     var wifiDirect by mutableStateOf(prefs.wifiDirect)
         private set
+    var hotspot5g by mutableStateOf(prefs.hotspot5g)
+        private set
 
     fun changeWiredOnly(value: Boolean) {
         wiredOnly = value
@@ -41,6 +44,13 @@ internal class WirelessSettingsState(context: Context) {
     fun changeWifiDirect(value: Boolean) {
         wifiDirect = value
         prefs.wifiDirect = value
+    }
+
+    /** 热点频段立即生效（下一次申请热点时写系统配置），设置同步给热点所有者。 */
+    fun changeHotspot5g(value: Boolean) {
+        hotspot5g = value
+        prefs.hotspot5g = value
+        LocalHotspotOwner.forcedChannel = if (value) 36 else null
     }
 
     fun changeConnectOnBluetooth(value: Boolean) {
@@ -91,4 +101,16 @@ internal fun WirelessModeSetting(state: WirelessSettingsState) {
         description = stringResource(R.string.settings_wireless_mode_hint),
         note = if (state.wifiDirect) stringResource(R.string.settings_wireless_mode_direct_note) else null,
     ) { state.changeWifiDirect(it == 1) }
+}
+
+/** 热点频段（默认强制 5 GHz 信道 36）：只在「车机开热点」方式下有用；直连方式自带指定信道。 */
+@Composable
+internal fun Hotspot5gSetting(state: WirelessSettingsState) {
+    SwitchRow(
+        title = stringResource(R.string.settings_wireless_hotspot_5g),
+        checked = state.hotspot5g,
+        description = stringResource(R.string.settings_wireless_hotspot_5g_hint),
+        note = if (state.hotspot5g) stringResource(R.string.settings_wireless_hotspot_5g_note) else null,
+        onCheckedChange = state::changeHotspot5g,
+    )
 }
