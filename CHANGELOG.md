@@ -1,5 +1,41 @@
 # 更新记录
 
+## 0.2.5（测试版，2026-11-23）
+
+- 新增：鸿蒙 3.0 / 4.x（非纯血鸿蒙）的手机能无线投屏了：画面、触摸、声音都正常（鸿蒙 3.0 手机实测）。
+  这些手机在投屏协商里的选法和纯血鸿蒙不一样（多选了没声明的音频、鼠标事件、扩展媒体能力、输入功能，保活消息格式也不同），
+  之前每一步都被当成协议错误断开；现在照常接受，并把手机的选择写进诊断日志（[#10](https://github.com/GGBondLab/OpenHC/issues/10)、[#11](https://github.com/GGBondLab/OpenHC/issues/11)、[#32](https://github.com/GGBondLab/OpenHC/issues/32)、[#37](https://github.com/GGBondLab/OpenHC/issues/37)）。
+  这些手机的声音不走音频数据连接，而是经设备会话的控制连接送来，现在能拼起来播放。手机还会每隔几秒重试建音频数据连接，偶尔会让声音停零点几秒到两秒。
+- 新增：投屏界面上点「车机」图标，回到车机桌面；连接、声音、方向盘按键照常，从桌面点 OpenHC 回到投屏。
+- 修复：手机重新配对时把设备握手连发两遍，之前被当成协议错误断开，表现为「第二次连不上、扫码输码也失败」（[#9](https://github.com/GGBondLab/OpenHC/issues/9)、[#21](https://github.com/GGBondLab/OpenHC/issues/21)、[#36](https://github.com/GGBondLab/OpenHC/issues/36)）。
+  只在单元测试里验证过，车上没复现出这种情况。
+- 验证：安卓 12 的设备当车机，「5 GHz 直连」用 IPv6 地址反推网卡地址，手机能连上（[#13](https://github.com/GGBondLab/OpenHC/issues/13)、[#38](https://github.com/GGBondLab/OpenHC/issues/38)；平板实测，还没在安卓 12 的车机上试）。
+- 改进：诊断日志多记几样，方便对症：手机在投屏协商里的选择全文、格式不对的控制消息开头、没处理的设备消息内容（长串照样隐去）。
+- 文档：README 提醒先给权限，有的车机自带的权限管家会悄悄拦下申请（[#31](https://github.com/GGBondLab/OpenHC/issues/31)）。
+
+## 0.2.4（测试版，2026-11-23）
+
+- 修复：有的手机（鸿蒙 4.2、MagicOS）做完加密选择后不发 OPTIONS、直接要能力，之前被当成协议错误、断开（报「能力请求早于加密与 OPTIONS 协商」）；
+  现在照常应答（[#32](https://github.com/GGBondLab/OpenHC/issues/32)、[#37](https://github.com/GGBondLab/OpenHC/issues/37)）。只能保证过这一步，后面能不能出画面还没验证。
+- 改进：无线连接时音乐和导航多攒 0.3 秒声音。车机扫描 WiFi 时投屏信道会停 0.1～0.3 秒，之前一停就断音，现在不断了（画面还会顿一下）；
+  代价是无线时声音整体晚 0.3 秒。有线和电话不变（[#42](https://github.com/GGBondLab/OpenHC/issues/42)、[#43](https://github.com/GGBondLab/OpenHC/issues/43)）。已在比亚迪车机上验证。
+- 试验：「5 GHz 直连」放开到安卓 6、7，和安卓 8、9 一样由 OpenHC 指定信道（[#31](https://github.com/GGBondLab/OpenHC/issues/31)、[#35](https://github.com/GGBondLab/OpenHC/issues/35)）。还没在安卓 6、7 的车上验证。
+- 试验：安卓 11 起系统不给应用读网卡的真实地址，手机认不出车机的网络、不加入（[#13](https://github.com/GGBondLab/OpenHC/issues/13)、[#38](https://github.com/GGBondLab/OpenHC/issues/38)）；
+  现在读不到时从网卡的 IPv6 地址反推。在比亚迪车机上模拟过（不读真实地址、只用反推的），手机能连上；还没在安卓 11、12 的车上验证。
+- 试验：新增无线方式「车机自带热点」：先在车机设置里打开车机自带的热点（能选 5 GHz 就选 5 GHz），在 设置 → 连接方式 → 无线方式 里选它，
+  填热点名、密码和频段。热点开着时车机系统不扫描 WiFi，投屏最流畅（比亚迪车机上验证过）；热点开着时车机自己连不了别的 WiFi，
+  有的车机没人连时会自动关热点。
+
+## 0.2.3（测试版，2026-11-23）
+
+- 修复：有的手机发来的 AAC 声音，每一包前面多 12 字节，之前认不出、一直没声音；现在去掉这 12 字节再解码（[#21](https://github.com/GGBondLab/OpenHC/issues/21)）。还没在出问题的手机上验证。
+- 修复：「PCM 不出声就自动改用 AAC」会误判：手机连上时会短暂要一下声音、马上放掉，连上后没放歌、过一会儿才断开，也被当成 PCM 不出声，
+  这台手机从此改用 AAC，有线、无线都受影响（[#21](https://github.com/GGBondLab/OpenHC/issues/21)、[#28](https://github.com/GGBondLab/OpenHC/issues/28)）。
+  现在只有手机要放歌时才判断。已经被改成 AAC 的手机升级后仍用 AAC；想换回 PCM，在设置 → 声音里点这台手机的「恢复 PCM」。
+- 试验：「5 GHz 直连」扩展到安卓 8、9 的车机。这两个版本的车机读不到自己热点开在哪个信道，只能猜，猜错了手机扫码后转圈、连不上；
+  直连的信道由 OpenHC 用系统的一个内部设置指定，不用猜（[#14](https://github.com/GGBondLab/OpenHC/issues/14)）。有的车机系统不支持这个设置，
+  建不起来时首页会提示，改回「车机开热点」即可。还没在车上验证。
+
 ## 0.2.2（测试版，2026-11-23）
 
 - 新增：设置 → 画面 → 界面大小（标准 / 85% / 75% / 65%）。大屏车机上手机界面显得太大（图标、文字偏大）时调小，只影响投屏画面，

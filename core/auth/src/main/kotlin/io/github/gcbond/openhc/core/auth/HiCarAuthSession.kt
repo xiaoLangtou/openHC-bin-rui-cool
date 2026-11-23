@@ -27,6 +27,10 @@ import java.security.SecureRandom
  * 握手里的 `usb_connection` 必须和 [HiCarAuthConfig.usbConnection] 一致，否则按
  * [AuthFailure.UnsupportedConnection] 失败。
  *
+ * 重发的设备握手：手机刚从免码回连改走输码时，会在约 150 ms 内把设备握手连发两遍、中间没有认证数据（2026-11 用户日志）。
+ * 认证数据开始交换之前再来的握手，按新的一次重新应答（新建认证器，连接码沿用第一次的），一条连接上最多 [MAX_HANDSHAKES] 次；
+ * 认证数据开始交换之后再来、次数超了、或者换了 deviceId，仍按协议错误结束。
+ *
  * 发出的 JSON 是紧凑格式、按上面的键顺序，非 ASCII 字符原样输出（UTF-8）。
  * 不做 I/O、不开线程；非线程安全。会话结束（成功、失败或抛出异常）后，再喂入的数据一律忽略。
  */
@@ -42,6 +46,15 @@ class HiCarAuthSession(
     private var authenticator: AccessoryAuthenticator? = null
     private var handshake: PhoneHandshake? = null
     private var mode: AuthMode? = null
+
+    /** 本轮已经处理过认证库消息（`oper_type=3`）：之后再来设备握手就是协议错误。 */
+    private var hiChainSeen = false
+
+    /** 这条连接上收到的设备握手次数（含重发）。 */
+    private var handshakes = 0
+
+    /** 配置没给连接码时第一次生成的连接码：重发握手时沿用，免得屏幕上显示的码变了。 */
+    private var generatedPin: String? = null
 
     var isFinished: Boolean = false
         private set
@@ -95,26 +108,37 @@ class HiCarAuthSession(
         // 诊断只记这几个标志，不记 deviceId（测试锁了这个隐私约束）。v25 一度把完整 JSON 也打进日志，
         // 泄漏手机身份，2026-11-24 随 _launcher 一并回退；要看的字段（_launcher 等）显式挑出来记。
         val flags = "has_pin=$hasPin，usb_connection=$usbConnection，version=${version ?: "无"}"
-        handshake?.let { previous ->
-            throw MalformedMessageException("本轮认证出现重复的设备握手（上次 has_pin=${previous.hasPin}；这次 $flags）")
+        val previous = handshake
+        if (previous != null && (hiChainSeen || handshakes >= MAX_HANDSHAKES)) {
+            val why = if (hiChainSeen) "认证数据已经开始交换" else "这条连接上已经握手 $handshakes 次"
+            throw MalformedMessageException("本轮认证出现重复的设备握手（上次 has_pin=${previous.hasPin}；这次 $flags；$why）")
         }
         val deviceId = body.exactString("deviceId")
             ?.takeIf { it.length in 1..AccessoryAuthConfig.MAX_AUTH_ID_BYTES && it.all { c -> c in ' '..'~' } }
             ?: throw MalformedMessageException("deviceId 必须是 1～64 个可打印 ASCII 字符")
+        if (previous != null && deviceId != previous.deviceId) {
+            throw MalformedMessageException("重发的设备握手换了 deviceId（上次 has_pin=${previous.hasPin}；这次 $flags）")
+        }
+        handshakes++
+        val repeat = previous?.let {
+            HiCarAuthAction.Note("手机在认证数据交换之前重发了设备握手（第 $handshakes 次；上次 has_pin=${it.hasPin}），按这次的握手重新应答")
+        }
+        authenticator = null
+        mode = null
         val phone = PhoneHandshake(deviceId, hasPin, usbConnection, version, body)
         handshake = phone
         if (usbConnection != config.usbConnection) {
             // 有线会话收到无线握手，或反过来：两边对连接方式的理解不一致。
             isFinished = true
-            return listOf(HiCarAuthAction.Note("手机握手：$flags"), HiCarAuthAction.Failed(AuthFailure.UnsupportedConnection))
+            return listOfNotNull(repeat, HiCarAuthAction.Note("手机握手：$flags"), HiCarAuthAction.Failed(AuthFailure.UnsupportedConnection))
         }
-        val pin = if (hasPin) config.pin ?: PinCodes.random(random) else null
+        val pin = if (hasPin) config.pin ?: (generatedPin ?: PinCodes.random(random).also { generatedPin = it }) else null
         val auth = authenticators.create(AccessoryAuthConfig(config.service, config.selfAuthId, deviceId, pin))
         val note = HiCarAuthAction.Note("手机握手：$flags；本机有这台手机的配对记录=${auth.peerTrusted}")
         if (!hasPin && !auth.peerTrusted) {
             // 手机要求免码回连，但本机没有它的信任记录：不回应答，由上层断开。
             isFinished = true
-            return listOf(note, HiCarAuthAction.Failed(AuthFailure.NotTrusted))
+            return listOfNotNull(repeat, note, HiCarAuthAction.Failed(AuthFailure.NotTrusted))
         }
         authenticator = auth
         val authMode = if (hasPin) AuthMode.PIN_PAIRING else AuthMode.TRUSTED_RECONNECT
@@ -129,7 +153,8 @@ class HiCarAuthSession(
         // 无线时手机已经从二维码或用户输入拿到连接码，车机不下发。
         if (pin != null && config.usbConnection) response.append(",\"pin_code\":").append(CompactJson.quote(pin))
         response.append('}')
-        return listOf(
+        return listOfNotNull(
+            repeat,
             note,
             HiCarAuthAction.Send(response.toString().toByteArray(Charsets.UTF_8)),
             HiCarAuthAction.HandshakeAnswered(deviceId, authMode, pin),
@@ -138,6 +163,7 @@ class HiCarAuthSession(
 
     private fun onHiChain(data: String): List<HiCarAuthAction> {
         val auth = authenticator ?: throw MalformedMessageException("设备握手之前收到认证数据")
+        hiChainSeen = true
         val received = messageCode(data)
         val replies = ArrayList<String>(1)
         val actions = ArrayList<HiCarAuthAction>()
@@ -193,6 +219,9 @@ class HiCarAuthSession(
 
         /** 车机应答里 discover_type 的取值。 */
         const val DISCOVER_TYPE = 1
+
+        /** 一条认证连接上最多接受的设备握手次数（含重发）。 */
+        const val MAX_HANDSHAKES = 3
     }
 }
 

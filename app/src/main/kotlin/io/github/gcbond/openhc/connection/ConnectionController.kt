@@ -494,6 +494,8 @@ class ConnectionController(context: Context) {
                 current.inputReady = current.touchNegotiated && !current.tearingDown
                 if (current.keyNegotiated && !current.tearingDown) MediaKeys.ready(app, current.keys)
             }
+            is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
+            SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("有线 #${current.id}")
             is SessionEvent.Ended -> if (current.tearingDown) maybeFinish(current) else teardown(current)
             else -> Unit
         }

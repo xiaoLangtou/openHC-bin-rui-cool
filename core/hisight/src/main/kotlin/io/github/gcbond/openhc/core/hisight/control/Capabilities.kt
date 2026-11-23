@@ -78,8 +78,15 @@ internal class Capabilities(private val config: HiSightConfig) {
         return items.joinToString(";")
     }
 
-    /** 校验一次能力选择（不含触发命令）。没有 `his_video_formats` 时只更新输入选择。 */
-    fun select(fields: Map<String, String>) {
+    /**
+     * 校验一次能力选择（不含触发命令）。没有 `his_video_formats` 时只更新输入选择。
+     * 返回要写进诊断日志的说明（没有就是空表）。
+     *
+     * 音频、扩展媒体能力：车机不声明（声音走 DMSDP），但鸿蒙 3.0 / 4.x 的手机仍会选（2026-11 用户报告和实机），
+     * 照常接受、把选的值写进说明，这条连接不按它处理。
+     */
+    fun select(fields: Map<String, String>): List<String> {
+        val notes = ArrayList<String>(1)
         if (fields.isEmpty() ||
             fields.keys.any { it !in ParameterText.CAPABILITY_FIELDS && it !in ParameterText.METADATA_FIELDS }
         ) {
@@ -87,7 +94,10 @@ internal class Capabilities(private val config: HiSightConfig) {
         }
         fields["his_version"]?.let { if (!isAcceptedVersion(it)) throw MalformedMessageException("手机版本不是 1.0 或 1.1") }
         fields["his_audio_codecs"]?.let {
-            if (it.lowercase() != "none") throw MalformedMessageException("手机选择了未声明的音频能力")
+            if (it.lowercase() != "none") {
+                val shown = it.filter { c -> c in ' '..'~' }.take(AUDIO_NOTE_MAX)
+                notes += "手机选了投屏通道上的音频「$shown」（车机没声明），照常继续；这条连接不从投屏通道收声音"
+            }
         }
 
         var events = inputEvents
@@ -101,7 +111,7 @@ internal class Capabilities(private val config: HiSightConfig) {
                 events = emptyList()
                 vendors = emptyList()
             } else {
-                val chosen = inputSelection(uibc)
+                val chosen = inputSelection(uibc, notes)
                 events = chosen.first
                 vendors = chosen.second
             }
@@ -110,11 +120,19 @@ internal class Capabilities(private val config: HiSightConfig) {
         }
         fields["his_media_capability"]?.let {
             val v = it.lowercase()
-            if (v != "" && v != "none") throw MalformedMessageException("手机选择了未声明的扩展媒体能力")
+            if (v != "" && v != "none") {
+                // 车机不声明扩展媒体能力，鸿蒙 3.0 的手机仍会选（2026-11 实机）：照常继续，选的值写进说明。
+                val shown = it.filter { c -> c in ' '..'~' }.take(AUDIO_NOTE_MAX)
+                notes += "手机选了扩展媒体能力「$shown」（车机没声明），照常继续，不按它处理"
+            }
         }
         if ("his_vtp" in fields) throw MalformedMessageException("没有声明 VTP，手机却选择了它")
         fields["his_feature"]?.let {
-            if (it != "input_feature_set=;") throw MalformedMessageException("手机选择了未实现的输入功能")
+            if (it != "input_feature_set=;") {
+                // 车机声明的输入功能是空的，鸿蒙 3.0 的手机仍会列上自己的（2026-11 实机）：照常继续，不按它处理。
+                val shown = it.filter { c -> c in ' '..'~' }.take(AUDIO_NOTE_MAX)
+                notes += "手机选了输入功能「$shown」（车机没声明），照常继续，不按它处理"
+            }
         }
 
         var source = sourceDeviceType
@@ -140,7 +158,7 @@ internal class Capabilities(private val config: HiSightConfig) {
             inputEvents = events
             inputVendors = vendors
             sourceDeviceType = source
-            return
+            return notes
         }
         val video = ParameterText.integerFields(formats, VIDEO_FIELDS, ECHO_ONLY_VIDEO_FIELDS)
         val width = video["width"]
@@ -156,6 +174,7 @@ internal class Capabilities(private val config: HiSightConfig) {
         inputEvents = events
         inputVendors = vendors
         sourceDeviceType = source
+        return notes
     }
 
     /**
@@ -182,7 +201,11 @@ internal class Capabilities(private val config: HiSightConfig) {
      * 解析手机的输入选择，必须与声明完全一致（顺序可以不同），返回手机给出的顺序。
      * 可选的按键事件（媒体键）例外：可以不选；只选了其中一个时当作都没选。
      */
-    private fun inputSelection(value: String): Pair<List<String>, List<String>> {
+    /**
+     * 解析手机的输入选择。鸿蒙 3.0 的手机会把自己支持的事件全列上（含车机没声明的鼠标事件，触摸、按键各列两遍，
+     * 2026-11 实机），所以没声明的事件和重复项丢掉、只用声明过的，并写一条说明；必须的事件仍要选上。
+     */
+    private fun inputSelection(value: String, notes: MutableList<String>): Pair<List<String>, List<String>> {
         val parts = value.split(";").toMutableList()
         if (parts.last().isEmpty()) parts.removeAt(parts.size - 1)
         val fields = HashMap<String, String>()
@@ -198,9 +221,14 @@ internal class Capabilities(private val config: HiSightConfig) {
         if (fields["input_category_list"] != "GENERIC" || generic == null) {
             throw MalformedMessageException("输入选择必须是已声明的 GENERIC 类别")
         }
-        var events = if (generic.isEmpty()) emptyList() else generic.split(", ")
-        if (events.toSet().size != events.size || events.any { it !in advertisedEvents }) {
-            throw MalformedMessageException("输入选择含重复或未声明的事件")
+        val listed = if (generic.isEmpty()) emptyList() else generic.split(", ")
+        val declared = listed.filter { it in advertisedEvents }
+        var events = declared.distinct()
+        val extra = listed.filter { it !in advertisedEvents }.distinct()
+        if (extra.isNotEmpty() || events.size != declared.size) {
+            val shown = extra.take(EXTRA_EVENTS_SHOWN).joinToString("、") { it.filter { c -> c in ' '..'~' }.take(EVENT_NAME_MAX) }
+            notes += "手机的输入选择里有车机没声明的事件（${if (extra.isEmpty()) "无" else shown}）或重复项，只用声明过的：" +
+                events.joinToString("、")
         }
         if (!events.containsAll(requiredEvents)) throw MalformedMessageException("输入选择缺少已声明的事件")
         // 可选的按键事件只选了一半：当作没选，免得按下发得出去、抬起发不出去。
@@ -227,6 +255,13 @@ internal class Capabilities(private val config: HiSightConfig) {
     }
 
     companion object {
+        /** 说明里最多列这么多个没声明的事件、每个最多这么多字符。 */
+        private const val EXTRA_EVENTS_SHOWN = 8
+        private const val EVENT_NAME_MAX = 40
+
+        /** 说明里最多写手机选的音频值的这么多字符。 */
+        private const val AUDIO_NOTE_MAX = 120
+
         val TOUCH_EVENTS = listOf("left_point_down", "left_point_up", "left_move")
         val KEY_EVENTS = listOf("left_key_down", "left_key_up")
         const val TEXT_VENDOR = "input_content"

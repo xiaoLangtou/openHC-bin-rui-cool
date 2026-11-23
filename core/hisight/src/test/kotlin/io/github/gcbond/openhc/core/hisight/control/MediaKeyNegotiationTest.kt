@@ -84,7 +84,36 @@ class MediaKeyNegotiationTest {
             // 没有回控端口：这次没有按键，不算失败。
             assertTrue(caps.mediaSetup(5000, -1).inputEvents.isEmpty())
         }
-        // 选了没声明的事件照样拒绝。
-        assertFailsWith<MalformedMessageException> { select(Capabilities(mediaOnly), generic(touch)) }
+        // 选了没声明的事件（鸿蒙 3.0 会把自己支持的全列上、还重复）：丢掉没声明的和重复的，只用声明过的。
+        val extra = Capabilities(mediaOnly)
+        select(extra, generic(touch + keys + listOf("mouse_down", "mouse_up", "mouse_move") + touch + keys))
+        assertEquals(keys.toSet(), extra.mediaSetup(5000, 5001).inputEvents.toSet())
+        val onlyTouch = Capabilities(mediaOnly)
+        select(onlyTouch, generic(touch))
+        assertTrue(onlyTouch.mediaSetup(5000, 5001).inputEvents.isEmpty())
+    }
+
+    /** 没声明的事件和重复项写进说明；必须的触摸事件没选上仍然拒绝。 */
+    @Test
+    fun extraEventsAreDroppedWithANoteButRequiredOnesStillCount() {
+        val config = HiSightConfig(640, 480, 640, 480, 30, 160, touchInput = true, mediaKeyInput = true)
+        val caps = Capabilities(config)
+        val notes = caps.select(
+            ParameterText.parameters(
+                ("his_video_formats: codecs 1;width 640;height 480;fps 30\r\nhis_uibc_capability: " +
+                    generic(touch + keys + listOf("mouse_down") + touch) + "\r\n").toByteArray(Charsets.US_ASCII),
+            ),
+        )
+        assertEquals((touch + keys).toSet(), caps.mediaSetup(5000, 5001).inputEvents.toSet())
+        val note = notes.single()
+        assertTrue("mouse_down" in note && "重复项" in note, note)
+        assertFailsWith<MalformedMessageException> {
+            Capabilities(config).select(
+                ParameterText.parameters(
+                    ("his_video_formats: codecs 1;width 640;height 480;fps 30\r\nhis_uibc_capability: " +
+                        generic(keys + listOf("mouse_down")) + "\r\n").toByteArray(Charsets.US_ASCII),
+                ),
+            )
+        }
     }
 }

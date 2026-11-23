@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.platform.wifi
 
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
 import java.net.SocketException
@@ -7,6 +8,41 @@ import java.util.Collections
 
 /** 读本机网卡上的地址。安卓 11 起普通应用读不到网卡硬件地址，但网卡上的 IP 地址还读得到。 */
 internal object InterfaceAddresses {
+    /** 开着的网卡和上面的 IPv4（不含回环、链路本地）；读不到就当没有。 */
+    fun ipv4Snapshot(): Map<String, Set<String>> {
+        val out = HashMap<String, Set<String>>()
+        try {
+            val all = NetworkInterface.getNetworkInterfaces() ?: return out
+            for (nif in Collections.list(all)) {
+                val up = try {
+                    nif.isUp && !nif.isLoopback
+                } catch (e: SocketException) {
+                    false
+                }
+                if (!up) continue
+                val addresses = Collections.list(nif.inetAddresses)
+                    .filter { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress }
+                    .mapNotNull { it.hostAddress }
+                    .toSet()
+                if (addresses.isNotEmpty()) out[nif.name] = addresses
+            }
+        } catch (e: SocketException) {
+            // 读不到就当没有，找不到地址时会报出来。
+        } catch (e: RuntimeException) {
+            // 同上。
+        }
+        return out
+    }
+
+    /** 网卡硬件地址；安卓 11 起以高 targetSdk 运行时一般是 null（系统不给普通应用网卡 MAC）。 */
+    fun hardwareAddress(name: String): ByteArray? = try {
+        NetworkInterface.getByName(name)?.hardwareAddress
+    } catch (e: SocketException) {
+        null
+    } catch (e: RuntimeException) {
+        null
+    }
+
     /**
      * 网卡 [name] 上按 EUI-64 生成的 IPv6 链路本地地址反推出的 MAC（[MacText.fromLinkLocal]）；网卡不在、没有这种地址
      * （例如按隐私规则随机生成）返回 null。热点、直连网卡的链路本地地址多数按网卡 MAC 生成（2026-11 比亚迪安卓 10 实车核对一致），

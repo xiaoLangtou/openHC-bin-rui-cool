@@ -22,6 +22,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** 能力协商与 Transport 解析，对照参考实现在同样输入上的结果。 */
 class CapabilitiesTest {
@@ -64,10 +65,16 @@ class CapabilitiesTest {
                     assertEquals("trigger", (expected as? JsonPrimitive)?.content, label)
                     continue
                 }
-                try {
+                val notes = try {
                     caps.select(fields)
                 } catch (e: MalformedMessageException) {
                     assertEquals("rejected", (expected as? JsonPrimitive)?.content, label)
+                    continue
+                }
+                if (expected is JsonPrimitive && expected.content == "rejected") {
+                    // 有意的差异：参考实现拒绝手机选的音频、没声明的输入事件和重复项，本实现照常接受并写说明
+                    // （鸿蒙 3.0 / 4.x 的手机会这样选）。走到这里说明其他字段都通过了，被拒只因为这几样。
+                    assertTrue(notes.any { "没声明" in it || "重复项" in it }, label)
                     continue
                 }
                 val result = expected as? JsonObject ?: throw AssertionError("$label：参考实现拒绝，本实现却接受了")
@@ -166,6 +173,43 @@ class CapabilitiesTest {
                 ParameterText.parameters(ascii("his_video_formats: codecs 1;gop 60;width 320;height 240;fps -1\r\n")),
             )
         }
+    }
+
+    /** 车机没声明音频，鸿蒙 4.x 的手机仍会选一种：照常继续，选的值写进说明；选 none 或不选没有说明。 */
+    @Test
+    fun undeclaredAudioSelectionIsAcceptedWithANote() {
+        val config = HiSightConfig(640, 480, 640, 480, 30, 160)
+        val caps = Capabilities(config)
+        val notes = caps.select(
+            ParameterText.parameters(ascii("his_audio_codecs: LPCM 00000002 00\r\nhis_video_formats: codecs 1;width 320;height 240;fps 25\r\n")),
+        )
+        assertEquals(320, caps.mediaSetup(1000, -1).selection.width)
+        val note = notes.single()
+        assertTrue("LPCM 00000002 00" in note && "没声明" in note, note)
+        for (body in listOf("his_audio_codecs: none\r\n", "")) {
+            val quiet = Capabilities(config).select(ParameterText.parameters(ascii(body + "his_video_formats: codecs 1;width 320;height 240;fps 25\r\n")))
+            assertEquals(emptyList(), quiet, body)
+        }
+    }
+
+    @Test
+    fun undeclaredMediaCapabilityIsAcceptedWithANote() {
+        val caps = Capabilities(HiSightConfig(640, 480, 640, 480, 30, 160))
+        val notes = caps.select(
+            ParameterText.parameters(ascii("his_media_capability: hdr 1;\r\nhis_video_formats: codecs 1;width 320;height 240;fps 25\r\n")),
+        )
+        assertEquals(320, caps.mediaSetup(1000, -1).selection.width)
+        assertTrue(notes.single().let { "扩展媒体能力" in it && "hdr 1;" in it }, notes.toString())
+    }
+
+    @Test
+    fun undeclaredInputFeaturesAreAcceptedWithANote() {
+        val caps = Capabilities(HiSightConfig(640, 480, 640, 480, 30, 160))
+        val notes = caps.select(
+            ParameterText.parameters(ascii("his_feature: input_feature_set=1,101;\r\nhis_video_formats: codecs 1;width 320;height 240;fps 25\r\n")),
+        )
+        assertEquals(320, caps.mediaSetup(1000, -1).selection.width)
+        assertTrue(notes.single().let { "输入功能" in it && "input_feature_set=1,101;" in it }, notes.toString())
     }
 
     @Test

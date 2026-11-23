@@ -13,6 +13,7 @@ import io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamListener
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioSummary
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioTransport
 import io.github.gcbond.openhc.core.dmsdp.audio.CarAudioFocus
+import io.github.gcbond.openhc.core.dmsdp.audio.ControlChannelAudio
 import io.github.gcbond.openhc.core.dmsdp.audio.PcmByteOrder
 import io.github.gcbond.openhc.core.dmsdp.audio.PcmCheck
 import io.github.gcbond.openhc.core.dmsdp.audio.PcmVerdict
@@ -65,6 +66,11 @@ internal class SpeakerSession(
     private var plan: SpeakerPlan? = null
     private var check: PcmCheck? = null
     private val router = AudioRouter(speaker.multiBus)
+
+    /** 控制连接上送来的声音（见 [ControlChannelAudio]）：拼组、按一路声音交出；参数在第一组时定下。 */
+    private val controlAudio = ControlChannelAudio()
+    private var controlStream: AudioStreamInfo? = null
+    private var controlPacket: AudioPacket? = null
 
     private inner class Stream(val info: AudioStreamInfo) {
         /** 数据端口；0 表示还没开好（SETUP 还没发）。 */
@@ -231,6 +237,44 @@ internal class SpeakerSession(
         if (link.finished) return@using
         link.finish()
         emit(AudioEvent.PeerClosed(stream.info, link.depacketizer.bytes))
+    }
+
+    /**
+     * 控制连接上的一条非文本载荷：是声音片就拼组、拼成一组按一路声音交出（和数据会话的声音一样路由、计入 PCM 判定），
+     * 返回 true；不是返回 false，由调用方按别的消息处理。
+     */
+    fun onControlAudio(payload: ByteArray, out: DmsdpSession.Outputs): Boolean {
+        var recognized = false
+        using(out) {
+            recognized = controlAudio.feed(payload) { data, offset, length -> emitControlPcm(data, offset, length) }
+        }
+        return recognized
+    }
+
+    private fun emitControlPcm(data: ByteArray, offset: Int, length: Int) {
+        val info = controlStream ?: run {
+            // 采样参数按手机最近一次声音请求（ParaAudio）；还没请求过时按实机的 48 kHz 双声道 16 位。
+            val basis = current?.info
+            AudioStreamInfo(
+                CONTROL_SESSION_ID, basis?.sampleRate ?: CONTROL_SAMPLE_RATE, basis?.channels ?: CONTROL_CHANNELS, PCM_BITS,
+                null, AudioCodec.PCM, AudioTransport.TCP, "经控制连接",
+            ).also {
+                controlStream = it
+                note(it, "手机经控制连接送声音（没走音频数据连接），按 ${it.sampleRate}Hz / ${it.channels} 声道 / 16 位小端 PCM 放")
+            }
+        }
+        val packet = controlPacket ?: AudioPacket(info).also { controlPacket = it }
+        packet.sequence = controlAudio.groups.toInt()
+        packet.codec = AudioCodec.PCM
+        packet.playable = true
+        packet.byteOrder = PcmByteOrder.LITTLE_ENDIAN
+        packet.data = data
+        packet.offset = offset
+        packet.length = length
+        packet.route = router.route(packet.bus, packet.usage)
+        if (controlAudio.groups == 1L) emit(AudioEvent.FirstPacket(info, packet.payloadType, length))
+        check?.onPacket(AudioCodec.PCM, true)?.let { verdict(it) }
+        guard("onAudioPacket") { listener.onAudioPacket(packet) }
     }
 
     /** 整个设备会话结束：当前的数据会话随之结束（资源由调用方统一关闭），PCM 有没有出声在这时下最后的结论。 */
@@ -427,6 +471,12 @@ internal class SpeakerSession(
     }
 
     internal companion object {
+        /** 控制连接上的声音在播放端用的「数据会话」号（真正的数据会话号是数字，不会撞）。 */
+        const val CONTROL_SESSION_ID = "control"
+        const val CONTROL_SAMPLE_RATE = 48_000
+        const val CONTROL_CHANNELS = 2
+        const val PCM_BITS = 16
+
         const val SET_PARAMETER = "SET_PARAMETER"
         const val CSEQ = "CSeq"
         const val SERVICE_ID = "ServiceID"

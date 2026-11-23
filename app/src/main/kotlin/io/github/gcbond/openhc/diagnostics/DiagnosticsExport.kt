@@ -128,6 +128,8 @@ internal object DiagnosticsExport {
             "系统读得到车机蓝牙地址" to yesNo(DeviceInfo.systemBluetoothAddress() != null),
             "只用数据线连接" to yesNo(wireless.wiredOnly),
             "无线方式" to when {
+                wireless.carHotspot -> "车机自带热点（试验，${if (wireless.carHotspotFiveGhz) "5 GHz" else "2.4 GHz"}，" +
+                    "名称密码${if (wireless.carHotspotSettings() != null) "已填" else "没填齐"}）"
                 wireless.usesWifiDirect -> "WiFi 直连（试验）"
                 wireless.wifiDirect -> "选了 WiFi 直连，但这台车机不支持，实际用热点"
                 else -> "车机开热点"

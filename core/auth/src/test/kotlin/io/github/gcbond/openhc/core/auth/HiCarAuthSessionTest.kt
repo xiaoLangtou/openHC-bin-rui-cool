@@ -192,14 +192,66 @@ class HiCarAuthSessionTest {
         assertTrue(Regex("认证库消息：收到 0x[0-9A-F]{4}，回 0x[0-9A-F]{4}").matches(hiChainNote), hiChainNote)
     }
 
+    /** 手机改走输码时把设备握手连发两遍（中间没有认证数据）：按新的一次重新应答，之后照常配对成功。 */
     @Test
-    fun duplicateHandshakeNamesBothFlags() {
-        val s = session(InMemoryTrustStore(), "x")
-        s.feed(bytes(handshake(true)))
-        val e = assertFailsWith<MalformedMessageException> { s.feed(bytes(handshake(false))) }
-        val text = e.message.orEmpty()
-        assertTrue(text.contains("上次 has_pin=true") && text.contains("这次 has_pin=false"), text)
+    fun handshakeRepeatedBeforeAuthDataIsAnsweredAgain() {
+        val store = InMemoryTrustStore()
+        val seed = Vectors.string(Vectors.scenario("pair"), "carSeed")
+        // 每个认证器都从同一个种子取随机数（重发握手会新建认证器），向量才对得上。
+        val s = HiCarAuthSession(
+            HiCarAuthConfig(Synthetic.SERVICE, Synthetic.CAR_ID, env["version"]!!.jsonPrimitive.content, Synthetic.PIN),
+            AccessoryAuthenticatorFactory { config -> KotlinAccessoryAuthenticator.factory(store, SequenceRandom(seed)).create(config) },
+            SecureRandom(),
+        ) { carInfo }
+        val first = s.feed(bytes(handshake(true)))
+        val again = s.feed(bytes(handshake(true)))
+        assertFalse(s.isFinished)
+        assertEquals(first.sentText(), again.sentText(), "应答内容一样")
+        val note = assertIs<HiCarAuthAction.Note>(again.first()).text
+        assertTrue(note.contains("重发了设备握手") && note.contains("第 2 次") && note.contains("上次 has_pin=true"), note)
+        assertFalse(note.contains(Synthetic.PHONE_ID) || note.contains(Synthetic.PIN), note)
+        assertEquals(AuthMode.PIN_PAIRING, assertIs<HiCarAuthAction.HandshakeAnswered>(again.last()).mode)
+        var last: HiCarAuthAction? = null
+        for (m in Vectors.phoneMessages("pair")) last = s.feed(bytes(phoneEnvelope(3, m))).lastOrNull()
+        assertIs<HiCarAuthAction.Succeeded>(last)
         assertTrue(s.isFinished)
+    }
+
+    /** 免码回连的握手之后马上改成要输码：按输码重新应答。 */
+    @Test
+    fun repeatedHandshakeMaySwitchToPinPairing() {
+        val s = session(pairedStore(), "x")
+        assertEquals(AuthMode.TRUSTED_RECONNECT, assertIs<HiCarAuthAction.HandshakeAnswered>(s.feed(bytes(handshake(false))).last()).mode)
+        assertEquals(AuthMode.PIN_PAIRING, assertIs<HiCarAuthAction.HandshakeAnswered>(s.feed(bytes(handshake(true))).last()).mode)
+    }
+
+    /** 配置没给连接码（有线）时，重发握手沿用第一次生成的码。 */
+    @Test
+    fun generatedPinStaysTheSameAcrossRepeats() {
+        val s = session(InMemoryTrustStore(), "x", pin = null)
+        val pins = (1..3).map { assertIs<HiCarAuthAction.HandshakeAnswered>(s.feed(bytes(handshake(true))).last()).pinCode }
+        assertTrue(PinCodes.isValid(pins[0]!!))
+        assertEquals(List(3) { pins[0] }, pins)
+    }
+
+    @Test
+    fun repeatedHandshakeLimits() {
+        // 认证数据开始交换之后再握手：协议错误，报错里写明两次的标志。
+        val afterData = session(InMemoryTrustStore(), Vectors.string(Vectors.scenario("pair"), "carSeed"))
+        afterData.feed(bytes(handshake(true)))
+        afterData.feed(bytes(phoneEnvelope(3, Vectors.phoneMessages("pair").first())))
+        val e = assertFailsWith<MalformedMessageException> { afterData.feed(bytes(handshake(false))) }
+        val text = e.message.orEmpty()
+        assertTrue(text.contains("上次 has_pin=true") && text.contains("这次 has_pin=false") && text.contains("认证数据已经开始交换"), text)
+        assertTrue(afterData.isFinished)
+        // 一条连接上最多握手 3 次。
+        val many = session(InMemoryTrustStore(), "x")
+        repeat(3) { many.feed(bytes(handshake(true))) }
+        assertFailsWith<MalformedMessageException> { many.feed(bytes(handshake(true))) }
+        // 换了 deviceId。
+        val other = session(InMemoryTrustStore(), "x")
+        other.feed(bytes(handshake(true)))
+        assertFailsWith<MalformedMessageException> { other.feed(bytes(handshake(true, deviceId = "OTHER-PHONE"))) }
     }
 
     @Test
@@ -207,7 +259,7 @@ class HiCarAuthSessionTest {
         val hiChain = phoneEnvelope(3, Vectors.phoneMessages("pair").first())
         val cases = listOf(
             listOf(hiChain), // 握手之前收到认证数据
-            listOf(handshake(true), handshake(true)), // 重复握手
+            listOf(handshake(true), handshake(true), handshake(true), handshake(true)), // 握手次数超了
             listOf(phoneEnvelope(2, "{}")), // 不支持的 oper_type
             listOf("{\"oper_type\":1,\"data\":{}}"), // data 不是字符串
             listOf("{\"oper_type\":\"1\",\"data\":\"{}\"}"), // oper_type 不是整数

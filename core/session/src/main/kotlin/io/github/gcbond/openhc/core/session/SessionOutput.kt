@@ -184,6 +184,14 @@ sealed class SessionEvent : SessionOutput {
         override fun toString() = "VideoStarted($video)"
     }
 
+    /**
+     * 手机暂停了投屏显示服务（设备服务状态通知里显示服务的「暂停」）：用户在投屏界面上点了「车机」图标，要回车机自己的桌面。
+     * 连接照常保持；车机界面在前台时应退回桌面。刚连上时手机可能也发一次（启动竞态），由界面层按时间过滤。
+     */
+    object ProjectionPaused : SessionEvent() {
+        override fun toString() = "ProjectionPaused"
+    }
+
     /** 不影响会话继续的信息：各层没处理的消息、被丢弃的数据、被忽略的请求等。[message] 可以直接写日志。 */
     class Diagnostic(val layer: SessionLayer, val message: String) : SessionEvent() {
         override fun toString() = "Diagnostic($layer: $message)"

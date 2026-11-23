@@ -214,17 +214,23 @@ sealed class DmsdpEvent : DmsdpOutput {
      * 以及没开文件分享时的 module 1 / type 17。要回复时用 [DmsdpSession.sendDeviceData]。
      */
     class UnhandledDeviceData(val module: Long, val type: Int, val data: ByteArray) : DmsdpEvent() {
-        override fun toString(): String {
-            // 未知消息（module 1 上尤其如此）多半是 UTF-8 JSON，带上内容预览方便对照协议；解析不出就
-            // 给前 32 字节的十六进制（驾驶模式/卡片数据等二进制帧要靠它认帧头）。
-            val text = runCatching { String(data, Charsets.UTF_8) }.getOrDefault("")
-            val printable = text.isNotEmpty() && text.all { it == '\n' || it == '\r' || it == '\t' || it.code >= 0x20 }
-            return "UnhandledDeviceData(module=$module, type=$type, ${data.size} 字节" +
-                (if (printable) "，内容：${text.take(160).replace("\n", " ")}）" else "，头 ${data.take(32).toHexString()}）")
-        }
+        override fun toString() = "UnhandledDeviceData(module=$module, type=$type, ${data.size} 字节：${preview(data)})"
 
-        private fun List<Byte>.toHexString(): String =
-            joinToString(" ") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+        private companion object {
+            const val PREVIEW_BYTES = 160
+            val LONG_TOKEN = Regex("[0-9A-Za-z+/=_-]{24,}")
+
+            /** 内容开头（多半是 JSON 文本）：不可打印字节换成点，长串隐去，免得把标识写进日志。 */
+            fun preview(data: ByteArray): String {
+                val text = buildString {
+                    for (i in 0 until minOf(data.size, PREVIEW_BYTES)) {
+                        val c = data[i].toInt() and 0xFF
+                        append(if (c in 0x20..0x7E) c.toChar() else '.')
+                    }
+                }.replace(LONG_TOKEN) { "<隐去 ${it.value.length} 字符>" }
+                return if (data.size > PREVIEW_BYTES) "$text…" else text
+            }
+        }
     }
 
     /**

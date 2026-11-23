@@ -7,10 +7,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import java.net.Inet4Address
-import java.net.NetworkInterface
-import java.net.SocketException
-import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 本地热点开好以后交出的实际信息，原样写进给手机的连接串。toString 不含网络名和密码。 */
@@ -556,39 +552,10 @@ class LocalHotspotOwner private constructor(context: Context) {
     }
 
     /** 开着的网卡和上面的 IPv4（不含回环、链路本地）。 */
-    private fun snapshot(): Map<String, Set<String>> {
-        val out = HashMap<String, Set<String>>()
-        try {
-            val all = NetworkInterface.getNetworkInterfaces() ?: return out
-            for (nif in Collections.list(all)) {
-                val up = try {
-                    nif.isUp && !nif.isLoopback
-                } catch (e: SocketException) {
-                    false
-                }
-                if (!up) continue
-                val addresses = Collections.list(nif.inetAddresses)
-                    .filter { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress }
-                    .mapNotNull { it.hostAddress }
-                    .toSet()
-                if (addresses.isNotEmpty()) out[nif.name] = addresses
-            }
-        } catch (e: SocketException) {
-            // 读不到就当没有，找不到地址时会报出来。
-        } catch (e: RuntimeException) {
-            // 同上。
-        }
-        return out
-    }
+    private fun snapshot(): Map<String, Set<String>> = InterfaceAddresses.ipv4Snapshot()
 
-    /** 安卓 11 起以高 targetSdk 运行时一般返回 null（系统不给普通应用网卡 MAC），由 [LocalHotspotRules.pickBssid] 退到占位值。 */
-    private fun hardwareAddress(name: String): ByteArray? = try {
-        NetworkInterface.getByName(name)?.hardwareAddress
-    } catch (e: SocketException) {
-        null
-    } catch (e: RuntimeException) {
-        null
-    }
+    /** 安卓 11 起以高 targetSdk 运行时一般返回 null（系统不给普通应用网卡 MAC），由 [LocalHotspotRules.pickBssid] 退到反推或占位值。 */
+    private fun hardwareAddress(name: String): ByteArray? = InterfaceAddresses.hardwareAddress(name)
 
     private fun now() = SystemClock.elapsedRealtime()
 

@@ -360,6 +360,27 @@ class ReceiverSessionTest {
         assertTrue("auth.closed" !in d.layers.calls)
     }
 
+    /** 显示服务的暂停（202）报成「手机暂停投屏」，连接照常；别的动作、别的服务只记诊断。 */
+    @Test
+    fun displayServicePauseIsReportedAndTheSessionGoesOn() {
+        val d = Driver()
+        d.toPlaying()
+        val json = kotlinx.serialization.json.JsonObject(emptyMap())
+        d.layers.dmsdp.onFeed = { channel, text ->
+            when {
+                channel != DmsdpChannel.CONTROL -> emptyList()
+                text == "pause-display" -> listOf(DmsdpEvent.ServiceStatusChanged(202, 8L, "display", json))
+                text == "pause-speaker" -> listOf(DmsdpEvent.ServiceStatusChanged(202, 4L, "speaker", json))
+                text == "other-display" -> listOf(DmsdpEvent.ServiceStatusChanged(204, 8L, "display", json))
+                else -> emptyList()
+            }
+        }
+        assertEquals(listOf("diag", "event ProjectionPaused"), d.data(SessionChannel.DMSDP_CONTROL, "pause-display"))
+        assertEquals(listOf("diag"), d.data(SessionChannel.DMSDP_CONTROL, "pause-speaker"))
+        assertEquals(listOf("diag"), d.data(SessionChannel.DMSDP_CONTROL, "other-display"))
+        assertTrue(d.data(SessionChannel.DMSDP_CONTROL, "pause-display").none { it.startsWith("event Ended") })
+    }
+
     @Test
     fun sessionKeyIsHandedToDmsdpAndHiSightThenWiped() {
         val d = Driver()

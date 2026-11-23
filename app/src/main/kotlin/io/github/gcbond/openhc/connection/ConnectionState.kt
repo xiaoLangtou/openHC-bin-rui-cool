@@ -297,6 +297,8 @@ object ConnectionReducer {
                 video = event.video?.let(VideoInfo::of) ?: state.video,
             )
             is SessionEvent.Diagnostic -> state
+            // 回车机桌面由界面层处理（CarHome），连接状态不变。
+            SessionEvent.ProjectionPaused -> state
             is SessionEvent.Ended -> stopping(state)
         }
     }

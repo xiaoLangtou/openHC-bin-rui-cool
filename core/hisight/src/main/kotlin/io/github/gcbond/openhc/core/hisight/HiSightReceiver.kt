@@ -348,7 +348,9 @@ class HiSightReceiver(
         requireNegotiationReady(message, out)
         if (trigger == null) {
             if (setup != null || SETUP in pending.values) throw MalformedMessageException("SETUP 之后不支持重新协商能力")
-            capabilities.select(fields)
+            // 能力选择的原文写进诊断日志：各家手机选法不一样，出错时要靠它对症（只有能力描述，长串照样隐去）。
+            out += HiSightOutput.Note("手机的能力选择：${visible(String(message.body, Charsets.UTF_8), SELECTION_NOTE_MAX_CHARS)}")
+            for (note in capabilities.select(fields)) out += HiSightOutput.Note(note)
             out += sendControl(RtspTemplates.ok(message.cseq, date(wallClockMillis)))
             return
         }
@@ -455,9 +457,9 @@ class HiSightReceiver(
      * 消息原文的可读形式（进日志和报错说明）：换行写成 \r \n，太长截断；20 个以上连续字母数字的长串
      * （可能是密钥、随机数之类）只写长度。标准格式里只有算法名和版本号，没有长串。
      */
-    private fun visible(text: String): String {
+    private fun visible(text: String, max: Int = NOTE_MAX_CHARS): String {
         val shown = text.replace(LONG_TOKEN) { "<隐去 ${it.value.length} 字符>" }.replace("\r", "\\r").replace("\n", "\\n")
-        return if (shown.length <= NOTE_MAX_CHARS) shown else shown.take(NOTE_MAX_CHARS) + "…（共 ${text.length} 字符）"
+        return if (shown.length <= max) shown else shown.take(max) + "…（共 ${text.length} 字符）"
     }
 
     private fun countCrlf(text: String): Int {
@@ -477,6 +479,9 @@ class HiSightReceiver(
     private companion object {
         const val AES128CTR = "aes128ctr"
         const val NOTE_MAX_CHARS = 200
+
+        /** 能力选择原文的说明最多这么多字符（手机的选择一般几百字节）。 */
+        const val SELECTION_NOTE_MAX_CHARS = 1_200
 
         /** [visible] 里只写长度的长串。 */
         private val LONG_TOKEN = Regex("[0-9A-Za-z+/]{20,}")

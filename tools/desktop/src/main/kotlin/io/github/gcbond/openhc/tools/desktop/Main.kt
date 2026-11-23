@@ -280,6 +280,7 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
             )
             is SessionEvent.DeviceSessionReady -> log("设备会话已加密，保活方式：${event.keepAlive}")
             is SessionEvent.ProjectionRequested -> log("手机通告了投屏端口 ${event.port}，开始连接投屏")
+            SessionEvent.ProjectionPaused -> log("手机暂停了投屏（投屏界面上点了「车机」图标）")
             is SessionEvent.VideoNegotiated ->
                 log("投屏参数：${event.video.width}x${event.video.height} @ ${event.video.fps} fps")
             SessionEvent.PlayAccepted -> {

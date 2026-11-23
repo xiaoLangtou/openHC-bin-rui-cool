@@ -13,14 +13,12 @@ import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
-import io.github.gcbond.openhc.platform.log.Log
-import io.github.gcbond.openhc.startup.BootStartPolicy
-import io.github.gcbond.openhc.startup.BootStart
-import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.IdentityLoader
+import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.audio.AudioOutput
 import io.github.gcbond.openhc.connection.BluetoothAddressPolicy
 import io.github.gcbond.openhc.connection.BluetoothSource
+import io.github.gcbond.openhc.connection.CarHome
 import io.github.gcbond.openhc.connection.DeviceInfo
 import io.github.gcbond.openhc.connection.DisplayPlan
 import io.github.gcbond.openhc.connection.VideoClarity
@@ -44,10 +42,13 @@ import io.github.gcbond.openhc.platform.bluetooth.BleBeacon
 import io.github.gcbond.openhc.platform.bluetooth.BluetoothStatus
 import io.github.gcbond.openhc.platform.bluetooth.RfcommClient
 import io.github.gcbond.openhc.platform.bluetooth.RfcommServer
+import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.VideoDecoder
+import io.github.gcbond.openhc.platform.wifi.CarHotspot
+import io.github.gcbond.openhc.platform.wifi.CarHotspotSettings
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotOwner
-import io.github.gcbond.openhc.platform.wifi.WifiDirectGroupOwner
 import io.github.gcbond.openhc.platform.wifi.MacText
+import io.github.gcbond.openhc.platform.wifi.WifiDirectGroupOwner
 import io.github.gcbond.openhc.platform.wifi.WifiStatus
 import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.AudioPreferences
@@ -56,12 +57,10 @@ import io.github.gcbond.openhc.settings.MediaKeyPreferences
 import io.github.gcbond.openhc.settings.WirelessNetworkPreferences
 import kotlinx.serialization.json.JsonObject
 import io.github.gcbond.openhc.settings.WirelessPreferences
+import io.github.gcbond.openhc.startup.BootStart
+import io.github.gcbond.openhc.startup.BootStartPolicy
 import io.github.gcbond.openhc.trust.FileTrustStore
 import io.github.gcbond.openhc.trust.TrustStoreCorruptException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import java.io.File
 import java.io.IOException
 import java.security.SecureRandom
@@ -69,6 +68,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * 无线投屏（扫码 → 蓝牙 → 车机开热点 → 投屏）的总调度。进程内唯一（应用对象持有），有连接期间由前台服务
@@ -552,10 +555,15 @@ class WirelessController(
             return blocked(kind, WirelessNotice.StartFailed(FOREGROUND_FAILED), AutoHold.FOREGROUND_UNAVAILABLE)
         }
 
+        val carHotspot = wirelessPrefs.carHotspotSettings()
+        if (wirelessPrefs.carHotspot && carHotspot == null) {
+            return blocked(kind, WirelessNotice.StartFailed(CAR_HOTSPOT_MISSING), AutoHold.START_FAILED)
+        }
         cancelAutoRetry()
-        val directGroup = wirelessPrefs.usesWifiDirect
+        val directGroup = carHotspot == null && wirelessPrefs.usesWifiDirect
         val current = Attempt(
             ++attemptCounter, kind, config, adapter, identity.host, beacon, bluetoothTrigger, reconnect, resumeWiredAfter, directGroup,
+            carHotspot,
         )
         attempt = current
         if (reconnect != null) triggers.commitDial(reconnect.address, SystemClock.elapsedRealtime())
@@ -565,7 +573,7 @@ class WirelessController(
             "第 ${current.id} 次无线连接（${when (kind) { Kind.AUTO -> "等已配对的手机回连"; Kind.RECONNECT -> "车机主动回连"; Kind.MANUAL -> "用户开始" }}）：" +
                 "蓝牙地址来源 ${bluetooth.source}，deviceId ${config.deviceId.take(4)}…，" +
                 "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}（界面大小 ${settings.uiScalePercent}%），系统 ${Build.VERSION.SDK_INT}，$wifi，" +
-                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${if (directGroup) "WiFi 直连组（试验）" else "本地热点"}，" +
+                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${when { carHotspot != null -> "车机自带热点（试验，$carHotspot）"; directGroup -> "WiFi 直连组（试验）"; else -> "本地热点" }}，" +
                 "广播 ${beacon?.let { "开（重新发布 ${it.republishMillis / 1000} 秒，GATT ${if (it.gatt) "开" else "关"}${if (it.declareRandomAddress) "，声明随机地址" else ""}）" } ?: "不发"}",
         )
         Log.i(TAG, "第 ${current.id} 次无线连接的清晰度：${clarity.key}，声明码率 ${VideoClarity.describe(config.display.bitrate)}")
@@ -921,6 +929,8 @@ class WirelessController(
         val resumeWiredAfter: Boolean = false,
         /** 这次不开本地热点，改建 WiFi 直连组（设置里「无线方式」选了直连）。 */
         val directGroup: Boolean = false,
+        /** 这次不开本地热点，用车主已经打开的车机自带热点（设置里「无线方式」选了车机自带热点）。 */
+        val carHotspot: CarHotspotSettings? = null,
     ) {
         /** 投屏开始过。 */
         var projected = false
@@ -957,8 +967,14 @@ class WirelessController(
             },
             // 会话在手机认证通过后才要热点；无线开着时热点已经先开好留着，这里直接接手。之前排的「恢复车机 WiFi」作废。
             startHotspot = { events ->
-                wifiRestore.onHotspotRequested()
-                LocalHotspotOwner.get(app).create(events) { Log.i(TAG, "[$id] 热点：$it") }
+                val car = carHotspot
+                if (car != null) {
+                    // 车机自带热点是车主开的：不开本地热点，也不排「恢复车机 WiFi」。
+                    CarHotspot(app, car, events) { Log.i(TAG, "[$id] 车机热点：$it") }
+                } else {
+                    wifiRestore.onHotspotRequested()
+                    LocalHotspotOwner.get(app).create(events) { Log.i(TAG, "[$id] 热点：$it") }
+                }
             },
             // 直连：不开热点、不动车机自己的 WiFi，所以也不排「恢复车机 WiFi」。
             startDirect = if (directGroup) {
@@ -1090,6 +1106,8 @@ class WirelessController(
                 current.inputReady = current.touchNegotiated && !current.tearingDown
                 if (current.keyNegotiated && !current.tearingDown) MediaKeys.ready(app, current.keys)
             }
+            is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
+            SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("无线 #${current.id}")
             else -> Unit
         }
     }
@@ -1283,7 +1301,9 @@ class WirelessController(
         val current = attempt
         // 车机主动回连要等车机连上手机的蓝牙控制通道才开：手机不在旁边时不顶掉车机自己的 WiFi。
         // 建直连组的连接不开热点（开热点会停掉车机 WiFi，组就建不起来了）。
-        val wanted = current != null && !current.directGroup && (current.kind != Kind.RECONNECT || current.phoneSeen) &&
+        // 用车机自带热点的连接也不开：开本地热点会把车主开的热点挤掉。
+        val wanted = current != null && !current.directGroup && current.carHotspot == null &&
+            (current.kind != Kind.RECONNECT || current.phoneSeen) &&
             !wirelessPrefs.wiredOnly && !wiredActive()
         if (wanted == hotspotStandby) return
         hotspotStandby = wanted
@@ -1302,6 +1322,9 @@ class WirelessController(
     }
 
     private companion object {
+        /** 选了车机自带热点却没填名称密码。 */
+        const val CAR_HOTSPOT_MISSING = "无线方式选了「车机自带热点」，但还没在设置里填热点名和密码"
+
         /** 同一台手机两次车机主动回连之间至少隔这么久。 */
         const val RECONNECT_COOLDOWN_MS = 60_000L
 

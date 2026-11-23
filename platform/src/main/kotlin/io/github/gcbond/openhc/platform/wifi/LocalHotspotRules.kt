@@ -426,7 +426,7 @@ object LocalHotspotRules {
      * - 什么都不知道：按 2.4 GHz 第 6 信道（本地热点默认开在 2.4 GHz）。
      * 系统回报了实际频率（安卓 13 起的热点信息回调，[reportedMhz]，2.4 / 5 GHz 才算）就用它，不再推测。
      *
-     * 推测的频段对、信道不对时手机能不能照样连上，没有实测对照；频段报错了手机多半找不到网。
+     * 频段对、信道不对时手机照样能找到网，只是慢两三秒（2026-11 实车，直连组在 5745、报成 5180）；频段报错了没有实测。
      */
     fun estimateFrequency(hint: HotspotBandHint?, reportedMhz: Int = 0): Pair<Int, HotspotFrequencySource> {
         if (isWifiChannelFrequency(reportedMhz)) return reportedMhz to HotspotFrequencySource.REPORTED

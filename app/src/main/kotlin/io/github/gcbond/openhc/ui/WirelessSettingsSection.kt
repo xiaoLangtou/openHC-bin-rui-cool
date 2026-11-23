@@ -1,14 +1,22 @@
 package io.github.gcbond.openhc.ui
 
 import android.content.Context
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
 import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.R
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotOwner
@@ -31,6 +39,15 @@ internal class WirelessSettingsState(context: Context) {
         private set
     var wifiDirect by mutableStateOf(prefs.wifiDirect)
         private set
+    var carHotspot by mutableStateOf(prefs.carHotspot)
+        private set
+    var carHotspotName by mutableStateOf(prefs.carHotspotName)
+        private set
+    var carHotspotPassword by mutableStateOf(prefs.carHotspotPassword)
+        private set
+    var carHotspotFiveGhz by mutableStateOf(prefs.carHotspotFiveGhz)
+        private set
+    // 本地：系统热点强制 5 GHz 信道 36（v27，照抄 CarLink 路线），与上游 carHotspotFiveGhz（车机自带热点频段）并存。
     var hotspot5g by mutableStateOf(prefs.hotspot5g)
         private set
 
@@ -40,10 +57,27 @@ internal class WirelessSettingsState(context: Context) {
         controller?.onWiredOnlyChanged()
     }
 
-    /** 下一次无线连接生效，正在进行的连接照旧。 */
-    fun changeWifiDirect(value: Boolean) {
-        wifiDirect = value
-        prefs.wifiDirect = value
+    /** 无线方式：0 车机开热点、1 直连、2 车机自带热点。下一次无线连接生效，正在进行的连接照旧。 */
+    fun changeWirelessMode(mode: Int) {
+        wifiDirect = mode == 1
+        carHotspot = mode == 2
+        prefs.wifiDirect = wifiDirect
+        prefs.carHotspot = carHotspot
+    }
+
+    fun changeCarHotspotName(value: String) {
+        carHotspotName = value
+        prefs.carHotspotName = value
+    }
+
+    fun changeCarHotspotPassword(value: String) {
+        carHotspotPassword = value
+        prefs.carHotspotPassword = value
+    }
+
+    fun changeCarHotspotFiveGhz(value: Boolean) {
+        carHotspotFiveGhz = value
+        prefs.carHotspotFiveGhz = value
     }
 
     /** 热点频段立即生效（下一次申请热点时写系统配置），设置同步给热点所有者。 */
@@ -96,11 +130,58 @@ internal fun WirelessModeSetting(state: WirelessSettingsState) {
     if (!WirelessPreferences.wifiDirectSupported) return
     ChoiceRow(
         title = stringResource(R.string.settings_wireless_mode),
-        options = listOf(stringResource(R.string.settings_wireless_mode_hotspot), stringResource(R.string.settings_wireless_mode_direct)),
-        selected = if (state.wifiDirect) 1 else 0,
+        options = listOf(
+            stringResource(R.string.settings_wireless_mode_hotspot),
+            stringResource(R.string.settings_wireless_mode_direct),
+            stringResource(R.string.settings_wireless_mode_car),
+        ),
+        selected = when {
+            state.carHotspot -> 2
+            state.wifiDirect -> 1
+            else -> 0
+        },
         description = stringResource(R.string.settings_wireless_mode_hint),
-        note = if (state.wifiDirect) stringResource(R.string.settings_wireless_mode_direct_note) else null,
-    ) { state.changeWifiDirect(it == 1) }
+        note = when {
+            state.carHotspot -> stringResource(R.string.settings_wireless_mode_car_note)
+            state.wifiDirect -> stringResource(R.string.settings_wireless_mode_direct_note)
+            else -> null
+        },
+    ) { state.changeWirelessMode(it) }
+    if (state.carHotspot) CarHotspotFields(state)
+}
+
+/** 车机自带热点的名称、密码（输入即保存，密码显示成圆点）和频段。 */
+@Composable
+private fun CarHotspotFields(state: WirelessSettingsState) {
+    GroupRow(spacing = 8.dp) {
+        OutlinedTextField(
+            value = state.carHotspotName,
+            onValueChange = { state.changeCarHotspotName(it) },
+            label = { Text(stringResource(R.string.settings_car_hotspot_name)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.carHotspotPassword,
+            onValueChange = { state.changeCarHotspotPassword(it) },
+            label = { Text(stringResource(R.string.settings_car_hotspot_password)) },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            supportingText = if (state.carHotspotName.isEmpty() || state.carHotspotPassword.isEmpty()) {
+                { Text(stringResource(R.string.settings_car_hotspot_missing)) }
+            } else {
+                null
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    ChoiceRow(
+        title = stringResource(R.string.settings_car_hotspot_band),
+        options = listOf("2.4 GHz", "5 GHz"),
+        selected = if (state.carHotspotFiveGhz) 1 else 0,
+        description = stringResource(R.string.settings_car_hotspot_band_hint),
+    ) { state.changeCarHotspotFiveGhz(it == 1) }
 }
 
 /** 热点频段（默认强制 5 GHz 信道 36）：只在「车机开热点」方式下有用；直连方式自带指定信道。 */

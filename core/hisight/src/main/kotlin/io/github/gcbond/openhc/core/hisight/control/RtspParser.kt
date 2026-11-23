@@ -91,7 +91,25 @@ internal object RtspParser {
         if (blankLines > 0) throw lengthMismatch(payload.size - lastBlankEnd(lines))
         return keepAliveWithoutBlankLine(payload, lines, first, headers)
             ?: setupReplyWithoutBlankLine(payload, lines, first, headers)
-            ?: throw MalformedMessageException("控制消息缺少头部结束空行")
+            ?: throw MalformedMessageException("控制消息缺少头部结束空行：${shown(payload)}")
+    }
+
+    /** 报错里带上消息开头（不可打印字节换成点、长串隐去），用来对照手机发了什么。 */
+    private fun shown(p: ByteArray): String {
+        val text = buildString {
+            for (i in 0 until minOf(p.size, SHOWN_BYTES)) {
+                val c = p[i].toInt() and 0xFF
+                append(
+                    when (c) {
+                        0x0D -> "\\r"
+                        0x0A -> "\\n"
+                        in 0x20..0x7E -> c.toChar().toString()
+                        else -> "."
+                    },
+                )
+            }
+        }.replace(LONG_TOKEN) { "<隐去 ${it.value.length} 字符>" }
+        return if (p.size > SHOWN_BYTES) "$text…（共 ${p.size} 字节）" else text
     }
 
     private fun splitLines(p: ByteArray): Lines {
@@ -155,11 +173,14 @@ internal object RtspParser {
             (values["content-type"] ?: "").lowercase() == RtspMessage.TEXT_PARAMETERS &&
             first.startsWith("SET_PARAMETER ") && requestMethod(first) == "SET_PARAMETER"
 
-    /** 空 GET_PARAMETER 保活：只有空 Date 和 CSeq，最后一行之后没有空行也没有多余字节。 */
+    /**
+     * 空 GET_PARAMETER 保活：只有 Date 和 CSeq，最后一行之后没有空行也没有多余字节。Date 可以是空的，也可以带时间
+     * （鸿蒙 3.0 的手机投屏约 30 秒后发这种，2026-11 实机）。
+     */
     private fun keepAliveWithoutBlankLine(p: ByteArray, lines: Lines, first: String, headers: HeaderTable): RtspMessage? {
         val values = headers.values
         val matches = lines.tailStart == p.size && first.startsWith("GET_PARAMETER rtsp://") &&
-            values.size == 2 && values["date"] == "" && "cseq" in values &&
+            values.size == 2 && "date" in values && "cseq" in values &&
             printableOutsideCrlf(p) && requestMethod(first) == "GET_PARAMETER"
         return if (matches) RtspMessage(first, values, EMPTY, cseqOf(values)) else null
     }
@@ -283,6 +304,9 @@ internal object RtspParser {
     private const val NPT_NOW = "npt=now-"
     private const val CR: Byte = 0x0D
     private const val LF: Byte = 0x0A
+
+    private const val SHOWN_BYTES = 160
+    private val LONG_TOKEN = Regex("[0-9A-Za-z+/]{20,}")
 
     private fun isCrlf(p: ByteArray, at: Int) = at >= 0 && at + 1 < p.size && p[at] == CR && p[at + 1] == LF
 

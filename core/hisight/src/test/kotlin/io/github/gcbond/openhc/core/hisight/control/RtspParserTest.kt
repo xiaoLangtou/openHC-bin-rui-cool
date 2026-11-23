@@ -44,6 +44,15 @@ class RtspParserTest {
 
     private var stricter = 0
 
+    /**
+     * 有意比参考实现宽的一种：不带结尾空行的空 GET_PARAMETER 保活，Date 带了时间（参考实现只收空 Date）。
+     * 只有 Date、CSeq 两个头，没有正文，整条报文里没有空行。
+     */
+    private fun isDatedKeepAlive(payload: ByteArray, m: RtspMessage): Boolean =
+        m.firstLine.startsWith("GET_PARAMETER ") && m.headers.keys == setOf("date", "cseq") &&
+            (m.headers["date"] ?: "").isNotEmpty() && m.body.isEmpty() &&
+            !String(payload, Charsets.ISO_8859_1).contains("\r\n\r\n")
+
     /** 参考实现接受、本实现拒绝时，必须是头部区域含控制字符这一种情况。 */
     private fun assertStricter(payload: ByteArray, bodyStart: Int, error: MalformedMessageException, label: String) {
         assertEquals("控制消息头含控制字符", error.message, "$label：拒绝原因不是控制字符")
@@ -73,6 +82,7 @@ class RtspParserTest {
                     assertStricter(payload, entry.int("bodyStart"), outcome.error, label)
                 }
                 is Outcome.Accepted -> {
+                    if (!entry.bool("ok") && isDatedKeepAlive(payload, outcome.message)) continue
                     assertTrue(entry.bool("ok"), "$label：参考实现拒绝的报文被接受了")
                     val m = outcome.message
                     assertEquals(entry.str("first"), m.firstLine, label)
@@ -120,6 +130,7 @@ class RtspParserTest {
                 assertStricter(payload, expected.substringAfter('/').toInt(), outcome.error, label)
             }
             is Outcome.Accepted -> {
+                if (expected == null && isDatedKeepAlive(payload, outcome.message)) return
                 if (expected == null) fail("$label：参考实现拒绝的报文被接受了")
                 assertEquals(expected.substringBefore('/'), digest(outcome.message), label)
             }
@@ -181,5 +192,21 @@ class RtspParserTest {
         assertEquals(10, m.cseq)
         assertContentEquals(ascii(body), m.body)
         assertEquals(setOf("cseq", "content-length"), m.headers.keys)
+    }
+
+    /** 不带结尾空行的空 GET_PARAMETER 保活：Date 空着或带时间都接受；多了别的头、或后面还有字节仍拒绝。 */
+    @Test
+    fun keepAliveWithoutBlankLineMayCarryADate() {
+        for (date in listOf("", "2026-01-02 03:04:05 AM Fri")) {
+            val m = RtspParser.parse("GET_PARAMETER rtsp://example.invalid/s RTSP/1.0\r\nDate: $date\r\nCSeq: 5\r\n".toByteArray())
+            assertEquals(5, m.cseq, date)
+            assertEquals(0, m.body.size, date)
+        }
+        assertFailsWith<MalformedMessageException> {
+            RtspParser.parse("GET_PARAMETER rtsp://example.invalid/s RTSP/1.0\r\nDate: x\r\nCSeq: 5\r\nServer: y\r\n".toByteArray())
+        }
+        assertFailsWith<MalformedMessageException> {
+            RtspParser.parse("GET_PARAMETER rtsp://example.invalid/s RTSP/1.0\r\nDate: x\r\nCSeq: 5\r\nzz".toByteArray())
+        }
     }
 }

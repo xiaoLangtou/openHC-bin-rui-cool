@@ -587,13 +587,18 @@ class ReceiverSession internal constructor(
                 is DmsdpEvent.EncryptionEnabled -> out.add(SessionEvent.DeviceSessionReady(o.keepAliveMode))
                 is DmsdpEvent.KeepAliveTimeout -> finish(EndReason.KeepAliveTimeout(o.mode), out)
                 is DmsdpEvent.DisplayPortAnnounced -> beginHiSight(o.port, out)
-                // 车辆磁贴（"car"）点击：结束整个连接，界面的状态监听会自动回车机桌面（backToLauncherWhenEnded）。
                 is DmsdpEvent.CarDesktopRequested -> finish(EndReason.CarDesktopRequested(o.detail), out)
-                // 显示服务状态（手机端 x1 的 updateDeviceService）。**不能**当成磁贴点击来结束会话——实车日志
-                // （2026-11-23 19:56 会话 6）实锤：投屏开始 10ms 后手机就自发发来 action=202（serviceType=8，
-                // 与 532 ProjectAction Background:true 同时出现，视频正常继续 6 分钟）；磁贴点击发的是同一条
-                // 报文，无法区分。v22 的「202→回桌面」会让每次投屏一开播就自杀，已撤（2026-11-23 深夜）。
-                // 磁贴的真实判别信号待下次车旁取证（点磁贴抓完整报文序列）。
+                // 显示服务状态（命令 103）。action=202 对显示服务 = 手机暂停投屏（投屏界面点「车机」图标，或
+                // 融合桌面磁贴点击——两者同报文，回桌面都是对的）。v22 曾把 202 当成结束连接（自杀），v25 撤掉；
+                // 上游 0.2.5 给了正确形态：**不结束会话**，报 ProjectionPaused 让界面回车机桌面，连接、声音、
+                // 方向盘按键照常，从桌面点 OpenHC 回到投屏。刚连上时手机会在服务开始后约 0.7 秒自发 202（实车），
+                // app 层的 CarHome 用「设备会话就绪后 5 秒内的第一次暂停忽略」吃掉这个启动竞态。
+                is DmsdpEvent.ServiceStatusChanged -> {
+                    diag(SessionLayer.DMSDP, o.toString(), out)
+                    if (o.action == SERVICE_ACTION_PAUSE && o.serviceType == SERVICE_TYPE_DISPLAY) {
+                        out.add(SessionEvent.ProjectionPaused)
+                    }
+                }
                 is DmsdpEvent -> diag(SessionLayer.DMSDP, o.toString(), out)
             }
         }
@@ -814,8 +819,13 @@ class ReceiverSession internal constructor(
         if (hs != null && !hisightEnded) {
             hisightEnded = true
             // 投屏层自己判断还能不能发 TEARDOWN（加密已协商、控制连接还在）；发不出去的写会被丢掉。
+            // 出错前已经产生的说明（例如手机的能力选择原文）也在这里交出来，照样写进诊断日志。
             for (o in quietly { hs.shutdown() }) {
-                if (o is HiSightOutput.Send) write(hisightEndpoint(o.channel), o.bytes, out)
+                when (o) {
+                    is HiSightOutput.Send -> write(hisightEndpoint(o.channel), o.bytes, out)
+                    is HiSightOutput.Note -> diag(SessionLayer.HISIGHT, o.text, out)
+                    else -> Unit
+                }
             }
         }
         val d = dmsdp
@@ -918,6 +928,11 @@ class ReceiverSession internal constructor(
     override fun toString() = "ReceiverSession(已结束=$ended, 认证=$authSucceeded, 投屏=${hisight != null}, 帧=$framesDelivered)"
 
     private companion object {
+        /** 设备服务状态通知（命令 103）的动作：202 是服务暂停（投屏界面上点「车机」图标时，手机对显示服务发这个）。 */
+        const val SERVICE_ACTION_PAUSE = 202
+
+        /** 设备服务类型：显示（投屏画面）。 */
+        const val SERVICE_TYPE_DISPLAY = 8L
         /** 音频端口从这个范围里挑偶数（本机的选择：RTP 习惯用偶数口，不是协议规定）。 */
         const val AUDIO_PORT_MIN = 20_000
         const val AUDIO_PORT_MAX = 59_998
