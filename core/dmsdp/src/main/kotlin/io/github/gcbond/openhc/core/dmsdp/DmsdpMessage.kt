@@ -64,7 +64,7 @@ class DmsdpMessage(
                 val line = lines[k]
                 if (line.isEmpty()) continue
                 val colon = line.indexOf(':')
-                if (colon < 0) throw MalformedMessageException("控制消息头部第 $k 行缺少冒号（载荷 ${preview(payload)}）")
+                if (colon < 0) throw MalformedMessageException("控制消息头部第 $k 行缺少冒号")
                 headers += line.substring(0, colon).trimControl() to line.substring(colon + 1).trimControl()
             }
             return DmsdpMessage(lines[0], headers, payload.copyOfRange(bodyStart, payload.size))
