@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.core.session
 
+import io.github.gcbond.openhc.core.dmsdp.audio.AudioTransport
 import io.github.gcbond.openhc.core.auth.AuthMode
 import io.github.gcbond.openhc.core.auth.HiCarAuthAction
 import io.github.gcbond.openhc.core.common.hexToBytes
@@ -56,7 +57,9 @@ class AudioSessionTest {
             layers.dmsdp.onFeed = { channel, text ->
                 when {
                     channel == DmsdpChannel.CONTROL && text == "audio" ->
-                        listOf(DmsdpAction.Send(DmsdpChannel.CONTROL, "audio-200".bytes()), DmsdpAction.OpenAudioListeners)
+                        listOf(DmsdpAction.Send(DmsdpChannel.CONTROL, "audio-200".bytes()), DmsdpAction.OpenAudioListeners(AudioTransport.TCP))
+                    channel == DmsdpChannel.CONTROL && text == "audio-udp" ->
+                        listOf(DmsdpAction.Send(DmsdpChannel.CONTROL, "audio-200".bytes()), DmsdpAction.OpenAudioListeners(AudioTransport.UDP))
                     channel == DmsdpChannel.CONTROL && text == "audio-teardown" ->
                         listOf(DmsdpAction.CloseAudioTransport, DmsdpEvent.AudioSessionTornDown("77", "测试"))
                     else -> original(channel, text)
@@ -190,6 +193,37 @@ class AudioSessionTest {
         assertFalse(d.session.isEnded)
     }
 
+    /**
+     * 音频数据会话走 UDP：绑数据端口（偶数）收数据报，绑好才发 SETUP；第一个数据报当成手机开始发（onConnected 一次），
+     * 每个数据报按到达顺序喂给协议层；端口绑不上换一个再试；拆除时关掉这个端口。
+     */
+    @Test
+    fun udpDataSessionBindsThePortAndFeedsDatagrams() {
+        val d = Driver()
+        d.toDeviceReady()
+        val busy = d.record(d.session.onData(d.conn(SessionChannel.DMSDP_CONTROL), "audio-udp".bytes(), 0, 9, d.now))
+        val first = busy.filterIsInstance<SessionAction.BindUdp>().single()
+        assertTrue(busy.none { it is SessionAction.Listen }, "UDP 不开 TCP 监听")
+        // 端口被占：换一个再绑。
+        val retry = d.record(d.session.onIoError(first.id, "地址已被占用", d.now))
+        val bind = retry.filterIsInstance<SessionAction.BindUdp>().single()
+        assertEquals(SessionChannel.AUDIO, bind.channel)
+        assertEquals(Synthetic.LOCAL_IP, bind.localHost)
+        assertEquals(0, bind.localPort % 2, "数据端口是偶数")
+        assertFalse("dmsdp.audioListenersReady(${bind.localPort})" in d.layers.calls.joinToString(), "绑好之前不发 SETUP")
+        d.record(d.session.onListening(bind.id, bind.localPort, d.now))
+        assertTrue(d.layers.calls.any { it.startsWith("dmsdp.audioListenersReady") }, d.layers.calls.toString())
+        for (text in listOf("rtp1", "rtp2")) {
+            val bytes = text.bytes()
+            d.record(d.session.onDatagram(bind.id, bytes, 0, bytes.size, d.now))
+        }
+        assertEquals(1, d.layers.calls.count { it == "dmsdp.onConnected(AUDIO)" }, "第一个数据报才算连上，只算一次")
+        assertTrue("dmsdp.feed(AUDIO,rtp1)" in d.layers.calls && "dmsdp.feed(AUDIO,rtp2)" in d.layers.calls)
+        val teardown = d.data(SessionChannel.DMSDP_CONTROL, "audio-teardown")
+        assertTrue(bind.id in d.closes(teardown), "拆除时关掉 UDP 端口")
+        assertFalse(d.session.isEnded)
+    }
+
     @Test
     fun peerClosingTheAudioConnectionOnlyAffectsSound() {
         val d = Driver()
@@ -257,7 +291,7 @@ class AudioSessionTest {
         val fake = FakeLayers()
         override fun nearby(): NearbyLayer = fake.nearby()
         override fun auth(): AuthLayer = fake.auth()
-        override fun dmsdp(sessionKey: ByteArray, phoneIp: String) = real.dmsdp(sessionKey, phoneIp)
+        override fun dmsdp(sessionKey: ByteArray, phoneIp: String, phoneVersion: String?) = real.dmsdp(sessionKey, phoneIp, phoneVersion)
         override fun hisight(sessionKey: ByteArray, sink: AccessUnitSink) = fake.hisight(sessionKey, sink)
     }
 

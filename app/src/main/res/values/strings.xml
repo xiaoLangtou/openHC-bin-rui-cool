@@ -124,7 +124,7 @@
     <string name="settings_bt_current_unavailable">当前：没有取到，按 02:00:00:00:00:00 处理（有线照样能连）</string>
     <string name="settings_bt_manual_label">手动填写（格式 AA:BB:CC:DD:EE:FF）</string>
     <string name="settings_bt_invalid">格式不对，或者是占位地址</string>
-    <string name="settings_bt_hint">手填了有效地址时优先用手填的，清空就改用自动读到的（车机系统属性，读不到再读本机蓝牙）。地址变了，手机会把车机当成另一台车，需要重新输入连接码配对。手填的地址会自动备份到系统设置表：清除数据丢了也能找回。</string>
+    <string name="settings_bt_hint">有线连接：手填了有效地址时优先用手填的，清空就改用自动读到的（车机系统属性，读不到再读本机蓝牙）。无线连接：车机系统里读得到地址时一律用系统的（手机要拿它直接连车机蓝牙，必须是真地址），读不到才用手填的。地址变了，手机会把车机当成另一台车，需要重新输入连接码配对。手填的地址会自动备份到系统设置表：清除数据丢了也能找回。</string>
     <string name="settings_bt_restore_backup">从备份恢复（%1$s）</string>
     <string name="settings_bt_restored">已从备份恢复：%1$s</string>
 

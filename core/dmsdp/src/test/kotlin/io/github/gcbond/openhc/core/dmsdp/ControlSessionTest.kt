@@ -244,6 +244,19 @@ class ControlSessionTest {
      * 加密后认不出的载荷（手机在声音数据连接连上前，经控制连接送来的声音）：跳过、不断开，
      * 前 3 个和之后每第 100 个交出事件；之后的文字消息照常处理。
      */
+    /** 看着像文字、却拆不开的消息（头部行缺冒号）：跳过并交出事件，不断开，之后照常处理。 */
+    @Test
+    fun malformedTextIsSkippedNotFatal() {
+        val (session, _) = encryptedSession()
+        val bad = session.feed(DmsdpChannel.CONTROL, phone.encryptedText("SET_PARAMETER * DMSDP/1.0\r\nno colon here\r\n\r\n"))
+        assertIs<DmsdpEvent.UnrecognizedControlPayload>(bad.events().single())
+        val out = session.feed(
+            DmsdpChannel.CONTROL,
+            phone.encryptedText("SET_PARAMETER * DMSDP/1.0\r\nCSeq: 7\r\nTimeServerPort: 0\r\nTimeUsHigh: 1\r\nTimeUsLow: 2\r\n\r\n"),
+        )
+        assertTrue(out.events().any { it is DmsdpEvent.TimeSyncRequested }, out.toString())
+    }
+
     @Test
     fun unrecognizedBinaryPayloadIsSkippedNotFatal() {
         val (session, _) = encryptedSession()

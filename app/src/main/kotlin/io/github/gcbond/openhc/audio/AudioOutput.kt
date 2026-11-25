@@ -1,6 +1,8 @@
 package io.github.gcbond.openhc.audio
 
 import android.content.Context
+import android.os.SystemClock
+import io.github.gcbond.openhc.core.dmsdp.audio.AudioBus
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEndReason
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEvent
@@ -60,14 +62,23 @@ internal class AudioOutput(
 
     /** 焦点决定的各用途音量（新建的播放器也照这个设）。 */
     private val volumes = EnumMap<AudioUsage, Float>(AudioUsage::class.java)
+
+    /** 最近一次收到控制连接上的声音的时间（elapsedRealtime）；在 [lock] 里读写。 */
+    private var lastControlAudioAt = Long.MIN_VALUE / 2
     private var focus: AudioFocusController? = null
     private var closed = false
     private var muted = 0L
 
-    private data class StreamKey(val dataSessionId: String, val ssrc: Long, val route: AudioRoute)
+    /**
+     * 一个播放器对应的一路声音。[lane] 是这一路的编号（[AudioPacket.lane]，见 [AudioBus.lane]）：手机往一路声音里混进
+     * 提示音之类时，SSRC 高 16 位的用途会变（例如 1 → 4097、1 → 0），SSRC 的附加标志位也会来回换，这些都还是同一路，
+     * 要接着用原来的播放器，不然会同时有两个播放器交替放空。载荷带包尾路号时只按包尾分路。用途变了要换声道时 [route]
+     * 不同，照样分开。
+     */
+    private data class StreamKey(val dataSessionId: String, val lane: Long, val route: AudioRoute)
 
     /** 一路声音。[sounding] 跟着播放器的「开始出声 / 放空」走，焦点按它算这个用途还在不在响。 */
-    private inner class Stream(val key: StreamKey, val usage: AudioUsage, val bus: Int) : AudioPlayer.Listener {
+    private inner class Stream(val key: StreamKey, val usage: AudioUsage) : AudioPlayer.Listener {
         lateinit var player: AudioPlayer
         var packets = 0L
         private var sounding = false
@@ -102,7 +113,7 @@ internal class AudioOutput(
             player.close()
         }
 
-        fun label(): String = "${key.route.label}（${if (bus >= 0) "第 $bus 路" else "SSRC ${key.ssrc}"}）"
+        fun label(): String = "${key.route.label}（${AudioBus.laneLabel(key.lane)}）"
     }
 
     override fun onAudioEvent(event: AudioEvent) {
@@ -123,11 +134,19 @@ internal class AudioOutput(
             is AudioEvent.StreamRouted ->
                 if (event.unknownUsage) Log.w(TAG, "[$attemptId] SSRC ${event.ssrc} 带的用途 ${event.usage} 不认识，按媒体放")
             is AudioEvent.CodecVerdict -> onVerdict(event)
+            is AudioEvent.TransportFallback -> event.phone?.let { phone ->
+                prefs.addUdpPhone(phone)
+                Log.i(TAG, "[$attemptId] $event；记下这台手机，下次连接直接用 UDP")
+            }
             is AudioEvent.Ended -> {
                 stopSession(event.stream.dataSessionId, "数据会话结束（${event.reason.label}）")
                 // 手机拆掉数据会话就是不放了：焦点一并放掉（通话中的通话焦点除外），它重新出声时会再要；被新的替换时不放。
+                // 例外：声音正在走控制连接时（老鸿蒙），手机每隔几秒就拆一次没连上的数据会话，声音却一直在放，这时不放焦点，
+                // 焦点跟着控制连接那一路的出声、停声走。只看最近 [CONTROL_AUDIO_ACTIVE_MS] 内有没有收到：纯血鸿蒙只在数据连接
+                // 连上前从控制连接送一点，之后照常放焦点。
                 if (event.reason == AudioEndReason.PEER_TEARDOWN || event.reason == AudioEndReason.LISTEN_FAILED) {
-                    synchronized(lock) { focus }?.dataSessionEnded()
+                    val since = SystemClock.elapsedRealtime() - synchronized(lock) { lastControlAudioAt }
+                    if (since > CONTROL_AUDIO_ACTIVE_MS) synchronized(lock) { focus }?.dataSessionEnded()
                 }
             }
             is AudioEvent.PeerClosed -> stopSession(event.stream.dataSessionId, "数据连接断开")
@@ -158,6 +177,7 @@ internal class AudioOutput(
                 return
             }
             val stream = streamFor(packet, stale) ?: return
+            if (packet.stream.dataSessionId.startsWith(AudioStreamInfo.CONTROL_SESSION_ID)) lastControlAudioAt = SystemClock.elapsedRealtime()
             val target = stream.player
             when (packet.codec) {
                 AudioCodec.PCM -> target.queuePcm(
@@ -274,7 +294,7 @@ internal class AudioOutput(
      */
     private fun streamFor(packet: AudioPacket, stale: MutableList<Stream>): Stream? {
         val info = packet.stream
-        val key = StreamKey(info.dataSessionId, packet.ssrc, packet.route)
+        val key = StreamKey(info.dataSessionId, packet.lane, packet.route)
         streams[key]?.let { existing ->
             if (existing.player.format.encoding == encodingOf(packet.codec)) return existing
             streams.remove(key)
@@ -291,7 +311,7 @@ internal class AudioOutput(
             return unsupported(info, e.message ?: "格式不支持")
         }
         val usage = usageOf(packet.route)
-        val stream = Stream(key, usage, packet.bus)
+        val stream = Stream(key, usage)
         val cushioned = wireless && (usage == AudioUsage.MEDIA || usage == AudioUsage.NAVIGATION)
         stream.player = AudioPlayer(format, stream, if (cushioned) tuning.withCushion(WIRELESS_CUSHION_MILLIS) else tuning, usage)
         volumes[usage]?.let { stream.player.setVolume(it) }
@@ -330,6 +350,9 @@ internal class AudioOutput(
 
         /** 无线时音乐和导航多攒的毫秒数：车机扫描 WiFi 时投屏信道一次停 0.1～0.3 秒，留点余量。 */
         const val WIRELESS_CUSHION_MILLIS = 300
+
+        /** 控制连接上的声音这么久之内收到过，就算还在放。 */
+        private const val CONTROL_AUDIO_ACTIVE_MS = 1_500L
 
         fun encodingOf(codec: AudioCodec): AudioPlayer.Encoding =
             if (codec == AudioCodec.PCM) AudioPlayer.Encoding.PCM_16 else AudioPlayer.Encoding.AAC

@@ -190,7 +190,9 @@ internal class MicSession(
                 val trigger = triggerMethod(message)
                 when {
                     trigger.equals(TRIGGER_OPTIONS, ignoreCase = true) -> onTriggerOptions(message)
-                    trigger.equals(TRIGGER_TEARDOWN, ignoreCase = true) -> onTeardown(message)
+                    // CLOSE 和 TEARDOWN 一样处理：回 200，关掉对得上的会话。
+                    trigger.equals(TRIGGER_TEARDOWN, ignoreCase = true) || trigger.equals(TRIGGER_CLOSE, ignoreCase = true) ->
+                        onTeardown(message)
                     trigger != null -> unhandled(message, "手机触发了没实现的麦克风操作「${trigger.take(32)}」，没有应答")
                     message.header(AUDIO_PARAMETER) != null -> onAudioParameter(message)
                     else -> unhandled(message, "麦克风服务的 SET_PARAMETER 没有触发字段，没有应答")
@@ -416,6 +418,7 @@ internal class MicSession(
         const val TRANSPORT = "Transport"
         const val TRIGGER_OPTIONS = "OPTIONS"
         const val TRIGGER_TEARDOWN = "TEARDOWN"
+        const val TRIGGER_CLOSE = "CLOSE"
 
         /** 数据会话消息里麦克风的服务类型（与服务声明相同）。 */
         const val DATA_SERVICE_TYPE = "2"

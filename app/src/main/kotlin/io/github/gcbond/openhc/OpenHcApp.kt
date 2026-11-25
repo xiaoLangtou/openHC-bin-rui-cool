@@ -24,6 +24,7 @@ class OpenHcApp : Application() {
             },
             stopWiredWaiting = { connection.stop() },
             resumeWiredWaiting = { connection.start() },
+            phoneOnCable = { BootStart.phonePlugged(this) },
         ).also { controller ->
             controller.addHostListener { surfacer.onStateChanged() }
         }

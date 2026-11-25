@@ -57,6 +57,9 @@ class RfcommClient(
     private val lock = Any()
     private var started = false
     private var socket: BluetoothSocket? = null
+
+    /** 正在 connect 的 socket（还没连上）：关闭时一起关掉，免得停止之后才连上手机又马上断开。 */
+    private var connecting: BluetoothSocket? = null
     private var closed = false
 
     private val writes = LinkedBlockingQueue<Any>()
@@ -82,15 +85,20 @@ class RfcommClient(
     /** 客户端没有监听，什么都不做。 */
     override fun closeListener() = Unit
 
-    /** 关连接：先把排着的写发完（有上限），再关。还没连上时，连上后也直接关掉。 */
+    /** 关连接：先把排着的写发完（有上限），再关。还没连上时直接打断正在进行的连接。 */
     override fun closeConnection() = close()
 
     fun close() {
-        val client = synchronized(lock) {
+        val (client, pending) = synchronized(lock) {
             if (closed) return
             closed = true
-            socket
-        } ?: return
+            socket to connecting
+        }
+        if (client == null) {
+            // 还在连：关掉它，connect 会抛异常退出（关闭后不再上报失败）。
+            pending?.let { closeQuietly(it) }
+            return
+        }
         writes.add(CLOSE)
         daemon("$threadName-close") {
             sleepQuietly(FLUSH_LIMIT_MS)
@@ -118,6 +126,11 @@ class RfcommClient(
         } catch (e: SecurityException) {
             return failConnect("没有蓝牙权限（安卓 12 起要「附近的设备」权限）：${describe(e)}")
         }
+        val proceed = synchronized(lock) {
+            if (!closed) connecting = client
+            !closed
+        }
+        if (!proceed) return closeQuietly(client)
         // 按 SDP 连时 connect 先查服务的通道号，再建链；对端没在听或查不到服务都在这里失败。
         try {
             client.connect()
@@ -129,6 +142,7 @@ class RfcommClient(
             return failConnect("没有蓝牙权限：${describe(e)}")
         }
         val keep = synchronized(lock) {
+            connecting = null
             if (!closed) socket = client
             !closed
         }

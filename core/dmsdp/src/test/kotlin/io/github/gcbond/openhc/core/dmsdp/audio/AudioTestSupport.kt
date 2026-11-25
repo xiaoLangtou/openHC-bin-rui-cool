@@ -137,6 +137,7 @@ internal class Recorder : AudioDepacketizer.Output {
     val payloads = ArrayList<ByteArray>()
     val sequences = ArrayList<Int>()
     val buses = ArrayList<Int>()
+    val lanes = ArrayList<Long>()
     val usages = ArrayList<Int>()
     val orders = ArrayList<PcmByteOrder>()
     val codecs = ArrayList<AudioCodec>()
@@ -156,6 +157,7 @@ internal class Recorder : AudioDepacketizer.Output {
         payloads += packet.copyPayload()
         sequences += packet.sequence
         buses += packet.bus
+        lanes += packet.lane
         usages += packet.usage
         orders += packet.byteOrder
         codecs += packet.codec

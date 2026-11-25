@@ -94,7 +94,7 @@ internal class FakeLayers : Layers {
         return auth
     }
 
-    override fun dmsdp(sessionKey: ByteArray, phoneIp: String): DmsdpLayer {
+    override fun dmsdp(sessionKey: ByteArray, phoneIp: String, phoneVersion: String?): DmsdpLayer {
         calls += "dmsdp.create($phoneIp)"
         // 与真实的层一样自己复制一份。
         dmsdpKey = sessionKey.copyOf()

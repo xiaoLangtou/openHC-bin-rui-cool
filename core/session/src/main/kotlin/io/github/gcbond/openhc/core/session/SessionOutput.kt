@@ -103,6 +103,20 @@ sealed class SessionAction : SessionOutput {
         override fun toString() = "OpenUdp($id, ${channel.name}, $localHost → $remoteHost:$remotePort)"
     }
 
+    /**
+     * 开 UDP socket [id]：绑 [localHost]:[localPort]，不 connect，收任意来源的数据报（音频数据会话走 UDP 时手机往这里发）。
+     * 绑好后调 [SessionLogic.onListening]（端口是实际绑上的）；收到的数据报交 [SessionLogic.onDatagram]；
+     * 绑不上或收发出错调 [SessionLogic.onIoError]。
+     */
+    class BindUdp(
+        override val id: Int,
+        val channel: SessionChannel,
+        val localHost: String,
+        val localPort: Int,
+    ) : SessionAction() {
+        override fun toString() = "BindUdp($id, ${channel.name}, $localHost:$localPort)"
+    }
+
     /** 经 UDP socket [id] 发一个数据报（已是完整的线上字节）。 */
     class SendDatagram(override val id: Int, val bytes: ByteArray) : SessionAction() {
         override fun toString() = "SendDatagram($id, ${bytes.size} 字节)"

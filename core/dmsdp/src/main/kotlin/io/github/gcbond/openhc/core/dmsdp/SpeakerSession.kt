@@ -1,5 +1,7 @@
 package io.github.gcbond.openhc.core.dmsdp
 
+import io.github.gcbond.openhc.core.common.toHex
+import io.github.gcbond.openhc.core.dmsdp.audio.AudioBus
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioDepacketizer
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEndReason
@@ -69,14 +71,37 @@ internal class SpeakerSession(
 
     /** 控制连接上送来的声音（见 [ControlChannelAudio]）：拼组、按一路声音交出；参数在第一组时定下。 */
     private val controlAudio = ControlChannelAudio()
-    private var controlStream: AudioStreamInfo? = null
-    private var controlPacket: AudioPacket? = null
+
+    /** 这次连接里手机不认 TCP（或记着要用 UDP），之后的数据会话都用 UDP。 */
+    private var udpFallback = false
+
+    /** 这次连接里「应答了 TCP 的 SETUP、却一直不连数据端口」的数据会话数（见 [end]）。 */
+    private var answeredNoConnect = 0
+
+    /** 控制连接上的一路声音：各用各的播放端会话号和包。 */
+    private class ControlStream(val info: AudioStreamInfo, val packet: AudioPacket) {
+        var groups = 0L
+        var lastRoute: AudioRoute? = null
+        var lastSsrc = -1L
+    }
+
+    /** 已经写过说明的「认得出、但含义不确定」的服务类型。 */
+    private val controlServicesNoted = HashSet<Int>(2)
+
+    /** 控制连接上的各路声音，键是片头里的流号。 */
+    private val controlStreams = LinkedHashMap<Long, ControlStream>()
+
+    /** 控制连接上的声音在播放端的会话信息，所有流号共用。 */
+    private var controlInfo: AudioStreamInfo? = null
 
     private inner class Stream(val info: AudioStreamInfo) {
         /** 数据端口；0 表示还没开好（SETUP 还没发）。 */
         var port = 0
         var setupAtMillis = -1L
         var answer: String? = null
+
+        /** 手机用 200 应答 SETUP 的时刻；没有应答或没接受时为 -1。 */
+        var acceptedAtMillis = -1L
         var data: Link? = null
     }
 
@@ -124,8 +149,9 @@ internal class SpeakerSession(
             router.onBus(packet.bus)?.let { note(stream.info, it) }
             val route = router.route(packet.bus, packet.usage)
             packet.route = route
-            if (routed[packet.ssrc] != route && (routed.size < MAX_ROUTED_STREAMS || packet.ssrc in routed)) {
-                routed[packet.ssrc] = route
+            // 按路记：同一个 SSRC 上可能有几路（包尾路号不同），各报一次，之后只在换通道时再报。
+            if (routed[packet.lane] != route && (routed.size < MAX_ROUTED_STREAMS || packet.lane in routed)) {
+                routed[packet.lane] = route
                 emit(AudioEvent.StreamRouted(stream.info, packet.ssrc, packet.bus, packet.usage, route))
             }
             if (firstPacket) {
@@ -149,8 +175,8 @@ internal class SpeakerSession(
     }
 
     /** 手机的设备信息（命令 101）：记下是哪台手机，定扬声器能力时用。 */
-    fun onPeerDevice(deviceId: String, name: String?) {
-        if (peer == null) peer = PhoneRef(PhoneRef.keyOf(deviceId), name?.take(MAX_NAME_CHARS))
+    fun onPeerDevice(deviceId: String, name: String?, version: String? = null) {
+        if (peer == null) peer = PhoneRef(PhoneRef.keyOf(deviceId), name?.take(MAX_NAME_CHARS), version?.take(MAX_VERSION_CHARS))
     }
 
     /** 服务声明（102）里扬声器属性 2102 的值；第一次调用时定下这次连接的声明。 */
@@ -207,7 +233,7 @@ internal class SpeakerSession(
     fun listenersFailed(reason: String, out: DmsdpSession.Outputs) = using(out) {
         val stream = current ?: return@using
         emit(AudioEvent.ListenFailed(stream.info, reason))
-        end(stream, AudioEndReason.LISTEN_FAILED)
+        end(stream, AudioEndReason.LISTEN_FAILED, nowMillis = null)
     }
 
     fun onConnected(nowMillis: Long, out: DmsdpSession.Outputs) = using(out) {
@@ -243,43 +269,97 @@ internal class SpeakerSession(
      * 控制连接上的一条非文本载荷：是声音片就拼组、拼成一组按一路声音交出（和数据会话的声音一样路由、计入 PCM 判定），
      * 返回 true；不是返回 false，由调用方按别的消息处理。
      */
-    fun onControlAudio(payload: ByteArray, out: DmsdpSession.Outputs): Boolean {
+    fun onControlAudio(payload: ByteArray, nowMillis: Long, out: DmsdpSession.Outputs): Boolean {
         var recognized = false
         using(out) {
-            recognized = controlAudio.feed(payload) { data, offset, length -> emitControlPcm(data, offset, length) }
+            recognized = controlAudio.feed(payload) { group -> emitControlPcm(group) }
+            if (recognized) checkControlInstead(nowMillis)
         }
         return recognized
     }
 
-    private fun emitControlPcm(data: ByteArray, offset: Int, length: Int) {
-        val info = controlStream ?: run {
+    /**
+     * TCP 方式的 SETUP 已经应答了 [ACCEPTED_NO_CONNECT_MILLIS] 以上、数据端口还没连，声音却从控制连接送来：这台手机不走 TCP
+     * 的数据连接（它把声音塞进控制连接，几路声音不带路号，导航和音乐分不开），之后的数据会话改用 UDP。
+     * 应答后很快连上数据端口的手机在连上之前也会从控制连接先送一点，碰不到这个时限。
+     */
+    private fun checkControlInstead(nowMillis: Long) {
+        val stream = current ?: return
+        if (udpFallback || speaker.transport != AudioTransport.TCP || stream.info.transport != AudioTransport.TCP) return
+        if (stream.data != null || stream.acceptedAtMillis < 0 || nowMillis - stream.acceptedAtMillis < ACCEPTED_NO_CONNECT_MILLIS) return
+        udpFallback = true
+        note(stream.info, "手机应答了 SETUP，${(nowMillis - stream.acceptedAtMillis) / 1000} 秒都没连数据端口，声音一直从控制连接送：之后的数据会话改用 UDP")
+        emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.CONTROL_INSTEAD))
+    }
+
+    /**
+     * 这个流号对应的拼组状态。所有流号共用同一个播放端会话号（[controlInfo]）：老鸿蒙每隔几秒换一次流号，声音却是连着的，
+     * 要接着用同一个播放器；同时放的几路（导航、音乐）靠组头里的路号拼出不同的 SSRC，在播放端各用各的播放器。
+     */
+    private fun controlStreamFor(stream: Long): ControlStream {
+        controlStreams[stream]?.let { return it }
+        if (controlStreams.size >= ControlChannelAudio.MAX_STREAMS) controlStreams.remove(controlStreams.keys.first())
+        val info = controlInfo ?: run {
             // 采样参数按手机最近一次声音请求（ParaAudio）；还没请求过时按实机的 48 kHz 双声道 16 位。
             val basis = current?.info
             AudioStreamInfo(
                 CONTROL_SESSION_ID, basis?.sampleRate ?: CONTROL_SAMPLE_RATE, basis?.channels ?: CONTROL_CHANNELS, PCM_BITS,
                 null, AudioCodec.PCM, AudioTransport.TCP, "经控制连接",
             ).also {
-                controlStream = it
+                controlInfo = it
                 note(it, "手机经控制连接送声音（没走音频数据连接），按 ${it.sampleRate}Hz / ${it.channels} 声道 / 16 位小端 PCM 放")
             }
         }
-        val packet = controlPacket ?: AudioPacket(info).also { controlPacket = it }
-        packet.sequence = controlAudio.groups.toInt()
+        return ControlStream(info, AudioPacket(info)).also { controlStreams[stream] = it }
+    }
+
+    /**
+     * 拼好的一组交给播放端。分路和音频数据连接同一套规则（[AudioRouter]）：组头带了路号和用途时拼成同样的 SSRC
+     * （高 16 位用途、低 16 位 1000 + 路号），导航、音乐等各走各的通道；没带时当媒体。通话扬声器的声音一律放通话通道。
+     */
+    private fun emitControlPcm(group: ControlChannelAudio.Group) {
+        val control = controlStreamFor(group.stream)
+        control.groups++
+        val info = control.info
+        val packet = control.packet
+        val data = group.data
+        val offset = group.offset
+        val length = group.length
+        if (group.service !in KNOWN_CONTROL_SERVICES && controlServicesNoted.add(group.service)) {
+            note(info, "控制连接上来了服务类型 ${group.service} 的声音（含义未确定），按组头里的用途分路")
+        }
+        packet.bus = group.bus
+        packet.usage = group.usage
+        packet.ssrc = if (group.bus == AudioBus.UNKNOWN) 0L else (group.usage.toLong() shl 16) or (CONTROL_SSRC_BASE + group.bus)
+        packet.lane = if (group.bus == AudioBus.UNKNOWN) 0L else CONTROL_SSRC_BASE + group.bus
+        router.onBus(packet.bus)?.let { note(info, it) }
+        val route = if (group.service == ControlChannelAudio.SERVICE_CALL_SPEAKER) AudioRoute.CALL else router.route(packet.bus, packet.usage)
+        if (control.lastRoute != route || control.lastSsrc != packet.ssrc) {
+            control.lastRoute = route
+            control.lastSsrc = packet.ssrc
+            emit(AudioEvent.StreamRouted(info, packet.ssrc, packet.bus, packet.usage, route))
+        }
+        packet.sequence = control.groups.toInt()
         packet.codec = AudioCodec.PCM
         packet.playable = true
         packet.byteOrder = PcmByteOrder.LITTLE_ENDIAN
         packet.data = data
         packet.offset = offset
         packet.length = length
-        packet.route = router.route(packet.bus, packet.usage)
+        packet.route = route
         if (controlAudio.groups == 1L) emit(AudioEvent.FirstPacket(info, packet.payloadType, length))
+        if (controlAudio.groups <= CONTROL_GROUPS_NOTED) {
+            // 组头长度各版本不同：前几组记下用了多长的组头和组开头的字节，出问题时对照（只有长度、时间戳和 PCM，没有标识）。
+            val head = data.copyOf(minOf(offset + length, CONTROL_GROUP_HEAD_SHOWN)).toHex()
+            note(info, "控制连接声音第 ${controlAudio.groups} 组：组头 $offset 字节、PCM $length 字节，开头 $head")
+        }
         check?.onPacket(AudioCodec.PCM, true)?.let { verdict(it) }
         guard("onAudioPacket") { listener.onAudioPacket(packet) }
     }
 
     /** 整个设备会话结束：当前的数据会话随之结束（资源由调用方统一关闭），PCM 有没有出声在这时下最后的结论。 */
     fun close(nowMillis: Long, out: DmsdpSession.Outputs) = using(out) {
-        current?.let { end(it, AudioEndReason.SESSION_CLOSED) }
+        current?.let { end(it, AudioEndReason.SESSION_CLOSED, nowMillis) }
         setups.clear()
         check?.onClose(nowMillis)?.let { verdict(it) }
     }
@@ -294,7 +374,8 @@ internal class SpeakerSession(
         val trigger = triggerMethod(message)
         when {
             trigger.equals(TRIGGER_OPTIONS, ignoreCase = true) -> onOptions(message, nowMillis)
-            trigger.equals(TRIGGER_TEARDOWN, ignoreCase = true) -> onTeardown(message)
+            // CLOSE：老鸿蒙拆掉数据会话之后紧跟着发（2026-11 实机每 3 秒一轮），和 TEARDOWN 一样回 200、关掉对得上的会话。
+            trigger.equals(TRIGGER_TEARDOWN, ignoreCase = true) || trigger.equals(TRIGGER_CLOSE, ignoreCase = true) -> onTeardown(message, nowMillis)
             trigger != null -> unhandled(message, "手机触发了没实现的数据会话操作「${trigger.take(32)}」，没有应答")
             message.header(AUDIO_PARAMETER) != null -> onAudioParameter(message)
             else -> unhandled(message, "扬声器服务的 SET_PARAMETER 没有触发字段，没有应答")
@@ -318,20 +399,20 @@ internal class SpeakerSession(
             if (active.port != 0) sendSetup(active, nowMillis)
             return
         }
-        if (active != null) end(active, AudioEndReason.REPLACED)
-        val stream = Stream(streamInfo(sessionId, message.header(PARA_AUDIO) ?: "", speaker.transport, codec))
+        if (active != null) end(active, AudioEndReason.REPLACED, nowMillis)
+        val stream = Stream(streamInfo(sessionId, message.header(PARA_AUDIO) ?: "", transport(), codec))
         current = stream
         emit(AudioEvent.Requested(stream.info))
-        out?.add(DmsdpAction.OpenAudioListeners)
+        out?.add(DmsdpAction.OpenAudioListeners(stream.info.transport))
     }
 
-    private fun onTeardown(message: DmsdpMessage) {
+    private fun onTeardown(message: DmsdpMessage, nowMillis: Long) {
         val cseq = validCSeq(message) ?: return
         val sessionId = validSessionId(message) ?: return
         reply(sessionId, cseq)
         val active = current
         if (active != null && active.info.dataSessionId == sessionId) {
-            end(active, AudioEndReason.PEER_TEARDOWN)
+            end(active, AudioEndReason.PEER_TEARDOWN, nowMillis)
         } else {
             note(null, "手机拆除的数据会话 $sessionId 不是当前的，已回 200")
         }
@@ -351,6 +432,7 @@ internal class SpeakerSession(
         val stream = setups.remove(cseq) ?: return
         val after = if (stream.setupAtMillis >= 0) nowMillis - stream.setupAtMillis else -1
         stream.answer = message.startLine
+        if (message.statusCode == STATUS_CODE_OK) stream.acceptedAtMillis = nowMillis
         emit(AudioEvent.SetupAnswered(stream.info, message.startLine, message.statusCode, message.headers, after))
         when {
             stream !== current -> note(stream.info, "这个应答属于已经结束的数据会话，忽略")
@@ -390,7 +472,54 @@ internal class SpeakerSession(
         emit(AudioEvent.SetupSent(stream.info, stream.port, cseq, stream.info.codec))
     }
 
-    private fun end(stream: Stream, reason: AudioEndReason) {
+    /**
+     * 这次数据会话用的传输方式：调试强制 UDP 时一律 UDP；否则手机在 UDP 名单里、或这次连接里已经因为它不认 TCP 改过，
+     * 用 UDP；其余用 TCP。
+     */
+    private fun transport(): AudioTransport {
+        if (speaker.transport != AudioTransport.TCP) return speaker.transport
+        if (udpFallback) return AudioTransport.UDP
+        val phone = peer
+        if (phone != null && phone.listedIn(speaker.udpPhones)) {
+            udpFallback = true
+            note(null, "${phone}（HiCar ${phone.version ?: "版本未知"}）记着要用 UDP，数据会话用 UDP")
+            return AudioTransport.UDP
+        }
+        val major = phone?.version?.substringBefore('.')?.toIntOrNull()
+        if (major != null && major < TCP_MIN_HICAR_MAJOR) {
+            // HiCar 14 及更早的手机（老鸿蒙、荣耀等）不走 TCP 方式的声音连接：有的不应答，有的应答了却把声音塞进控制连接、
+            // 几路不带路号；用 UDP 时它们正常连数据连接、按路号分开送。直接从 UDP 开始，省掉第一次连接试 TCP 的那一段。
+            udpFallback = true
+            note(null, "${phone}（HiCar ${phone.version}）早于 $TCP_MIN_HICAR_MAJOR，数据会话直接用 UDP")
+            return AudioTransport.UDP
+        }
+        return AudioTransport.TCP
+    }
+
+    /** [nowMillis] 为 null 时不判断「应答了却不连」（例如车机自己开不了端口）。 */
+    private fun end(stream: Stream, reason: AudioEndReason, nowMillis: Long?) {
+        val tcpAsked = stream.info.transport == AudioTransport.TCP && !udpFallback &&
+            speaker.transport == AudioTransport.TCP && stream.port != 0 && stream.data == null
+        // 手机对 TCP 方式的 SETUP 一直没有应答、也没连数据端口就拆掉了：它不认 TCP（老鸿蒙），之后改用 UDP。
+        if (tcpAsked && reason == AudioEndReason.PEER_TEARDOWN && stream.answer == null) {
+            udpFallback = true
+            emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.NO_ANSWER))
+        } else if (tcpAsked && nowMillis != null && stream.acceptedAtMillis >= 0 &&
+            nowMillis - stream.acceptedAtMillis >= ACCEPTED_NO_CONNECT_MILLIS
+        ) {
+            // 用 200 应答了，却过了好几秒都不连数据端口（声音改走控制连接）：有的手机这样表示不认 TCP。
+            // 纯血鸿蒙应答后几十毫秒内就连上；为免偶尔一次没连上就把这台手机永久记成 UDP，同一次连接里出现两次才改。
+            answeredNoConnect++
+            note(
+                stream.info,
+                "手机应答了 SETUP，但 ${(nowMillis - stream.acceptedAtMillis) / 1000} 秒都没连数据端口" +
+                    "（这次连接第 $answeredNoConnect 次）",
+            )
+            if (answeredNoConnect >= ACCEPTED_NO_CONNECT_SESSIONS) {
+                udpFallback = true
+                emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.ACCEPTED_NO_CONNECT))
+            }
+        }
         stream.data?.finish()
         if (current === stream) current = null
         val pending = setups.entries.iterator()
@@ -471,8 +600,7 @@ internal class SpeakerSession(
     }
 
     internal companion object {
-        /** 控制连接上的声音在播放端用的「数据会话」号（真正的数据会话号是数字，不会撞）。 */
-        const val CONTROL_SESSION_ID = "control"
+        const val CONTROL_SESSION_ID = AudioStreamInfo.CONTROL_SESSION_ID
         const val CONTROL_SAMPLE_RATE = 48_000
         const val CONTROL_CHANNELS = 2
         const val PCM_BITS = 16
@@ -490,6 +618,28 @@ internal class SpeakerSession(
         const val TRIGGER_FIELD = "msdp_trigger_method"
         const val TRIGGER_OPTIONS = "OPTIONS"
         const val TRIGGER_TEARDOWN = "TEARDOWN"
+        const val TRIGGER_CLOSE = "CLOSE"
+
+        /** 控制连接声音前几组写说明、每组写开头多少字节。 */
+        private const val CONTROL_GROUPS_NOTED = 3L
+
+        /** 控制连接声音里含义确定的服务类型（扬声器、通话扬声器）。 */
+        private val KNOWN_CONTROL_SERVICES = setOf(ControlChannelAudio.SERVICE_SPEAKER, ControlChannelAudio.SERVICE_CALL_SPEAKER)
+
+        /** SSRC 低 12 位 = 这个数 + 路号（和音频数据连接相同）。 */
+        private const val CONTROL_SSRC_BASE = 1000L
+
+        /** 用 200 应答 SETUP 之后，过了这么久还没连数据端口，算一次「应答了却不连」。 */
+        const val ACCEPTED_NO_CONNECT_MILLIS = 5_000L
+
+        /** 声音数据连接先试 TCP 的最低 HiCar 主版本；更早的手机直接用 UDP。 */
+        const val TCP_MIN_HICAR_MAJOR = 15
+
+        /** 同一次连接里「应答了却不连」出现这么多次，就改用 UDP。 */
+        const val ACCEPTED_NO_CONNECT_SESSIONS = 2
+
+        private const val CONTROL_GROUP_HEAD_SHOWN = 32
+        private const val MAX_VERSION_CHARS = 32
 
         /** 数据会话消息里扬声器的服务类型（服务声明里是 4，这里是 3）。 */
         const val DATA_SERVICE_TYPE = "3"

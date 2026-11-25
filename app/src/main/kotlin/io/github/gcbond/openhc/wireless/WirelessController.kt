@@ -33,6 +33,7 @@ import io.github.gcbond.openhc.core.session.SessionEvent
 import io.github.gcbond.openhc.core.session.SessionOutput
 import io.github.gcbond.openhc.core.session.SocketRunner
 import io.github.gcbond.openhc.core.session.VideoParameters
+import io.github.gcbond.openhc.core.session.WirelessEndReason
 import io.github.gcbond.openhc.core.session.WirelessEvent
 import io.github.gcbond.openhc.core.session.WirelessReceiverConfig
 import io.github.gcbond.openhc.core.session.WirelessReceiverSession
@@ -117,6 +118,11 @@ class WirelessController(
     private val stopWiredWaiting: () -> Unit = {},
     /** 让有线回到等插线（为无线让路之后，无线没拨成或连接结束时）。 */
     private val resumeWiredWaiting: () -> Unit = {},
+    /**
+     * 车机上插着能走有线的手机。插线会拉起有线，但有线的开始请求生效前有一小段时间状态还没变（[wiredActive] 为假），
+     * 自动拨手机看这一项，免得和刚开始的有线同时进行。
+     */
+    private val phoneOnCable: () -> Boolean = { false },
 ) {
 
     /** 前台服务监听：要不要留在前台、通知内容要不要更新。在主线程上回调。 */
@@ -252,11 +258,26 @@ class WirelessController(
 
     // ---------------------------------------------------------------- 对外操作（任意线程）
 
-    /** 「开始无线连接」（扫码）。运行时权限由界面先申请好（见 [WirelessStartFlow]）。 */
+    /**
+     * 「开始无线连接」：亮二维码等扫码；最近连成功的那台手机蓝牙正连着车机时，同时由车机去拨它，谁先连上走谁
+     * （手机自己回连在断开后一段时间内不会来，车机拨号不受这个限制）。运行时权限由界面先申请好（见 [WirelessStartFlow]）。
+     */
     fun start() = post {
         if (attempt != null) return@post
         cancelAutoRetry()
-        begin(Kind.MANUAL)
+        begin(Kind.MANUAL, dial = manualDialTarget())
+    }
+
+    /**
+     * 点「开始」时顺带拨的手机：最近连成功的那台、蓝牙正连着车机、读得到设备名才拨。是用户点的，不看「自动连接手机」开关、
+     * 冷却和「一次蓝牙连接只拨一次」。
+     */
+    private fun manualDialTarget(): ReconnectTarget? {
+        val last = wirelessPrefs.lastPhone ?: return null
+        val adapter = BluetoothStatus.adapter(app) ?: return null
+        if (phoneConnected(adapter, last) != true) return null
+        val name = phoneName(adapter, last) ?: return null
+        return ReconnectTarget(last, name)
     }
 
     /** 「停止」：按顺序收尾。之后这次蓝牙连接里不再自动拨（手机蓝牙重新连上车机时再拨）。 */
@@ -462,7 +483,13 @@ class WirelessController(
     /**
      * 开一次连接。[kind] 是 [Kind.AUTO]（自动进入的等待）时开始不了只记日志、界面上一行说明（[AutoHold]），不报错。
      */
-    private fun begin(kind: Kind, bluetoothTrigger: String? = null, reconnect: ReconnectTarget? = null, resumeWiredAfter: Boolean = false) {
+    private fun begin(
+        kind: Kind,
+        bluetoothTrigger: String? = null,
+        reconnect: ReconnectTarget? = null,
+        resumeWiredAfter: Boolean = false,
+        dial: ReconnectTarget? = null,
+    ) {
         if (attempt != null) return
         userStopped = false
         if (wirelessPrefs.wiredOnly) return blocked(kind, WirelessNotice.WiredOnly, AutoHold.WIRED_ONLY)
@@ -565,10 +592,11 @@ class WirelessController(
         val directGroup = carHotspot == null && wirelessPrefs.usesWifiDirect
         val current = Attempt(
             ++attemptCounter, kind, config, adapter, identity.host, beacon, bluetoothTrigger, reconnect, resumeWiredAfter, directGroup,
-            carHotspot,
+            carHotspot, dial,
         )
         attempt = current
-        if (reconnect != null) triggers.commitDial(reconnect.address, SystemClock.elapsedRealtime())
+        // 点「开始」顺带拨的也记进拨号规则：自动拨号不再叠着拨这台手机。
+        (reconnect ?: dial)?.let { triggers.commitDial(it.address, SystemClock.elapsedRealtime()) }
         inputTarget = current
         Log.i(
             TAG,
@@ -576,7 +604,8 @@ class WirelessController(
                 "蓝牙地址来源 ${bluetooth.source}，deviceId ${config.deviceId.take(4)}…，" +
                 "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}（界面大小 ${settings.uiScalePercent}%），系统 ${Build.VERSION.SDK_INT}，$wifi，" +
                 "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${when { carHotspot != null -> "车机自带热点（试验，$carHotspot）"; directGroup -> "WiFi 直连组（试验）"; else -> "本地热点" }}，" +
-                "广播 ${beacon?.let { "开（重新发布 ${it.republishMillis / 1000} 秒，GATT ${if (it.gatt) "开" else "关"}${if (it.declareRandomAddress) "，声明随机地址" else ""}）" } ?: "不发"}",
+                "广播 ${beacon?.let { "开（重新发布 ${it.republishMillis / 1000} 秒，GATT ${if (it.gatt) "开" else "关"}${if (it.declareRandomAddress) "，声明随机地址" else ""}）" } ?: "不发"}" +
+                (dial?.let { "，同时车机拨手机（${MacText.mask(it.address)}）" } ?: ""),
         )
         Log.i(TAG, "第 ${current.id} 次无线连接的清晰度：${clarity.key}，声明码率 ${VideoClarity.describe(config.display.bitrate)}")
         setAutoHold(null)
@@ -725,6 +754,10 @@ class WirelessController(
                 setAutoHold(AutoHold.WIRED_ACTIVE)
             }
             return
+        }
+        if (phoneOnCable()) {
+            Log.i(TAG, "手机插着数据线，有线优先，不拨手机（$why）")
+            return giveUp()
         }
         val adapter = BluetoothStatus.adapter(app)
         val name = adapter?.let { phoneName(it, address) }
@@ -933,6 +966,8 @@ class WirelessController(
         val directGroup: Boolean = false,
         /** 这次不开本地热点，用车主已经打开的车机自带热点（设置里「无线方式」选了车机自带热点）。 */
         val carHotspot: CarHotspotSettings? = null,
+        /** 扫码等待时同时由车机去拨的手机（[Kind.MANUAL] 点「开始」时），其他为 null。 */
+        val dial: ReconnectTarget? = null,
     ) {
         /** 投屏开始过。 */
         var projected = false
@@ -974,7 +1009,8 @@ class WirelessController(
                     // 车机自带热点是车主开的：不开本地热点，也不排「恢复车机 WiFi」。
                     CarHotspot(app, car, events) { Log.i(TAG, "[$id] 车机热点：$it") }
                 } else {
-                    wifiRestore.onHotspotRequested()
+                    // 收尾已经开始（停止之前排着的认证通过才走到这里）：别把收尾马上要排的复查取消掉。
+                    if (!tearingDown) wifiRestore.onHotspotRequested()
                     LocalHotspotOwner.get(app).create(events) { Log.i(TAG, "[$id] 热点：$it") }
                 }
             },
@@ -990,7 +1026,9 @@ class WirelessController(
         )
         val bridge: WirelessRunnerBridge = WirelessRunnerBridge(
             session,
-            reconnect?.let { target -> { now: Long -> session.startReconnect(target.address, target.name, now) } } ?: session::start,
+            reconnect?.let { target -> { now: Long -> session.startReconnect(target.address, target.name, now) } }
+                ?: dial?.let { target -> { now: Long -> session.startWithDial(target.address, target.name, now) } }
+                ?: session::start,
         ) { output -> executor.execute(output) }
         val runner: SocketRunner = SocketRunner(
             bridge,
@@ -1022,9 +1060,13 @@ class WirelessController(
             )
         }
 
-        /** 协议线程建、调度线程收尾时关。 */
+        /**
+         * 协议线程建、调度线程收尾时关，两边都在 [decoderLock] 里改。收尾在关执行器之前就置了 [tearingDown]：
+         * 执行器关闭超时、强行放弃时协议线程可能还在建解码器，靠这把锁保证建了的一定被收尾关掉，收尾之后不再建。
+         */
         @Volatile
         var videoDecoder: VideoDecoder? = null
+        val decoderLock = Any()
 
         @Volatile
         var inputReady = false
@@ -1116,10 +1158,13 @@ class WirelessController(
     }
 
     private fun prepareDecoder(current: Attempt, video: VideoParameters) {
-        val decoder = current.videoDecoder ?: VideoDecoder(DecoderListener(current.id)).also {
-            current.videoDecoder = it
-            current.sink.target = it
-            mutableDecoder.value = it
+        val decoder = synchronized(current.decoderLock) {
+            if (current.tearingDown) return
+            current.videoDecoder ?: VideoDecoder(DecoderListener(current.id)).also {
+                current.videoDecoder = it
+                current.sink.target = it
+                mutableDecoder.value = it
+            }
         }
         decoder.prepare(video.width, video.height, video.fps)
     }
@@ -1172,12 +1217,14 @@ class WirelessController(
         current.beacon?.stop("连接收尾")
         // 1. 协议层：会话按顺序收尾（TEARDOWN、关蓝牙、拆 WiFi 网络）；已经结束时立即返回，否则最多阻塞几秒。
         current.runner.close()
-        // 2. 声音、解码器：执行器已经停了，不会再有回调。
+        // 2. 声音、解码器：执行器停了就不会再有回调；关闭超时、强行放弃时协议线程可能还在建解码器，见 [Attempt.decoderLock]。
         current.audio.close()
-        current.sink.target = null
-        current.videoDecoder?.close()
-        current.videoDecoder = null
-        mutableDecoder.value = null
+        val decoder = synchronized(current.decoderLock) {
+            current.sink.target = null
+            mutableDecoder.value = null
+            current.videoDecoder.also { current.videoDecoder = null }
+        }
+        decoder?.close()
         // 3. 平台资源兜底：正常收尾时会话已经逐个关过，这里什么都不剩；执行器意外退出时靠这一步撤掉服务记录、拆 WiFi 网络。
         current.executor.closeAll()
         maybeFinish(current)

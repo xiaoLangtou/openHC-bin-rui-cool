@@ -34,7 +34,7 @@
     <string name="wireless_hint_negotiating_direct">认证成功，车机正在建 WiFi 直连组，和手机商量 WiFi…</string>
     <string name="wireless_hint_sending_direct">直连组已建好，正在把组的信息发给手机…</string>
     <string name="wireless_hint_waiting_join_direct">等手机加入车机的 WiFi 直连组…（手机开着热点的话会被关掉）</string>
-    <string name="wireless_end_step_hotspot">车机开热点失败（%1$s）。安卓 8～12 的车机要打开系统定位开关；车机开着个人热点时先关掉。</string>
+    <string name="wireless_end_step_hotspot">车机开热点失败（%1$s）。安卓 8～12 的车机要打开系统定位开关；车机设置里的个人热点开着时，先关掉它，或者在设置里把「无线方式」改成「车机自带热点」。不需要车机有流量。</string>
     <string name="wireless_end_step_join_hotspot">手机没能连上车机热点（%1$s）。可以重新开始再试一次。</string>
     <string name="wireless_end_step_direct">车机建 WiFi 直连组失败（%1$s）。先确认车机 WiFi 开着；还不行就在设置里把「无线方式」改回「车机开热点」。</string>
     <string name="wireless_end_step_join_direct">手机没能加入车机的 WiFi 直连组（%1$s）。可以重新开始再试一次；总是不行就在设置里把「无线方式」改回「车机开热点」。</string>

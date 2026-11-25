@@ -214,6 +214,50 @@ class SocketRunnerTest {
         assertTrue(logs.any { "已关闭" in it }, logs.toString())
     }
 
+    /**
+     * 每个监听只接受一条连接：再连进来的被立刻关掉（对端马上读到结束，不会挂着没人理）、记日志，第一条照常收发；
+     * 监听本身留到会话关它为止。
+     */
+    @Test
+    fun extraConnectionsToAnAcceptedListenerAreClosedAtOnce() {
+        val session = ScriptedSession()
+        val port = Box<Int>()
+        session.onStart = { listOf(SessionAction.Listen(1, SessionChannel.CONTROL, "127.0.0.1", 0, 2)) }
+        session.onListen = { _, p ->
+            port.set(p)
+            emptyList()
+        }
+        session.onAccept = { id, _ -> listOf(SessionAction.Write(id, "ok".bytes())) }
+        session.onBytes = { id, data -> listOf(SessionAction.Write(id, data)) }
+        session.onEof = { id -> session.end(SessionAction.Close(id), SessionAction.Close(1)) }
+        val logs: MutableList<String> = Collections.synchronizedList(ArrayList())
+        val runner = runner(session, SocketRunner.Options(threadName = prefix, log = { logs += it }))
+        Socket("127.0.0.1", port.get()).use { first ->
+            first.soTimeout = 5_000
+            val input = first.getInputStream()
+            assertEquals("ok", input.readExactly(2))
+            repeat(4) {
+                Socket("127.0.0.1", port.get()).use { extra ->
+                    extra.soTimeout = 5_000
+                    val read = try {
+                        extra.getInputStream().read()
+                    } catch (e: java.net.SocketException) {
+                        -1
+                    }
+                    assertEquals(-1, read, "第 ${it + 2} 条连接被关掉")
+                }
+            }
+            first.getOutputStream().write("ping".bytes())
+            assertEquals("ping", input.readExactly(4), "第一条连接不受影响")
+        }
+        assertTrue(runner.awaitTermination(5_000))
+        assertNull(runner.failure)
+        assertEquals(listOf("start", "listening 1", "accepted 2 127.0.0.1", "data 2", "closed 2"), session.calls)
+        val rejected = logs.filter { "又连进来一条" in it }
+        assertEquals(3, rejected.size, logs.toString())
+        assertTrue("之后的不再记" in rejected.last(), rejected.toString())
+    }
+
     /** 真机默认的走法：通配地址监听，本端地址对得上的连接照常接受。 */
     @Test
     fun wildcardListenerAcceptsConnectionsToTheRequiredLocalAddress() {

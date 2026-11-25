@@ -66,7 +66,50 @@ internal object RtspParser {
         object MoreHeaders : AtBlank()
     }
 
-    fun parse(payload: ByteArray): RtspMessage {
+    fun parse(payload: ByteArray): RtspMessage =
+        try {
+            parseStrict(payload)
+        } catch (e: MalformedMessageException) {
+            // 照常拆不开时，再看是不是少了头部结束空行的请求；也不是就照原来的错报。
+            val fallback = try {
+                requestWithoutBlankLine(payload)
+            } catch (ignored: MalformedMessageException) {
+                null
+            }
+            fallback ?: throw e
+        }
+
+    /**
+     * 请求少了头部结束的空行（手机切换应用时会发这种）：头部之后直接接正文。从前往后找一处行首，
+     * 之前的都是合规、不重复的头，其中 Content-Length 正好等于之后的字节数，就从这里分开。整条里有空行的不走这里。
+     */
+    private fun requestWithoutBlankLine(p: ByteArray): RtspMessage? {
+        for (i in 0..p.size - 4) if (isCrlf(p, i) && isCrlf(p, i + 2)) return null
+        val lines = splitLines(p)
+        val firstLine = lines.items.firstOrNull() ?: return null
+        if (!isAscii(p, firstLine.start, firstLine.end)) return null
+        val first = ascii(p, firstLine.start, firstLine.end)
+        requestMethod(first)
+        val values = LinkedHashMap<String, String>()
+        for (k in 1..lines.items.size) {
+            val bodyStart = if (k < lines.items.size) lines.items[k].start else lines.tailStart
+            val declared = values["content-length"]?.let { decimal(it, 5).toInt() }
+            if (declared != null && declared > 0 && p.size - bodyStart == declared && "cseq" in values) {
+                return RtspMessage(first, values, p.copyOfRange(bodyStart, p.size), cseqOf(values))
+            }
+            if (k == lines.items.size) break
+            val line = lines.items[k]
+            if (!isAscii(p, line.start, line.end) || hasControlCharacter(p, line.start, line.end)) return null
+            val text = ascii(p, line.start, line.end)
+            val colon = text.indexOf(':')
+            val name = if (colon > 0) text.substring(0, colon).lowercase() else return null
+            if (!isHeaderName(name) || name in values) return null
+            values[name] = trimSpaceTab(text.substring(colon + 1))
+        }
+        return null
+    }
+
+    private fun parseStrict(payload: ByteArray): RtspMessage {
         val lines = splitLines(payload)
         val firstLine = lines.items.firstOrNull() ?: throw MalformedMessageException("控制消息缺少首行结束符")
         if (!isAscii(payload, firstLine.start, firstLine.end)) throw MalformedMessageException("控制消息首行含非 ASCII 字节")

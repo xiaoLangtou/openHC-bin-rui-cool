@@ -54,14 +54,19 @@ internal class AudioDepacketizer(
 
     /** 去掉过 12 字节头的 PCM 包数、带不上头（原样交出）的 PCM 包数。 */
     var pcmHeadersStripped = 0L
-    private var pcmTrailerNoted = false
         private set
     var pcmWithoutHeader = 0L
         private set
+    private var pcmTrailerNoted = false
 
     /** 去掉过 12 字节头的 AAC 包数。 */
     var aacHeadersStripped = 0L
         private set
+
+    /** 带包尾路号（见 [PayloadHeader.trailerBus]）、去掉过头和包尾的包数（AAC、PCM 都算，不计入上面两项）。 */
+    var trailerBusPackets = 0L
+        private set
+    private var trailerLengthNoted = false
 
     private val head = ByteArray(HEAD_BYTES)
     private var headLength = 0
@@ -72,7 +77,7 @@ internal class AudioDepacketizer(
     private val packet = AudioPacket(stream)
     private val byteOrder = ByteOrderDetector(stream.channels)
 
-    /** 认出来之后各路的上一个序号和包数（按 SSRC，最多记 [MAX_TRACKED_LANES] 路）。 */
+    /** 认出来之后各路的上一个序号和包数（按 [AudioBus.lane]，最多记 [MAX_TRACKED_LANES] 路）。 */
     private val lanes = LinkedHashMap<Long, LaneStats>()
     private var untrackedPackets = 0L
     private var notes = 0
@@ -96,11 +101,9 @@ internal class AudioDepacketizer(
     /** 各路收到的包数，一句话（给汇总用），例如「第 8 路 1200 包、第 0 路 56 包」。 */
     val streams: String
         get() = buildString {
-            for ((ssrc, lane) in lanes) {
+            for ((lane, stats) in lanes) {
                 if (isNotEmpty()) append("、")
-                append(AudioBus.label(AudioBus.of(ssrc)))
-                if (AudioBus.of(ssrc) == AudioBus.UNKNOWN) append("（SSRC ").append(ssrc).append("）")
-                append(' ').append(lane.packets).append(" 包")
+                append(AudioBus.laneLabel(lane)).append(' ').append(stats.packets).append(" 包")
             }
             if (untrackedPackets > 0) append("、其余 $untrackedPackets 包没分路记")
         }
@@ -291,7 +294,6 @@ internal class AudioDepacketizer(
             rtcpPackets++
             return
         }
-        trackLane(rtp.ssrc, rtp.sequence)
 
         var payload = rtp.data
         var from = rtp.payloadStart
@@ -309,7 +311,13 @@ internal class AudioDepacketizer(
             payload = payloadScratch
             from = 0
         }
-        if (payloadCodec == AudioCodec.AAC) {
+        // 带包尾路号的包（AAC、PCM 一样）：去掉头和包尾，中间全是数据。
+        val trailerBus = PayloadHeader.trailerBus(payload, from, length)
+        if (trailerBus >= 0) {
+            onTrailerBus(payload, from, length)
+            from += PayloadHeader.SIZE
+            length -= PayloadHeader.SIZE + PayloadHeader.TRAILER_BUS_BYTES
+        } else if (payloadCodec == AudioCodec.AAC) {
             // 带头的只交出头后的那个 ADTS 帧（包尾多出的几个字节丢掉）；不带头的原样交出。
             val declared = PayloadHeader.adtsLength(payload, from, length)
             if (declared >= 0) {
@@ -317,8 +325,7 @@ internal class AudioDepacketizer(
                 from += PayloadHeader.SIZE
                 length = declared
             }
-        }
-        if (payloadCodec == AudioCodec.PCM) {
+        } else if (payloadCodec == AudioCodec.PCM) {
             val declared = PayloadHeader.pcmLength(payload, from, length)
             if (declared >= 0) {
                 onPcmHeader(payload, from)
@@ -335,6 +342,8 @@ internal class AudioDepacketizer(
                     note("有 PCM 包对不上 12 字节头的规则，这样的包原样放（序号 ${rtp.sequence}，$length 字节）")
                 }
             }
+        }
+        if (payloadCodec == AudioCodec.PCM) {
             if (byteOrder.offer(payload, from, length)) note("PCM 字节序判断为${byteOrder.order.label}")
             val frameBytes = 2 * stream.channels.coerceAtLeast(1)
             if (length % frameBytes != 0 && !oddPcmNoted) {
@@ -342,11 +351,14 @@ internal class AudioDepacketizer(
                 note("PCM 载荷 $length 字节不是整帧（$frameBytes 字节）的倍数：播放时每包的尾巴会被丢掉，可能错位成噪声")
             }
         }
+        val lane = AudioBus.lane(rtp.ssrc, trailerBus)
+        trackLane(lane, rtp.ssrc, rtp.sequence, trailerBus)
         packet.sequence = rtp.sequence
         packet.timestamp = rtp.timestamp
         packet.ssrc = rtp.ssrc
+        packet.lane = lane
         packet.payloadType = rtp.payloadType
-        packet.bus = AudioBus.of(rtp.ssrc)
+        packet.bus = AudioBus.ofLane(lane)
         packet.usage = AudioBus.usageOf(rtp.ssrc)
         packet.marker = rtp.marker
         packet.data = payload
@@ -359,26 +371,62 @@ internal class AudioDepacketizer(
         out.onPacket(packet)
     }
 
-    /** 按 SSRC 记序号：每一路各自判断跳变；新出现的一路记一条诊断（不受诊断条数上限的限制，路数本身有上限）。 */
-    private fun trackLane(ssrc: Long, sequence: Int) {
-        val lane = lanes[ssrc]
-        if (lane == null) {
+    /**
+     * 按一路声音（[AudioBus.lane]）记序号：每一路各自判断跳变。新出现的一路记一条诊断（不受诊断条数上限的限制，路数本身
+     * 有上限）：带包尾路号的每一路都记，写明 SSRC 和它的路号；同一路里 SSRC 的路号变了也记一次。
+     */
+    private fun trackLane(lane: Long, ssrc: Long, sequence: Int, trailerBus: Long) {
+        val stats = lanes[lane]
+        if (stats == null) {
             if (lanes.size >= MAX_TRACKED_LANES) {
                 untrackedPackets++
                 return
             }
-            lanes[ssrc] = LaneStats(sequence)
-            if (lanes.size > 1) {
-                note("这条连接上出现了新的一路：${AudioBus.label(AudioBus.of(ssrc))}（SSRC $ssrc），各路分开计序号")
+            lanes[lane] = LaneStats(sequence, AudioBus.keyOf(ssrc))
+            if (trailerBus >= 0) {
+                note(
+                    "出现一路：${AudioBus.laneLabel(lane)}（包尾路号 $trailerBus；SSRC $ssrc，SSRC 里是" +
+                        "${AudioBus.label(AudioBus.of(ssrc))}），按包尾分路",
+                )
+            } else if (lanes.size > 1) {
+                note("这条连接上出现了新的一路：${AudioBus.laneLabel(lane)}（SSRC $ssrc），各路分开计序号")
             }
             return
         }
-        if (!isNextSequence(lane.lastSequence, sequence)) {
-            sequenceGaps++
-            noteLimited("${AudioBus.label(AudioBus.of(ssrc))} RTP 序号跳变：${lane.lastSequence} → $sequence")
+        if (!stats.keyChangeNoted && AudioBus.keyOf(ssrc) != stats.key) {
+            stats.keyChangeNoted = true
+            note(
+                "${AudioBus.laneLabel(lane)}里 SSRC 的路号变了：${AudioBus.label(AudioBus.ofLane(stats.key))} → " +
+                    "${AudioBus.label(AudioBus.of(ssrc))}（SSRC $ssrc），包尾路号没变，还算同一路",
+            )
         }
-        lane.lastSequence = sequence
-        lane.packets++
+        if (!isNextSequence(stats.lastSequence, sequence)) {
+            sequenceGaps++
+            noteLimited("${AudioBus.laneLabel(lane)} RTP 序号跳变：${stats.lastSequence} → $sequence")
+        }
+        stats.lastSequence = sequence
+        stats.packets++
+    }
+
+    /** 带包尾路号的包：规则只记一次；头里声明的长度和实际数据长度对不上时也记一次（按实际长度放）。 */
+    private fun onTrailerBus(payload: ByteArray, from: Int, length: Int) {
+        trailerBusPackets++
+        val data = length - PayloadHeader.SIZE - PayloadHeader.TRAILER_BUS_BYTES
+        if (trailerBusPackets == 1L) {
+            conclusion += "，载荷去掉 12 字节头和 4 字节包尾路号"
+            note(
+                "载荷前有 12 字节头（第 2 字节为 1、第 3 字节不为 0）、末尾 4 字节是这一路的路号（小端）：去掉头和包尾再放，" +
+                    "按包尾路号分路，SSRC 里的路号不算（序号 ${rtp.sequence}，载荷 $length 字节）",
+            )
+        }
+        if (payloadCodec == AudioCodec.PCM && trailerBusPackets <= HEADER_SAMPLES) {
+            note("PCM 头（第 ${packets + 1} 包，序号 ${rtp.sequence}）：${payload.copyOfRange(from, from + PayloadHeader.SIZE).toHex()}")
+        }
+        val declared = PayloadHeader.declaredField(payload, from)
+        if (declared != data && !trailerLengthNoted) {
+            trailerLengthNoted = true
+            note("带包尾路号的包，头里声明 $declared 字节、实际数据 $data 字节，按实际的放（序号 ${rtp.sequence}）")
+        }
     }
 
     /** 去头之前：规则只记一次；头部原样记下前几包和之后每 [HEADER_SAMPLE_EVERY] 包抽一包，用来核对各字段怎么变。 */
@@ -443,8 +491,9 @@ internal class AudioDepacketizer(
     }
 
     /** 认出来之后一路的统计。 */
-    private class LaneStats(var lastSequence: Int) {
+    private class LaneStats(var lastSequence: Int, val key: Long) {
         var packets = 1L
+        var keyChangeNoted = false
     }
 
     /** 识别期间一路（一个 SSRC）的进度。 */
@@ -635,6 +684,27 @@ internal object PayloadHeader {
         if (declared <= 0) return -1
         return if (Adts.frameLength(data, offset + SIZE, declared) == declared) declared else -1
     }
+
+    /** 包尾路号占的字节数。 */
+    const val TRAILER_BUS_BYTES = 4
+
+    /**
+     * 包尾路号：头的第 0 字节为 0、第 1 字节为 1～3（和不带包尾的头同一套），第 2 字节为 1、第 3 字节不为 0 时，载荷最后
+     * 4 字节是这一路的路号（小端 32 位）。这样的包去掉 12 字节头和这 4 字节，中间全是数据，头里第 10～11 字节声明的长度
+     * 不作数。不是这样的包返回 -1。
+     */
+    fun trailerBus(data: ByteArray, offset: Int, length: Int): Long {
+        if (length < SIZE + TRAILER_BUS_BYTES) return -1
+        if (data[offset].toInt() != 0 || (data[offset + 1].toInt() and 0xFF) !in 1..3) return -1
+        if (data[offset + 2].toInt() != 1 || data[offset + 3].toInt() == 0) return -1
+        val at = offset + length - TRAILER_BUS_BYTES
+        var value = 0L
+        for (i in TRAILER_BUS_BYTES - 1 downTo 0) value = (value shl 8) or (data[at + i].toLong() and 0xFF)
+        return value
+    }
+
+    /** 头里第 10～11 字节（大端）声明的数据长度，不做任何核对。 */
+    fun declaredField(data: ByteArray, offset: Int): Int = be16(data, offset + SIZE - 2)
 
     /**
      * 第 1 字节为 0、第 2 字节为 1～3，第 10～11 字节（大端）不超过头后剩下的长度，且剩下的比它多出不到

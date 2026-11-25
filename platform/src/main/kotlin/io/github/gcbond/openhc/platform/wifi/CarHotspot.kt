@@ -49,9 +49,9 @@ class CarHotspot(
         }
     }
 
+    /** 停止并退出工作线程。没找到热点、热点丢了时自己已经置了 [stopped]，这里照样要退线程。 */
     override fun stop() {
         handler.post {
-            if (stopped) return@post
             stopped = true
             handler.removeCallbacksAndMessages(null)
             thread.quitSafely()

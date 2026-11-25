@@ -80,6 +80,7 @@ class WirelessReceiverSessionTest {
                 is SessionAction.Write -> "write ${names[c.id]} ${c.bytes.text()}"
                 is SessionAction.Close -> "close ${names[c.id] ?: c.id}"
                 is SessionAction.OpenUdp -> "udp ${c.localHost} -> ${c.remoteHost}:${c.remotePort}"
+                is SessionAction.BindUdp -> "bind-udp ${c.channel} ${c.localHost}:${c.localPort}"
                 is SessionAction.SendDatagram -> "datagram ${c.bytes.text()}"
                 is SessionEvent.Diagnostic -> "diag"
                 is SessionEvent -> "event $c"
@@ -106,6 +107,14 @@ class WirelessReceiverSessionTest {
         fun btClosed(channel: WirelessChannel) = record(session.onClosed(btId(channel), now))
         fun btError(channel: WirelessChannel) = record(session.onIoError(btId(channel), "测试错误", now))
         fun startReconnect(name: String = "Phone") = record(session.startReconnect(WirelessSynthetic.PHONE_BLUETOOTH, name, now))
+        fun startWithDial(name: String = "Phone") = record(session.startWithDial(WirelessSynthetic.PHONE_BLUETOOTH, name, now))
+
+        /** 扫码监听接受的那条控制连接（[startWithDial] 时监听和拨号同在一个通道上，[btId] 指向拨号那条）。 */
+        fun acceptedControlId(): Int = rfcomm.getValue(WirelessChannel.BLUETOOTH_CONTROL).acceptId
+        fun dataOnAccepted(text: String): List<String> {
+            val bytes = text.bytes()
+            return record(session.onData(acceptedControlId(), bytes, 0, bytes.size, now))
+        }
         fun btConnected(channel: WirelessChannel) = record(session.onConnected(rfcommConnects.getValue(channel).id, now))
         fun btConnectError(channel: WirelessChannel) = record(session.onIoError(rfcommConnects.getValue(channel).id, "测试错误", now))
 
@@ -919,5 +928,109 @@ class WirelessReceiverSessionTest {
             listOf("event PhoneBluetoothConnected(地址不显示)", "rfcomm-write BLUETOOTH_CONTROL bt-connect-id"),
             d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
         )
+    }
+
+    @Test
+    fun dialAndScanStartTogether() {
+        val d = Driver()
+        assertEquals(
+            listOf("rfcomm-listen BLUETOOTH_CONTROL $controlUuid", "rfcomm-connect BLUETOOTH_CONTROL $controlUuid 按 SDP"),
+            d.startWithDial(),
+        )
+        // 二维码照常出来。
+        assertEquals(listOf("event PairingReady(内容不显示)"), d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0))
+        assertEquals(WirelessSynthetic.PHONE_BLUETOOTH, d.rfcommConnects.getValue(WirelessChannel.BLUETOOTH_CONTROL).address)
+    }
+
+    @Test
+    fun dialConnectingFirstClosesTheListenerAndContinuesAsReconnect() {
+        val d = Driver()
+        d.startWithDial("车主的手机")
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        assertEquals(
+            listOf(
+                "rfcomm-close BLUETOOTH_CONTROL",
+                "rfcomm-close BLUETOOTH_CONTROL.listener",
+                "diag",
+                "event PhoneBluetoothConnected(地址不显示)",
+                "rfcomm-write BLUETOOTH_CONTROL bt-connect-id",
+            ),
+            d.btConnected(WirelessChannel.BLUETOOTH_CONTROL),
+        )
+        assertTrue("bt.create(发起方)" in d.layers.calls)
+        // 之后和车机主动回连相同：握手完成后请手机开认证子通道，按手机给的通道号连过去。
+        assertEquals(
+            listOf("event BluetoothHandshakeCompleted(加密=true)", "rfcomm-write BLUETOOTH_CONTROL authreq"),
+            d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs"),
+        )
+        assertTrue("bt.requestAuthChannel(车主的手机)" in d.layers.calls)
+        assertEquals(listOf("rfcomm-connect BLUETOOTH_AUTH $subchannelUuid 通道 8"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok"))
+        // 监听已经关了：这时才到的「接受」不算数。
+        assertTrue(d.record(d.session.onAccepted(d.acceptedControlId(), WirelessSynthetic.PHONE_BLUETOOTH, d.now)).isEmpty())
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+    }
+
+    @Test
+    fun phoneConnectingFirstStopsTheDialAndContinuesAsScan() {
+        val d = Driver()
+        d.startWithDial()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        assertEquals(
+            listOf(
+                "rfcomm-close BLUETOOTH_CONTROL",
+                "diag",
+                "event PhoneBluetoothConnected(地址不显示)",
+                "rfcomm-write BLUETOOTH_CONTROL bt-connect-id",
+            ),
+            d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
+        )
+        val dialId = d.rfcommConnects.getValue(WirelessChannel.BLUETOOTH_CONTROL).id
+        assertTrue(d.outputs.any { it is WirelessAction.RfcommClose && it.id == dialId }, "拨号那条关掉")
+        assertTrue(d.layers.calls.none { it == "bt.create(发起方)" })
+        // 拨号那条这时才报连上：不理。
+        assertTrue(d.record(d.session.onConnected(dialId, d.now)).isEmpty())
+        // 之后和手机连上来时相同：车机是应答方，开认证子通道监听。
+        assertEquals(
+            listOf("event BluetoothHandshakeCompleted(加密=true)", "rfcomm-listen BLUETOOTH_AUTH $subchannelUuid"),
+            d.dataOnAccepted("hello"),
+        )
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+    }
+
+    @Test
+    fun dialFailureKeepsWaitingForScan() {
+        val d = Driver()
+        d.startWithDial()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        assertEquals(listOf("rfcomm-close BLUETOOTH_CONTROL", "diag"), d.btConnectError(WirelessChannel.BLUETOOTH_CONTROL))
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+        // 之后扫码连上来照常走。
+        assertEquals(
+            listOf("event PhoneBluetoothConnected(地址不显示)", "rfcomm-write BLUETOOTH_CONTROL bt-connect-id"),
+            d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
+        )
+    }
+
+    @Test
+    fun stopWhileDialingClosesListenerAndDial() {
+        val d = Driver()
+        d.startWithDial()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        val dialId = d.rfcommConnects.getValue(WirelessChannel.BLUETOOTH_CONTROL).id
+        val listen = d.rfcomm.getValue(WirelessChannel.BLUETOOTH_CONTROL)
+        d.stop()
+        val closed = d.outputs.filterIsInstance<WirelessAction.RfcommClose>().map { it.id }.toSet()
+        assertTrue(setOf(dialId, listen.id, listen.acceptId).all { it in closed }, "监听、等接受的连接、拨号三条都关")
+        assertIs<WirelessEvent.Ended>(d.outputs.last())
+    }
+
+    @Test
+    fun startWithDialIsExclusiveAndChecksArguments() {
+        val d = Driver()
+        d.start()
+        assertFailsWith<IllegalStateException> { d.startWithDial() }
+        assertFailsWith<IllegalStateException> { Driver().also { it.startWithDial() }.startReconnect() }
+        assertFailsWith<IllegalArgumentException> { Driver().session.startWithDial("不是地址", "Phone", 0L) }
+        assertFailsWith<IllegalArgumentException> { Driver().session.startWithDial(WirelessSynthetic.PHONE_BLUETOOTH, " ", 0L) }
     }
 }

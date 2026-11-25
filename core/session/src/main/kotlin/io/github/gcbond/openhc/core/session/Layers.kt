@@ -33,7 +33,8 @@ internal interface Layers {
     fun auth(): AuthLayer
 
     /** 手机连上业务 20 时创建；[phoneIp] 是这条连接的对端地址。 */
-    fun dmsdp(sessionKey: ByteArray, phoneIp: String): DmsdpLayer
+    /** [phoneVersion]：认证时手机报的 HiCar 版本（没有为 null），扬声器按手机记的传输方式时一起比对。 */
+    fun dmsdp(sessionKey: ByteArray, phoneIp: String, phoneVersion: String?): DmsdpLayer
 
     /** 手机通告投屏端口时创建；视频帧同步交给 [sink]。 */
     fun hisight(sessionKey: ByteArray, sink: AccessUnitSink): HiSightLayer
@@ -133,8 +134,8 @@ internal class ProductionLayers(
         }
     }
 
-    override fun dmsdp(sessionKey: ByteArray, phoneIp: String): DmsdpLayer {
-        val session = DmsdpSession(config.dmsdpConfig(phoneIp), sessionKey, config.random, audio, mic)
+    override fun dmsdp(sessionKey: ByteArray, phoneIp: String, phoneVersion: String?): DmsdpLayer {
+        val session = DmsdpSession(config.dmsdpConfig(phoneIp, phoneVersion), sessionKey, config.random, audio, mic)
         return object : DmsdpLayer {
             override val nextTickAtMillis: Long? get() = session.nextTickAtMillis
             override fun feed(channel: DmsdpChannel, data: ByteArray, offset: Int, length: Int, nowMillis: Long) =

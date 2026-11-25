@@ -114,7 +114,7 @@ class ReceiverConfig(
     internal fun authConfig(): HiCarAuthConfig =
         HiCarAuthConfig(identity.authService, deviceId, authEnvelopeVersion, pin)
 
-    internal fun dmsdpConfig(phoneIp: String): DmsdpConfig = DmsdpConfig(
+    internal fun dmsdpConfig(phoneIp: String, phoneVersion: String? = null): DmsdpConfig = DmsdpConfig(
         host = identity.host,
         deviceId = deviceId,
         bluetoothMac = bluetoothText,
@@ -132,9 +132,10 @@ class ReceiverConfig(
             maxBitrate = display.maxBitrate,
             minBitrate = display.minBitrate,
         ),
-        speaker = audio?.let { DmsdpConfig.Speaker(it.transport, it.codec, it.multiBus, it.aacPhones) },
+        speaker = audio?.let { DmsdpConfig.Speaker(it.transport, it.codec, it.multiBus, it.aacPhones, it.udpPhones) },
         mic = mic?.let { DmsdpConfig.Mic(it.profile) },
         additionalServices = extraDmsdpServices,
+        phoneVersion = phoneVersion,
     )
 
     /** 投屏能力：屏幕和允许的编码尺寸都取画布尺寸（编码尺寸不超过画布）。 */
@@ -199,18 +200,22 @@ class ReceiverConfig(
  * 扬声器（手机的声音）：向手机提议的传输方式和编码、要不要声明多音频总线（导航单独一路），以及哪些手机要退回 AAC。
  * 默认 TCP + AAC + 多声道分流。编码选 PCM 时扬声器能力改为声明 PCM，实际编码以收到的载荷为准；[aacPhones] 里的手机
  * （编号见 [io.github.gcbond.openhc.core.dmsdp.audio.PhoneRef]，应用按「PCM 不出声」记下的）这次连接改声明 AAC。
- * UDP 手机侧已知建不起发送端，FillP 本机没有实现，这两项只用来对照手机的反应。
+ * 传输方式 TCP 时按手机选（先 TCP，[udpPhones] 里的手机和不认 TCP 的手机用 UDP），UDP 时一律 UDP；
+ * FillP 本机没有实现，只用来对照手机的反应。
  */
 class AudioSettings(
     val transport: AudioTransport = AudioTransport.TCP,
     val codec: AudioCodec = AudioCodec.AAC,
     val multiBus: Boolean = true,
     aacPhones: Set<String> = emptySet(),
+    udpPhones: Set<String> = emptySet(),
 ) {
     val aacPhones: Set<String> = aacPhones.toSet()
+    val udpPhones: Set<String> = udpPhones.toSet()
 
     override fun toString() = "AudioSettings(${transport.label}, ${codec.label}, 多声道分流${if (multiBus) "开" else "关"}" +
-        (if (aacPhones.isEmpty()) "" else "，${aacPhones.size} 台手机退回 AAC") + ")"
+        (if (aacPhones.isEmpty()) "" else "，${aacPhones.size} 台手机退回 AAC") +
+        (if (udpPhones.isEmpty()) "" else "，${udpPhones.size} 台手机用 UDP") + ")"
 }
 
 /**

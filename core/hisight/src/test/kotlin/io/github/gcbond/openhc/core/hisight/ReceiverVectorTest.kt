@@ -50,7 +50,12 @@ class ReceiverVectorTest {
                     val referenceError = step.bool("error")
                     try {
                         val out = session.feedControl(chunk, 0, chunk.size, wall)
-                        assertEquals(false, referenceError, "$label：参考实现报错，本实现没有")
+                        if (referenceError) {
+                            // 有意的差异：参考实现在这一步报错结束，本实现回应答、写说明、继续（手机各版本的写法不同，
+                            // 见 HiSightReceiverTest）。必须留下说明；这段对话只核对到这一步之前。
+                            assertTrue(out.any { it is HiSightOutput.Note }, "$label：参考实现报错，本实现放行却没写说明")
+                            return
+                        }
                         out
                     } catch (e: MalformedMessageException) {
                         assertEquals(true, referenceError, "$label：本实现报错（${e.message}），参考实现没有")
@@ -129,4 +134,5 @@ class ReceiverVectorTest {
         assertEquals(emptyList(), session.shutdown())
         assertEquals(emptyList(), session.feedControl(ByteArray(4), 0, 4, 0))
     }
+
 }

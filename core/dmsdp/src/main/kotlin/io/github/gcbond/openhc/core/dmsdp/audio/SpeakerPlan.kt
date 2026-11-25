@@ -7,15 +7,30 @@ import java.security.MessageDigest
  * 车机本地用来认出「是哪台手机」的编号：手机设备信息（命令 101）里 deviceId 的 SHA-256 前 8 字节，16 位小写十六进制。
  * 只在车机本地记结果用，不上线；日志里只露前 6 位。
  */
-class PhoneRef(val key: String, val name: String?) {
+class PhoneRef(val key: String, val name: String?, val version: String? = null) {
     /** 日志里用的短编号。 */
     val shortKey: String get() = key.take(SHORT_KEY)
+
+    /**
+     * 按手机记传输方式时用的名单条目：编号加 HiCar 版本（`编号@版本`），版本不知道时只有编号。手机升级 HiCar 后条目对不上，
+     * 会重新试一次 TCP。
+     */
+    val listEntry: String get() = version?.let { "$key$VERSION_SEPARATOR$it" } ?: key
+
+    /** 在名单里：有这台手机这个版本的条目，或者只记了编号、没记版本的条目（旧条目，任何版本都算）。 */
+    fun listedIn(entries: Set<String>): Boolean = listEntry in entries || key in entries
 
     override fun toString() = "手机 编号 $shortKey"
 
     companion object {
         private const val KEY_BYTES = 8
         private const val SHORT_KEY = 6
+
+        /** 名单条目里编号和版本之间的分隔符。 */
+        const val VERSION_SEPARATOR = "@"
+
+        /** 名单条目 [entry] 是不是这台手机（编号 [key]）的，不管哪个版本。 */
+        fun entryOf(entry: String, key: String): Boolean = entry == key || entry.startsWith("$key$VERSION_SEPARATOR")
 
         /** 由手机的 deviceId 算编号。 */
         fun keyOf(deviceId: String): String =

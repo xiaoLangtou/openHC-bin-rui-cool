@@ -179,7 +179,7 @@ class HiCarAuthSession(
                 is AccessoryAction.Progress -> Unit
                 is AccessoryAction.Succeeded -> {
                     isFinished = true
-                    actions += HiCarAuthAction.Succeeded(action.sessionKey, handshake!!.deviceId, mode!!)
+                    actions += HiCarAuthAction.Succeeded(action.sessionKey, handshake!!.deviceId, mode!!, handshake!!.version)
                 }
                 is AccessoryAction.Failed -> {
                     isFinished = true
@@ -287,7 +287,13 @@ sealed class HiCarAuthAction {
     }
 
     /** 认证成功。[sessionKey] 是 16 字节会话密钥（用于之后各层的帧加密），不要写日志，用完清零。 */
-    class Succeeded(val sessionKey: ByteArray, val peerAuthId: String, val mode: AuthMode) : HiCarAuthAction() {
+    /** [phoneVersion] 是手机设备握手里的 `version`（手机上 HiCar 的版本，没有则为 null）。 */
+    class Succeeded(
+        val sessionKey: ByteArray,
+        val peerAuthId: String,
+        val mode: AuthMode,
+        val phoneVersion: String? = null,
+    ) : HiCarAuthAction() {
         override fun toString(): String = "Succeeded(mode=$mode, sessionKey=${sessionKey.size} 字节)"
     }
 

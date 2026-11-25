@@ -40,7 +40,7 @@ class MicSessionWiringTest {
         val fake = FakeLayers()
         override fun nearby(): NearbyLayer = fake.nearby()
         override fun auth(): AuthLayer = fake.auth()
-        override fun dmsdp(sessionKey: ByteArray, phoneIp: String) = real.dmsdp(sessionKey, phoneIp)
+        override fun dmsdp(sessionKey: ByteArray, phoneIp: String, phoneVersion: String?) = real.dmsdp(sessionKey, phoneIp, phoneVersion)
         override fun hisight(sessionKey: ByteArray, sink: AccessUnitSink) = fake.hisight(sessionKey, sink)
     }
 

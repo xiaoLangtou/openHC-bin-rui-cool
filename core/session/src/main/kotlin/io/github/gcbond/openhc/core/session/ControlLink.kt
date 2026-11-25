@@ -18,6 +18,8 @@ internal class ControlLink private constructor(
     /** 见 [SessionAction.Listen.requireLocalHost]。 */
     val requireLocalHost: String?,
     sessionKey: ByteArray?,
+    /** 无线时蓝牙认证里手机报的 HiCar 版本（有线时由编排器自己的认证得到，这里为 null）。 */
+    val phoneVersion: String? = null,
 ) {
     private var key: ByteArray? = sessionKey?.copyOf()
 
@@ -44,8 +46,8 @@ internal class ControlLink private constructor(
         }
 
         /** [sessionKey] 会被复制，调用方自己的那份由调用方清零。 */
-        fun wifi(localIp: String, sessionKey: ByteArray): ControlLink =
-            ControlLink(NearbySession.CHANNEL_WIFI, localIp, 0, null, sessionKey)
+        fun wifi(localIp: String, sessionKey: ByteArray, phoneVersion: String? = null): ControlLink =
+            ControlLink(NearbySession.CHANNEL_WIFI, localIp, 0, null, sessionKey, phoneVersion)
     }
 }
 

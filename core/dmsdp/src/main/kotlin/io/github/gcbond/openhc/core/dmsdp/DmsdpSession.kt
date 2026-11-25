@@ -447,7 +447,7 @@ class DmsdpSession(
         }
         if (!DmsdpMessage.looksLikeText(payload)) {
             // 手机的声音数据连接没连上时（鸿蒙 3.0 / 4.x 一直连不上），经控制连接送声音：交给扬声器拼组播放。
-            if (speaker?.onControlAudio(payload, out) == true) return
+            if (speaker?.onControlAudio(payload, nowMillis, out) == true) return
             // 其他认不出的：跳过，不断开。
             unrecognizedPayloads++
             if (unrecognizedPayloads <= UNRECOGNIZED_REPORTED || unrecognizedPayloads % UNRECOGNIZED_REPORT_EVERY == 0) {
@@ -456,7 +456,17 @@ class DmsdpSession(
             }
             return
         }
-        val message = DmsdpMessage.parse(payload)
+        val message = try {
+            DmsdpMessage.parse(payload)
+        } catch (e: MalformedMessageException) {
+            // 看着像文字、却拆不开（头部行缺冒号、含非 ASCII 等）：跳过并记下开头，不断开连接。
+            unrecognizedPayloads++
+            if (unrecognizedPayloads <= UNRECOGNIZED_REPORTED || unrecognizedPayloads % UNRECOGNIZED_REPORT_EVERY == 0) {
+                val head = payload.copyOf(minOf(payload.size, DmsdpEvent.UnrecognizedControlPayload.HEAD_BYTES))
+                out.event(DmsdpEvent.UnrecognizedControlPayload(unrecognizedPayloads, payload.size, head))
+            }
+            return
+        }
         when {
             isKeepAliveRequest(message) -> tcpKeepAlive?.onPeerRequest()
             isTimeSyncRequest(message) -> {
@@ -522,7 +532,7 @@ class DmsdpSession(
                     // 扬声器要按手机定声明（PCM 还是 AAC），所以先记下是哪台手机；正常在服务请求 104 之前到。
                     if (event is DmsdpEvent.PeerDeviceInfo) {
                         val name = (event.device["deviceName"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                        speaker?.onPeerDevice(event.deviceId, name)
+                        speaker?.onPeerDevice(event.deviceId, name, config.phoneVersion)
                     }
                     out.event(event)
                     // 服务请求 104 = 连接协商完成。此刻向手机请求应用元数据（华为官方协议 dataType=514）：

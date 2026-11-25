@@ -44,81 +44,67 @@ class DmsdpMessage(
 
     internal companion object {
         const val VERSION = "DMSDP/1.0"
+        private const val VERSION_PREFIX = "DMSDP/"
         private const val CR = '\r'.code.toByte()
         private const val LF = '\n'.code.toByte()
 
         /**
-         * 拆一条文本消息：头部区必须是 ASCII、以第一个 CRLFCRLF 结束，每个头部行都要有冒号。
-         * 这里不判断方法、版本、重名和 Content-Length。
+         * 拆一条文本消息：头部区必须是 ASCII，每个头部行都要有冒号。头部结束认第一个 CRLFCRLF；没有时依次认
+         * LFLF（含 CRLF 之后直接 LF）、整条以换行结尾（只有头部、没有正文）、整条没有换行（只有首行）。
+         * 头部行之间 CRLF、LF 混用都行。这里不判断方法、版本、重名和 Content-Length。
          */
         fun parse(payload: ByteArray): DmsdpMessage {
-            val headerEnd = indexOfBlankLine(payload)
-            if (headerEnd < 0) {
-                // 兼容：部分手机（鸿蒙 NEXT 的 HiCar 15.2.x 实测）偶尔发没有正文、也没有头部结束空行的控制消息。
-                // 消息以 CRLF 结尾、声明正文为 0 时，按「纯头部」解析，不再为此拆掉整个会话。
-                // 声明了正文长度、没以 CRLF 结尾（截断）或头部行缺冒号时，照旧报错（附原始字节预览便于定位）。
-                val fallback = headersOnlyEnd(payload)
-                if (fallback >= 0 && !declaresNonEmptyBody(payload, fallback)) {
-                    val lines = String(payload, 0, fallback, Charsets.US_ASCII).split("\r\n")
-                    val headers = ArrayList<Pair<String, String>>(lines.size - 1)
-                    for (k in 1 until lines.size) {
-                        val line = lines[k]
-                        val colon = line.indexOf(':')
-                        if (colon < 0) throw MalformedMessageException("控制消息头部第 $k 行缺少冒号（载荷 ${preview(payload)}）")
-                        headers += line.substring(0, colon).trimControl() to line.substring(colon + 1).trimControl()
-                    }
-                    return DmsdpMessage(lines[0], headers, ByteArray(0))
-                }
-                throw MalformedMessageException("控制消息缺少头部结束的空行（载荷 ${preview(payload)}）")
-            }
+            val (headerEnd, bodyStart) = headerEnd(payload)
             for (i in 0 until headerEnd) {
                 if (payload[i] < 0) throw MalformedMessageException("控制消息头部含非 ASCII 字节")
             }
-            val lines = String(payload, 0, headerEnd, Charsets.US_ASCII).split("\r\n")
+            val lines = String(payload, 0, headerEnd, Charsets.US_ASCII).split('\n').map { it.removeSuffix("\r") }
             val headers = ArrayList<Pair<String, String>>(lines.size - 1)
             for (k in 1 until lines.size) {
                 val line = lines[k]
+                if (line.isEmpty()) continue
                 val colon = line.indexOf(':')
                 if (colon < 0) throw MalformedMessageException("控制消息头部第 $k 行缺少冒号（载荷 ${preview(payload)}）")
                 headers += line.substring(0, colon).trimControl() to line.substring(colon + 1).trimControl()
             }
-            return DmsdpMessage(lines[0], headers, payload.copyOfRange(headerEnd + 4, payload.size))
+            return DmsdpMessage(lines[0], headers, payload.copyOfRange(bodyStart, payload.size))
+        }
+
+        /** 头部区的结束位置和正文起点。 */
+        private fun headerEnd(payload: ByteArray): Pair<Int, Int> {
+            val blank = indexOfBlankLine(payload)
+            if (blank >= 0) return blank to blank + 4
+            for (i in 0 until payload.size - 1) {
+                if (payload[i] == LF && payload[i + 1] == LF) return i to i + 2
+            }
+            if (payload.none { it == LF }) return payload.size to payload.size
+            if (payload.last() == LF) {
+                val end = if (payload.size >= 2 && payload[payload.size - 2] == CR) payload.size - 2 else payload.size - 1
+                return end to payload.size
+            }
+            throw MalformedMessageException("控制消息缺少头部结束的空行")
         }
 
         /**
-         * 「纯头部」消息的判定：以 CRLF 结尾（没有正文，也就没有头部结束空行）。
-         * 返回头部区的长度（不含结尾 CRLF），不满足返回 -1。
+         * 看起来是文字消息：首行全是可打印 ASCII，是「方法名 目标 DMSDP/版本」（方法名只有大写字母和下划线）
+         * 或以 `DMSDP/1.0 ` 开头。控制连接上的二进制块也可能碰巧以大写字母开头、中间含空行，只看首字节会被当成文字。
+         * 不要求有头部结束的空行（有的手机省掉，见 [parse]）。
          */
-        private fun headersOnlyEnd(data: ByteArray): Int {
-            if (data.size < 2 || data[data.size - 2] != CR || data[data.size - 1] != LF) return -1
-            for (i in 0 until data.size - 2) {
-                if (data[i] < 0) return -1
+        fun looksLikeText(payload: ByteArray): Boolean {
+            var end = 0
+            while (end < payload.size && payload[end] != CR && payload[end] != LF) {
+                if (payload[end] !in PRINTABLE) return false
+                end++
             }
-            return data.size - 2
+            if (end == 0) return false
+            val first = String(payload, 0, end, Charsets.US_ASCII)
+            if (first.startsWith("$VERSION ")) return true
+            val tokens = first.split(' ')
+            return tokens.size >= 3 && tokens[0].isNotEmpty() && tokens[0].all { it in 'A'..'Z' || it == '_' } &&
+                tokens.last().startsWith(VERSION_PREFIX)
         }
 
-        /** 头部里声明了非 0 的 Content-Length 时不能按纯头部处理（正文可能被当成头部吃掉）。 */
-        private fun declaresNonEmptyBody(data: ByteArray, headerLength: Int): Boolean {
-            val lines = String(data, 0, headerLength, Charsets.US_ASCII).split("\r\n")
-            val length = lines.firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
-                ?.substringAfter(':')?.trim() ?: return false
-            return isAsciiDecimal(length) && length.toInt() > 0
-        }
-
-        /** 原始载荷的十六进制预览（最多 64 字节），用于把无法解析的消息记进日志。 */
-        private fun preview(data: ByteArray): String {
-            val sb = StringBuilder(data.size.coerceAtMost(64) * 3 + 1)
-            for (i in 0 until data.size.coerceAtMost(64)) {
-                if (i > 0) sb.append(' ')
-                sb.append(String.format("%02X", data[i]))
-            }
-            if (data.size > 64) sb.append(" …")
-            return sb.toString()
-        }
-
-        /** 看起来是文字消息：以大写字母开头（方法名或 `DMSDP/1.0`），并且有头部结束的空行。 */
-        fun looksLikeText(payload: ByteArray): Boolean =
-            payload.isNotEmpty() && payload[0] in 'A'.code.toByte()..'Z'.code.toByte() && indexOfBlankLine(payload) >= 0
+        private val PRINTABLE = 0x20.toByte()..0x7E.toByte()
 
         /** 编码一条消息：首行、头部各占一行（CRLF），再一个空行，再正文。 */
         fun encode(startLine: String, headers: List<Pair<String, String>>, body: ByteArray = ByteArray(0)): ByteArray {

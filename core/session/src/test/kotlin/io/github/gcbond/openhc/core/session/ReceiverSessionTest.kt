@@ -79,6 +79,7 @@ class ReceiverSessionTest {
             is SessionAction.Write -> "write ${names[o.id]} ${o.bytes.text()}"
             is SessionAction.Close -> "close ${names[o.id] ?: o.id}"
             is SessionAction.OpenUdp -> "udp ${o.localHost} -> ${o.remoteHost}:${o.remotePort}"
+            is SessionAction.BindUdp -> "bind-udp ${o.channel} ${o.localHost}:${o.localPort}"
             is SessionAction.SendDatagram -> "datagram ${o.bytes.text()}"
             is SessionEvent.Diagnostic -> "diag"
             is SessionEvent -> "event $o"

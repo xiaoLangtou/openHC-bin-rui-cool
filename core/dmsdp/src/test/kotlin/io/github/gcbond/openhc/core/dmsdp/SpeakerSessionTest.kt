@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.core.dmsdp
 
+import io.github.gcbond.openhc.core.dmsdp.audio.AudioBus
 import io.github.gcbond.openhc.core.common.toHex
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioEndReason
@@ -39,6 +40,7 @@ class SpeakerSessionTest {
         val raw = ByteArrayOutputStream()
         val packets = ArrayList<ByteArray>()
         val routes = ArrayList<Pair<Int, AudioRoute>>()
+        val sessions = ArrayList<String>()
         var throwOnEvent = false
 
         override fun onAudioEvent(event: AudioEvent) {
@@ -53,6 +55,7 @@ class SpeakerSessionTest {
         override fun onAudioPacket(packet: AudioPacket) {
             packets += packet.copyPayload()
             routes += packet.bus to packet.route
+            sessions += packet.stream.dataSessionId
         }
 
         inline fun <reified T : AudioEvent> only(): T = events.filterIsInstance<T>().single()
@@ -77,7 +80,8 @@ class SpeakerSessionTest {
     private fun speakerSession(
         speaker: DmsdpConfig.Speaker = DmsdpConfig.Speaker(),
         audio: AudioRecorder = AudioRecorder(),
-    ): DmsdpSession = encryptedSession(config = Synthetic.config(speaker = speaker), audio = audio).first
+        phoneVersion: String? = null,
+    ): DmsdpSession = encryptedSession(config = Synthetic.config(speaker = speaker, phoneVersion = phoneVersion), audio = audio).first
 
     /** 手机的数据会话触发：头部名是小写，正文是触发字段。 */
     private fun trigger(method: String, sessionId: String = "77", cseq: String = "5", simple: String = "1", extraHeaders: String = ""): ByteArray {
@@ -283,6 +287,214 @@ class SpeakerSessionTest {
         assertTrue(audio.events.any { it is AudioEvent.Note && "没有接受" in it.message })
     }
 
+    /**
+     * 控制连接上的声音按组头里的用途、路号分路（和音频数据连接同一套规则）：第 8 路音乐放媒体，第 0 路导航放导航；
+     * 通话扬声器的声音放通话。三路流号不同，各拼各的。
+     */
+    @Test
+    fun controlChannelAudioIsRoutedByUsageAndBus() {
+        val audio = AudioRecorder()
+        val session = speakerSession(audio = audio)
+        fun send(frames: List<ByteArray>) {
+            for (f in frames) session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(f), 2_000)
+        }
+        val f = ControlAudioFrames
+        send(f.fragments(1, f.group(f.pcm(2048, 1), header = 18, usage = 1, bus = 8), 6))
+        send(f.fragments(2, f.group(f.pcm(2048, 2), header = 18, usage = 12, bus = 0), 6, stream = 0x0A0B0C0D))
+        send(f.fragments(3, f.group(f.pcm(256, 3), service = 10), 2, stream = 0x01020304, service = 10))
+        assertEquals(
+            listOf(8 to AudioRoute.MEDIA, 0 to AudioRoute.NAVIGATION, AudioBus.UNKNOWN to AudioRoute.CALL),
+            audio.routes,
+        )
+        assertContentEquals(f.pcm(2048, 2), audio.packets[1])
+    }
+
+    /** 老鸿蒙每隔几秒换一次流号：换号前后的声音用同一个播放端会话，接着放。 */
+    @Test
+    fun controlChannelAudioKeepsOnePlayerAcrossStreamChanges() {
+        val audio = AudioRecorder()
+        val session = speakerSession(audio = audio)
+        val f = ControlAudioFrames
+        for (stream in listOf(0x11111111L, 0x22222222L)) {
+            for (frag in f.fragments(1, f.group(f.pcm(1024, 1)), 3, stream = stream)) {
+                session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(frag), 2_000)
+            }
+        }
+        assertEquals(2, audio.sessions.size)
+        assertEquals(1, audio.sessions.toSet().size, audio.sessions.toString())
+    }
+
+    /** 车机最近发出的那条 SETUP 的原文。 */
+    private fun lastSetup(outputs: List<DmsdpOutput>): String =
+        outputs.filterIsInstance<DmsdpAction.Send>().map { String(phone.openControlFrame(it.bytes)) }.last { it.startsWith("SETUP ") }
+
+    /**
+     * 传输方式按手机选：先 TCP；手机不应答 TCP 的 SETUP、直接拆掉数据会话，就发「改用 UDP」事件，之后的数据会话用 UDP。
+     */
+    @Test
+    fun phoneIgnoringTcpSetupMakesLaterSessionsUseUdp() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "6"), 4_000)
+        val fallback = audio.only<AudioEvent.TransportFallback>()
+        assertEquals(PhoneRef.keyOf(Synthetic.PEER_ID), fallback.phone?.key)
+        val next = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 4_100)
+        assertEquals(AudioTransport.UDP, next.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+        val setup = lastSetup(session.audioListenersReady(40200, 4_150))
+        assertTrue("Fillp: 0" in setup && "TCP:" !in setup, setup)
+        // 改过之后不再重复发事件。
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "78", cseq = "8"), 7_000)
+        assertEquals(1, audio.events.count { it is AudioEvent.TransportFallback })
+    }
+
+    private fun cseqOf(setup: String): String = Regex("CSeq: (\\d+)").find(setup)!!.groupValues[1]
+
+    private fun accept(session: DmsdpSession, cseq: String, at: Long) =
+        session.feed(DmsdpChannel.CONTROL, phone.encryptedText("DMSDP/1.0 200 OK\r\nCSeq: $cseq\r\n\r\n"), at)
+
+    /**
+     * 手机用 200 应答了 TCP 的 SETUP，却过了好几秒都不连数据端口：同一次连接里第一次只记一笔，第二次才改用 UDP
+     * （带上依据），之后的数据会话用 UDP。
+     */
+    @Test
+    fun phoneAcceptingTcpSetupButNeverConnectingSwitchesToUdpOnTheSecondTime() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        accept(session, "2", 1_100)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "6"), 7_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback }, "第一次只记一笔")
+
+        val second = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 7_100)
+        assertEquals(AudioTransport.TCP, second.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+        val setup = lastSetup(session.audioListenersReady(40200, 7_150))
+        accept(session, cseqOf(setup), 7_200)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "78", cseq = "8"), 12_300)
+        val fallback = audio.only<AudioEvent.TransportFallback>()
+        assertEquals(PhoneRef.keyOf(Synthetic.PEER_ID), fallback.phone?.key)
+        assertEquals(AudioEvent.TransportFallback.ACCEPTED_NO_CONNECT, fallback.reason)
+
+        val third = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "79", cseq = "9"), 12_400)
+        assertEquals(AudioTransport.UDP, third.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
+
+    /**
+     * 应答了 TCP 方式的 SETUP、数据端口一直没连，声音却从控制连接送（几路不带路号，分不开）：满 5 秒当场改用 UDP，
+     * 不用等第二次。5 秒以内送来的不算（连上数据端口之前也会先送一点）。
+     */
+    @Test
+    fun soundOverControlInsteadOfTcpSwitchesToUdpRightAway() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        accept(session, "2", 1_100)
+        val f = ControlAudioFrames
+        fun sendGroup(seq: Long, at: Long) {
+            for (frag in f.fragments(seq, f.group(f.pcm(1024, seq.toInt())), 3)) session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(frag), at)
+        }
+        sendGroup(1, 3_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback }, "5 秒以内不算")
+        sendGroup(2, 6_200)
+        val fallback = audio.only<AudioEvent.TransportFallback>()
+        assertEquals(AudioEvent.TransportFallback.CONTROL_INSTEAD, fallback.reason)
+        assertEquals(PhoneRef.keyOf(Synthetic.PEER_ID), fallback.phone?.key)
+        sendGroup(3, 7_000)
+        assertEquals(1, audio.events.count { it is AudioEvent.TransportFallback }, "只报一次")
+        val next = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 7_100)
+        assertEquals(AudioTransport.UDP, next.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
+
+    /** 连上了数据端口的手机，之后控制连接上再送声音也不改 UDP。 */
+    @Test
+    fun soundOverControlAfterTheDataConnectionStaysOnTcp() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        accept(session, "2", 1_100)
+        session.onConnected(DmsdpChannel.AUDIO, 1_150)
+        val f = ControlAudioFrames
+        for (frag in f.fragments(1, f.group(f.pcm(1024, 1)), 3)) session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(frag), 8_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback }, audio.events.toString())
+    }
+
+    /** 应答后很快就拆掉、或者应答后连上了数据端口：都不算「应答了却不连」，一直用 TCP。 */
+    @Test
+    fun quickTeardownsAndConnectedSessionsStayOnTcp() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        accept(session, "2", 1_100)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "6"), 3_000)
+        session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 3_100)
+        accept(session, cseqOf(lastSetup(session.audioListenersReady(40200, 3_150))), 3_200)
+        session.onConnected(DmsdpChannel.AUDIO, 3_250)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "78", cseq = "8"), 20_000)
+        session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "79", cseq = "9"), 20_100)
+        accept(session, cseqOf(lastSetup(session.audioListenersReady(40300, 20_150))), 20_200)
+        val last = session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "79", cseq = "10"), 22_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback }, audio.events.toString())
+        assertTrue(last.isNotEmpty())
+        val next = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "80", cseq = "11"), 22_100)
+        assertEquals(AudioTransport.TCP, next.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
+
+    /** 手机在 UDP 名单里：第一次就用 UDP。正常应答 TCP 的手机不改。 */
+    @Test
+    fun udpPhonesStartWithUdpAndAnsweringPhonesStayOnTcp() {
+        val listed = AudioRecorder()
+        val session = speakerSession(speaker = DmsdpConfig.Speaker(udpPhones = setOf(PhoneRef.keyOf(Synthetic.PEER_ID))), audio = listed)
+        session.phoneDeviceInfo()
+        session.speakerProfile()
+        val out = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 1_000)
+        assertEquals(AudioTransport.UDP, out.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+
+        val answered = AudioRecorder()
+        val tcp = toSetupSent(answered)
+        tcp.feed(DmsdpChannel.CONTROL, phone.encryptedText("DMSDP/1.0 200 OK\r\nCSeq: 2\r\n\r\n"), 1_100)
+        tcp.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "6"), 4_000)
+        assertTrue(answered.events.none { it is AudioEvent.TransportFallback })
+        val again = tcp.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 4_100)
+        assertEquals(AudioTransport.TCP, again.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
+
+    /** 名单条目带 HiCar 版本：同一版本直接 UDP；手机升级后（版本不同）重新试 TCP；只有编号的旧条目任何版本都用 UDP。 */
+    @Test
+    fun udpListEntriesCarryTheHiCarVersion() {
+        val key = PhoneRef.keyOf(Synthetic.PEER_ID)
+        fun firstTransport(entries: Set<String>, version: String?): AudioTransport {
+            val session = speakerSession(speaker = DmsdpConfig.Speaker(udpPhones = entries), phoneVersion = version)
+            session.phoneDeviceInfo()
+            session.speakerProfile()
+            return session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 1_000)
+                .filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport
+        }
+        assertEquals(AudioTransport.UDP, firstTransport(setOf("$key@19.1.0.100"), "19.1.0.100"))
+        assertEquals(AudioTransport.TCP, firstTransport(setOf("$key@19.1.0.100"), "19.2.0.100"), "升级后重新试 TCP")
+        assertEquals(AudioTransport.UDP, firstTransport(setOf(key), "19.2.0.100"), "旧条目不分版本")
+        // 不在名单里时按 HiCar 主版本：15 起先试 TCP，更早的直接 UDP；版本不知道或认不出时先试 TCP。
+        assertEquals(AudioTransport.UDP, firstTransport(emptySet(), "14.2.0.300"))
+        assertEquals(AudioTransport.TCP, firstTransport(emptySet(), "15.0.0.100"))
+        assertEquals(AudioTransport.TCP, firstTransport(emptySet(), null))
+        assertEquals(AudioTransport.TCP, firstTransport(emptySet(), "x.1"))
+        assertEquals(AudioTransport.TCP, firstTransport(setOf("${key}0@19.1.0.100"), "19.1.0.100"), "别的手机的条目不算")
+
+        val ref = PhoneRef(key, null, "9.1.0.100")
+        assertEquals("$key@9.1.0.100", ref.listEntry)
+        assertEquals(key, PhoneRef(key, null).listEntry)
+        assertTrue(PhoneRef.entryOf("$key@1.0", key) && PhoneRef.entryOf(key, key) && !PhoneRef.entryOf("${key}0@1.0", key))
+    }
+
+    /** CLOSE 和 TEARDOWN 一样：回 200、关掉对得上的会话；已经拆过的只回 200。 */
+    @Test
+    fun closeIsAnsweredLikeTeardown() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        val close = session.feed(DmsdpChannel.CONTROL, trigger("CLOSE", cseq = "6"), 9_000)
+        assertEquals(
+            "DMSDP/1.0 200 OK\r\nServiceID: speaker1\r\nServiceType: 3\r\nDataSessionID: 77\r\nCSeq: 6\r\n\r\n",
+            text(close[0]),
+        )
+        assertEquals(AudioEndReason.PEER_TEARDOWN, audio.only<AudioEvent.Ended>().reason)
+        val again = session.feed(DmsdpChannel.CONTROL, trigger("CLOSE", cseq = "7"), 9_100)
+        assertTrue(text(again.single()).contains("DataSessionID: 77\r\nCSeq: 7\r\n"))
+    }
+
     @Test
     fun teardownIsAnsweredAndClosesTheDataSession() {
         val audio = AudioRecorder()
@@ -422,6 +634,38 @@ class SpeakerSessionTest {
         val summary = audio.only<AudioEvent.Ended>().summary
         assertEquals(0L, summary.sequenceGaps, "各路分开计序号，交错不算跳变")
         assertTrue("第 8 路 4 包" in summary.streams && "第 0 路 2 包" in summary.streams, summary.streams)
+    }
+
+    /** 同一个 SSRC 上靠包尾路号分成两路（第 8 路音乐、分流的 4096 即第 0 路导航）：「放到哪个通道」每路只报一次。 */
+    @Test
+    fun lanesSharingAnSsrcAreReportedOncePerLane() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio)
+        session.onConnected(DmsdpChannel.AUDIO, 1_300)
+        session.feed(DmsdpChannel.CONTROL, focus(14, "{\"contentType\":1,\"focusType\":3,\"usage\":12}"), 1_350)
+        fun marked(index: Int, bus: Int): ByteArray {
+            val pcm = AudioSynthetic.pcm(index * 256, frames = 256)
+            val header = ByteArray(12)
+            header[1] = 1
+            header[2] = 1
+            header[3] = 1
+            header[10] = (pcm.size ushr 8).toByte()
+            header[11] = pcm.size.toByte()
+            return header + pcm + ByteArray(4) { (bus ushr (8 * it)).toByte() }
+        }
+        val ssrc = 0x0001_03EBL
+        var musicSeq = 10
+        var navSeq = 100
+        val order = listOf(8, 8, 8, 8, 4096, 8, 4096, 8, 4096, 8)
+        var wire = ByteArray(0)
+        order.forEachIndexed { i, bus ->
+            val seq = if (bus == 8) musicSeq++ else navSeq++
+            wire += AudioSynthetic.frame(FrameKind.LENGTH32, AudioSynthetic.rtp(seq, marked(i, bus), ssrc = ssrc))
+        }
+        session.feed(DmsdpChannel.AUDIO, wire, 0, wire.size, 1_400)
+        assertEquals(order.map { if (it == 8) 8 to AudioRoute.MEDIA else 0 to AudioRoute.NAVIGATION }, audio.routes)
+        val routed = audio.events.filterIsInstance<AudioEvent.StreamRouted>().map { it.bus to it.route }
+        assertEquals(listOf(8 to AudioRoute.MEDIA, 0 to AudioRoute.NAVIGATION), routed)
     }
 
     /** 还没看出分流时第 0 路当媒体（不分流的手机导航混在这一路里）；收到第 8 路之后第 0 路才单独放。 */

@@ -22,6 +22,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - 一个**协议线程**：会话的所有方法、全部写操作、事件回调都在这个线程上串行执行；
  * - 每个监听、连接、UDP socket 一个线程：监听线程 accept 到连接后就接着当这条连接的读线程，
  *   连接线程 connect 成功后同样接着读。读到的数据经队列交给协议线程。
+ * - 每个监听只接受一条连接；之后监听仍开着（端口留着，不被系统分给别的监听），另起一个线程把再连进来的立刻关掉并记日志，
+ *   免得对端以为连上了、却一直没人理。
  *
  * 读缓冲：每条连接固定几块缓冲轮流用，协议线程处理完一块才还回去，不为每次读另外分配或复制；
  * 协议线程跟不上时读线程会停下来等，由 TCP 自己做流控，内存有上限。
@@ -276,6 +278,7 @@ class SocketRunner(
                 is SessionAction.Write -> write(output)
                 is SessionAction.Close -> closeResource(output.id)
                 is SessionAction.OpenUdp -> openUdp(output)
+                is SessionAction.BindUdp -> bindUdp(output)
                 is SessionAction.SendDatagram -> sendDatagram(output)
                 is SessionEvent -> deliver(output)
             }
@@ -366,6 +369,26 @@ class SocketRunner(
         thread.start()
     }
 
+    private fun bindUdp(action: SessionAction.BindUdp) {
+        val socket: DatagramSocket
+        try {
+            socket = DatagramSocket(InetSocketAddress(InetAddress.getByName(action.localHost), action.localPort))
+        } catch (e: IOException) {
+            val message = "绑 UDP（${action.localHost}:${action.localPort}）失败：${describe(e)}"
+            immediate.add { session.onIoError(action.id, message, now()) }
+            return
+        }
+        val udp = UdpResource(action.id, socket, options.buffersPerConnection, options.readBufferBytes)
+        val thread = newThread(action.channel, action.id) { udpLoop(udp) }
+        if (!register(udp, thread)) {
+            closeQuietly(socket)
+            return
+        }
+        thread.start()
+        val port = socket.localPort
+        immediate.add { session.onListening(action.id, port, now()) }
+    }
+
     private fun sendDatagram(action: SessionAction.SendDatagram) {
         val udp = lookup(action.id) as? UdpResource ?: return
         try {
@@ -433,10 +456,39 @@ class SocketRunner(
             closeQuietly(socket)
             return
         }
+        rejectExtraConnections(listener, action)
         val address = socket.inetAddress
         val remote = (address as? Inet4Address)?.hostAddress ?: address?.hostAddress ?: ""
         post(Input.Accepted(action.acceptId, remote))
         readLoop(connection)
+    }
+
+    /** 这个监听已经接受过一条连接：另起线程，之后再连进来的接受后立刻关掉（前 [MAX_REJECT_LOGS] 条记日志），直到监听关闭。 */
+    private fun rejectExtraConnections(listener: ListenerResource, action: SessionAction.Listen) {
+        val thread = newThread(action.channel, action.id) {
+            var rejected = 0
+            while (true) {
+                val extra = try {
+                    listener.server.accept()
+                } catch (e: IOException) {
+                    if (!listener.closed.get()) options.log("${action.channel.label}：等多余连接时出错（${describe(e)}），不再理会")
+                    return@newThread
+                }
+                closeQuietly(extra)
+                rejected++
+                if (rejected <= MAX_REJECT_LOGS) {
+                    options.log(
+                        "${action.channel.label}：这个监听已经接受过一条连接，又连进来一条（来自 ${extra.inetAddress?.hostAddress}），" +
+                            "已关闭" + if (rejected == MAX_REJECT_LOGS) "；之后的不再记" else "",
+                    )
+                }
+            }
+        }
+        val keep = synchronized(lock) {
+            if (!closingAll) threads += thread
+            !closingAll
+        }
+        if (keep) thread.start()
     }
 
     private fun readLoop(connection: ConnectionResource) {
@@ -511,6 +563,9 @@ class SocketRunner(
 
         /** 读线程等空闲缓冲时，每隔多久检查一次资源是否已关闭。 */
         const val POOL_WAIT_MILLIS = 200L
+
+        /** 一个监听上被关掉的多余连接，最多记几条日志。 */
+        const val MAX_REJECT_LOGS = 3
 
         fun now(): Long = System.nanoTime() / 1_000_000L
 

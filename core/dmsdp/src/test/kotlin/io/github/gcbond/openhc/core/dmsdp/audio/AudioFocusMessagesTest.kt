@@ -112,6 +112,30 @@ class AudioFocusMessagesTest {
         assertEquals(8, AudioBus.of(0x0001_03F0L))
         assertEquals(0xFFFF, AudioBus.usageOf(0xFFFF_FFFFL))
         for (ssrc in listOf(999L, 1064L, 0x11223344L, 0L, 0xFFFFFFFFL)) assertEquals(AudioBus.UNKNOWN, AudioBus.of(ssrc), "SSRC $ssrc")
+        // 第 12～15 位是附加标志，不属于路号：1003 和 0x43EB（17387）是同一路。
+        assertEquals(3, AudioBus.of(0x0000_43EBL))
+        assertEquals(3, AudioBus.of(0x0001_43EBL))
+        assertEquals(0, AudioBus.usageOf(0x0000_43EBL), "标志位不算用途")
+    }
+
+    @Test
+    fun laneIsTheSourceKeyOrTheTrailerBus() {
+        assertEquals(1003L, AudioBus.lane(0x0000_03EBL, -1))
+        assertEquals(1003L, AudioBus.lane(0x0001_43EBL, -1), "用途、标志位变了还是同一路")
+        assertEquals(1008L, AudioBus.lane(0x0001_43EBL, 8), "带包尾路号时按包尾，SSRC 不参与")
+        assertEquals(AudioBus.lane(1003, 8), AudioBus.lane(1032, 8), "包尾路号相同就是同一路")
+        assertTrue(AudioBus.lane(1003, 8) != AudioBus.lane(1003, 0), "同一个 SSRC、包尾路号不同是两路")
+        assertEquals(AudioBus.lane(1008, -1), AudioBus.lane(1003, 8), "编号是同一套：包尾路号 8 和 SSRC 1008 都是第 8 路")
+        assertEquals(999L, AudioBus.lane(1003, 0xFFFF_FFFFL), "和 SSRC 一样只留低 12 位")
+        assertEquals(AudioBus.lane(0x0001_03E8L, -1), AudioBus.lane(0x0001_03E8L, 4096), "包尾的分流路 4096 和 SSRC 里的第 0 路是同一路")
+        assertEquals(AudioBus.SPLIT, AudioBus.ofLane(AudioBus.lane(0x0001_03E8L, 4096)))
+        assertEquals(8, AudioBus.ofLane(1008))
+        assertEquals(0, AudioBus.ofLane(1000))
+        for (lane in listOf(999L, 1064L, 0L, 0xFFFF_FFFFL)) assertEquals(AudioBus.UNKNOWN, AudioBus.ofLane(lane), "编号 $lane")
+        assertEquals("第 3 路", AudioBus.laneLabel(AudioBus.lane(0x0001_43EBL, -1)))
+        assertEquals("第 8 路", AudioBus.laneLabel(AudioBus.lane(1003, 8)))
+        assertEquals("源 999", AudioBus.laneLabel(999))
+        assertEquals("源 836", AudioBus.laneLabel(AudioBus.lane(0x11223344L, -1)))
     }
 
     @Test

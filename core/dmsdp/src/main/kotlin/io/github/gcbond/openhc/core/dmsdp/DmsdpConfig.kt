@@ -57,6 +57,8 @@ class DmsdpConfig(
     val keepAliveRetry: Int = 160,
     /** 加密选择应答里的 `Platform`。0 为普通平台。 */
     val platform: Int = 0,
+    /** 认证时手机报的 HiCar 版本（没有为 null）：扬声器按手机记的传输方式时连版本一起比对，手机升级后重新试。 */
+    val phoneVersion: String? = null,
 ) {
     val bluetoothMac: String = bluetoothMac.uppercase()
 
@@ -153,8 +155,12 @@ class DmsdpConfig(
      * [io.github.gcbond.openhc.core.dmsdp.audio.PhoneRef]），这次连接改声明 AAC。认手机靠它的设备信息（命令 101），
      * 正常在服务请求（命令 104）之前就到；没到时按 [codec] 声明。
      *
-     * 手机要放声音时在控制连接上触发一次数据会话，车机回 SETUP；[transport] 和实际声明的编码决定 SETUP 里的
+     * 手机要放声音时在控制连接上触发一次数据会话，车机回 SETUP；传输方式和实际声明的编码决定 SETUP 里的
      * `Fillp`、`TCP`、`Codec` 三个头部（`Codec` 不影响手机选哪种编码），见 [AudioTransport]、[AudioCodec]。
+     * 传输方式：[transport] 是 TCP 时按手机选，先用 TCP（不丢包），手机在 [udpPhones] 里（按手机记下的「不认 TCP」）时用 UDP。
+     * 这次连接里看出手机不认 TCP 时，之后的数据会话也改用 UDP：不应答 TCP 的 SETUP、直接拆掉数据会话（老鸿蒙）；
+     * 或者用 200 应答了却好几秒都不连数据端口、同一次连接里出现两次（有的荣耀手机）。
+     * [transport] 是 UDP 时一律 UDP（调试用）。
      * 这里的默认值取最稳妥的（AAC）；应用的设置默认要 PCM，配合按手机退回 AAC。
      */
     class Speaker(
@@ -162,15 +168,20 @@ class DmsdpConfig(
         val codec: AudioCodec = AudioCodec.AAC,
         val multiBus: Boolean = true,
         aacPhones: Set<String> = emptySet(),
+        udpPhones: Set<String> = emptySet(),
     ) {
         /** 要退回 AAC 的手机编号。 */
         val aacPhones: Set<String> = aacPhones.toSet()
+
+        /** 要用 UDP 的手机编号。 */
+        val udpPhones: Set<String> = udpPhones.toSet()
 
         /** 按 [codec] 声明时属性 2102 的值。 */
         val audioProfile: String get() = DmsdpConfig.audioProfile(codec, multiBus)
 
         override fun toString() = "Speaker(${transport.label}, ${codec.label}, 多声道分流${if (multiBus) "开" else "关"}" +
-            (if (aacPhones.isEmpty()) "" else "，${aacPhones.size} 台手机退回 AAC") + ")"
+            (if (aacPhones.isEmpty()) "" else "，${aacPhones.size} 台手机退回 AAC") +
+            (if (udpPhones.isEmpty()) "" else "，${udpPhones.size} 台手机用 UDP") + ")"
     }
 
     /**

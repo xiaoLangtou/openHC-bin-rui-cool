@@ -1,8 +1,12 @@
 package io.github.gcbond.openhc.core.dmsdp.audio
 
 /**
- * RTP 头里 SSRC 那 4 个字节不是随机数：低 16 位是 1000 + 路号（第 0 路是 1000、第 8 路是 1008），高 16 位是用途号
- * （安卓 `USAGE_*` 的取值，例如通话 2、铃声 6；为 0 表示没带用途）。低 16 位不在约定范围的路号按未知（-1）处理，不猜。
+ * RTP 头里 SSRC 那 4 个字节不是随机数：低 12 位是 1000 + 路号（第 0 路是 1000、第 8 路是 1008），高 16 位是用途号
+ * （安卓 `USAGE_*` 的取值，例如通话 2、铃声 6；为 0 表示没带用途）。中间第 12～15 位不属于路号（第 14～15 位是用途号
+ * 再往上的两位，这里不用）：同一路声音会在带不带第 14 位之间来回换（例如 1003 和 17387 交替出现、序号接着走），分路只看
+ * 低 12 位。低 12 位不在约定范围的路号按未知（-1）处理，不猜。
+ *
+ * 载荷带包尾路号时（见 PayloadHeader.trailerBus）以包尾为准，SSRC 里的路号不算，见 [lane]。
  */
 object AudioBus {
     const val UNKNOWN = -1
@@ -16,19 +20,38 @@ object AudioBus {
     private const val BASE = 1000L
     private const val MAX_BUS = 63
 
-    /** 路号：SSRC 低 16 位减 1000。 */
-    fun of(ssrc: Long): Int {
-        val low = ssrc and LOW_MASK
-        return if (low in BASE..BASE + MAX_BUS) (low - BASE).toInt() else UNKNOWN
-    }
+    /** 路号：SSRC 低 12 位减 1000。 */
+    fun of(ssrc: Long): Int = ofLane(keyOf(ssrc))
+
+    /** 分路用的源编号：SSRC 低 12 位（附加标志位不算）。 */
+    fun keyOf(ssrc: Long): Long = ssrc and KEY_MASK
 
     /** 用途号：SSRC 高 16 位（0 表示没带）。 */
     fun usageOf(ssrc: Long): Int = ((ssrc ushr USAGE_SHIFT) and LOW_MASK).toInt()
 
     fun label(bus: Int): String = if (bus == UNKNOWN) "未知路号" else "第 $bus 路"
 
+    /**
+     * 一路声音的编号，同一个值的包是同一路：各自按序号排、放进同一个播放器。载荷不带包尾路号（[trailerBus] < 0）时
+     * 是 SSRC 的源编号（[keyOf]）；带的时候是 1000 + 包尾路号，和 SSRC 一样只留低 12 位，SSRC 不参与——
+     * 包尾路号相同的包就是同一路，不管 SSRC 怎么变。
+     *
+     * 只留低 12 位是因为包尾写的是多音频总线策略串里的完整路号：分流那一路是 4096，SSRC 里同一路回绕成 1000，
+     * 也就是第 0 路（[SPLIT]）。两边按同一套编号算，才能把分流那一路认成导航。
+     */
+    fun lane(ssrc: Long, trailerBus: Long): Long =
+        if (trailerBus < 0) keyOf(ssrc) else (BASE + trailerBus) and KEY_MASK
+
+    /** [lane] 对应的路号：编号减 1000，不在约定范围时为 [UNKNOWN]。 */
+    fun ofLane(lane: Long): Int = if (lane in BASE..BASE + MAX_BUS) (lane - BASE).toInt() else UNKNOWN
+
+    /** [lane] 的日志说法，例如「第 3 路」「源 836」。 */
+    fun laneLabel(lane: Long): String = if (ofLane(lane) == UNKNOWN) "源 $lane" else "第 ${lane - BASE} 路"
+
     private const val LOW_MASK = 0xFFFFL
     private const val USAGE_SHIFT = 16
+    private const val KEY_BITS = 12
+    private const val KEY_MASK = (1L shl KEY_BITS) - 1
 }
 
 /**

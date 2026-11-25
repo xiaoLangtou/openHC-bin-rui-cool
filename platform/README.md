@@ -83,7 +83,7 @@ handle.stop()    // 稍等 0.2 秒（让会话最后几个包发出去）就关�
 - 每次申请前记下车机 WiFi 开没开（`stationWasOnBeforeHotspot`，粘住「开过」，用的人处理完调 `clearStationNote`），
   给「退出后恢复车机 WiFi」用；`busy` 表示有连接在用或在等热点。
 - 系统要求：安卓 8～12 要精确位置权限、系统定位开关打开；安卓 13 起要「附近的 WiFi 设备」（清单里声明 `neverForLocation` 也行）；
-  应用在前台（有前台服务也算）。车机开着个人热点、或在共享网络时开不了。权限由调用方在开始前确认；没有时报 `onFailed`，说明里带原因。
+  应用在前台（有前台服务也算）。车机设置里的个人热点开着时开不了。权限由调用方在开始前确认；没有时报 `onFailed`，说明里带原因。
 - 开好以后被系统收回（WiFi 被关、别处开了热点）报 `onLost`。
 
 **BLE 广播**（`BleBeacon`，无线自动回连用；载荷由 core:nearby 的 `BleAdvertisement` 拼）：

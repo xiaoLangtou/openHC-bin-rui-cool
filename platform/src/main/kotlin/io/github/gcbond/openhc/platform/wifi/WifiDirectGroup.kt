@@ -120,6 +120,12 @@ class WifiDirectGroupOwner(
     private val poll = Runnable { pollGroup() }
     private val watch = Runnable { watchGroup() }
 
+    /** 建好的组：盯组时读不到组信息，就按它的网卡和地址确认组还在不在。 */
+    private var built: DirectGroup? = null
+
+    /** 「读不到组信息、按网卡地址确认」已经记过一笔。 */
+    private var hiddenInfoNoted = false
+
     override fun start() {
         handler.post { begin() }
     }
@@ -367,9 +373,10 @@ class WifiDirectGroupOwner(
         if (source == DirectMacSource.PLACEHOLDER) log("读不到直连网卡的真实 MAC，连接串里的组主 MAC 用占位值（手机认不出组，不会加入）")
         stage = Stage.READY
         holdCellular()
-        val built = DirectGroup(ip, networkName, mac, passphrase, frequency, iface, source, requested, frequencyReadBack = !legacy)
-        log("直连组建好了：$built" + if (requested != null && requested != frequency) "；实际频率和申请的不一样" else "")
-        if (!stopped) events.onReady(built)
+        val group = DirectGroup(ip, networkName, mac, passphrase, frequency, iface, source, requested, frequencyReadBack = !legacy)
+        built = group
+        log("直连组建好了：$group" + if (requested != null && requested != frequency) "；实际频率和申请的不一样" else "")
+        if (!stopped) events.onReady(group)
         handler.postDelayed(watch, WATCH_MS)
     }
 
@@ -377,8 +384,22 @@ class WifiDirectGroupOwner(
         if (stopped || stage != Stage.READY) return
         groupInfo { group ->
             if (stopped || stage != Stage.READY) return@groupInfo
-            if (group == null) lose("直连组没了") else handler.postDelayed(watch, WATCH_MS)
+            if (group != null || stillOnInterface()) handler.postDelayed(watch, WATCH_MS) else lose("直连组没了")
         }
+    }
+
+    /**
+     * 读不到组信息时，组主的地址还在直连网卡上就当组还在。安卓 10 起读组信息要定位权限，定位是「仅使用期间允许」时，
+     * 应用离开前台 30 秒后系统就不再给，读到的也是空，这时组其实还在（切到别的应用 30 秒左右就会遇到）。
+     */
+    private fun stillOnInterface(): Boolean {
+        val group = built ?: return false
+        if (ipv4Of(group.interfaceName) != group.localIp) return false
+        if (!hiddenInfoNoted) {
+            hiddenInfoNoted = true
+            log("读不到直连组信息（应用在后台时系统不给），组主地址还在 ${group.interfaceName} 上，当作组还在")
+        }
+        return true
     }
 
     private fun end() {

@@ -44,6 +44,11 @@ class AudioStreamInfo(
     /** `ParaAudio` 原文（只有采样参数，不含标识）。 */
     val parameters: String,
 ) {
+    companion object {
+        /** 控制连接上的声音（不走音频数据连接）在播放端用的「数据会话」号（第二路起加后缀）；真正的数据会话号是数字，不会撞。 */
+        const val CONTROL_SESSION_ID = "control"
+    }
+
     override fun toString() =
         "数据会话 $dataSessionId（${sampleRate}Hz / $channels 声道 / $bitsPerSample 位，编码 ${codec.label}，${transport.label}）"
 }
@@ -88,8 +93,15 @@ class AudioPacket internal constructor(stream: AudioStreamInfo) {
     var codec: AudioCodec = stream.codec
         internal set
 
-    /** 路号（SSRC 低 16 位减 1000，见 [AudioBus]）；不在约定范围时为 [AudioBus.UNKNOWN]。 */
+    /** 路号：[lane] 减 1000（见 [AudioBus.ofLane]）；不在约定范围时为 [AudioBus.UNKNOWN]。 */
     var bus: Int = AudioBus.UNKNOWN
+        internal set
+
+    /**
+     * 这一路声音的编号（见 [AudioBus.lane]）：同一个值的包是同一路，放进同一个播放器。SSRC 会在同一路里变（用途、附加
+     * 标志位；带包尾路号时连低 12 位也可能变），所以别拿 SSRC 分播放器。
+     */
+    var lane: Long = 0L
         internal set
 
     /** 用途号（SSRC 高 16 位，安卓 `USAGE_*` 的取值，例如通话 2、铃声 6）；0 表示没带。 */
@@ -221,6 +233,20 @@ sealed class AudioEvent {
      * 声明 PCM 时这台手机的表现（见 [PcmVerdict]）。应用按 [phone] 记下来：失败的手机下次连接改声明 AAC。
      * [phone] 为 null 表示没收到手机的设备信息、认不出是哪台。
      */
+    /**
+     * 手机不认 TCP 方式的数据会话：这次连接之后的数据会话改用 UDP，应用应记下这台手机（下次连接直接用 UDP）。
+     * [phone] 认不出时为 null；[reason] 是看出来的依据（[NO_ANSWER]、[ACCEPTED_NO_CONNECT] 或 [CONTROL_INSTEAD]）。
+     */
+    class TransportFallback(val phone: PhoneRef?, val reason: String = NO_ANSWER) : AudioEvent() {
+        override fun toString() = "手机（${phone ?: "认不出是哪台手机"}）$reason，之后的数据会话改用 UDP"
+
+        companion object {
+            const val NO_ANSWER = "不应答 TCP 方式的 SETUP"
+            const val ACCEPTED_NO_CONNECT = "应答了 TCP 方式的 SETUP、却好几次都不连数据端口"
+            const val CONTROL_INSTEAD = "应答了 TCP 方式的 SETUP、却不连数据端口，把声音改从控制连接送"
+        }
+    }
+
     class CodecVerdict(val phone: PhoneRef?, val verdict: PcmVerdict) : AudioEvent() {
         override fun toString() = "PCM 判定（${phone ?: "认不出是哪台手机"}）：${verdict.label}" +
             if (verdict.failure) "，下次连接这台手机可能改用 AAC" else ""

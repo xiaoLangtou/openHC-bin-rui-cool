@@ -68,7 +68,7 @@ interface LocalHotspotHandle {
  *
  * 系统的要求：安卓 8～12 要精确位置权限、系统定位开关打开；安卓 13 起要「附近的 WiFi 设备」权限；应用要在前台。
  * 定位权限是「使用期间允许」时，只有界面在前台才算数，光有前台服务不算（2026-11-22 安卓 10 车机实测：界面在后台时
- * 系统拒绝「does not have Coarse/Fine Location permission」）。车机已经开着个人热点、或在共享网络时开不了。
+ * 系统拒绝「does not have Coarse/Fine Location permission」）。车机设置里的个人热点开着时开不了。
  * 权限由调用方在开始前确认。
  */
 // 权限由调用方在开始前确认（见类注释）；没有时系统拒绝申请或回失败，都按失败报。
@@ -98,6 +98,13 @@ class LocalHotspotOwner private constructor(context: Context) {
 
     /** 系统给的热点（安卓 8.0 起才有这个类型，老系统上一直是 null）。 */
     private var reservation: Any? = null
+
+    /**
+     * 不再用的热点对象，一直留着、不让它被回收。系统回收它时会再调一次关闭，而关闭停的是本进程**当前**的热点申请，
+     * 不管当初是哪一次给的：上一次连接的热点对象被回收，就把下一次连接刚开好的热点关掉，车机这边的连接全被掐断
+     * （读写报「Software caused connection abort」）。每次连接最多多留一个，进程退出时一起释放。
+     */
+    private val retired = ArrayList<Any>()
 
     /** 最近一次申请前的网卡快照：网卡名 → IPv4。 */
     private var before: Map<String, Set<String>> = emptyMap()
@@ -414,16 +421,17 @@ class LocalHotspotOwner private constructor(context: Context) {
             drive { machine.onFailed(now()) }
             return
         }
-        // 系统按进程只给一个热点；万一手里还有旧的，先关掉。
+        // 系统按进程只给一个热点；万一手里还有旧的，只留着不关：这时再关它，停掉的是刚开好的这个（见 [retired]）。
         val old = reservation
-        if (old != null && old !== held) closeQuietly(old)
+        if (old != null && old !== held) retire(old)
         reservation = held
         drive { machine.onStarted(now()) }
     }
 
-    /** 系统回话：热点被收回了。系统已经收回，手里的这个不用再关。 */
+    /** 系统回话：热点被收回了。系统已经收回，手里的这个不用再关，但要留着（见 [retired]）。 */
     private fun onSystemStopped() {
         note("系统回话：热点被收回了")
+        reservation?.let { retire(it) }
         reservation = null
         drive { machine.onStopped(now()) }
     }
@@ -439,6 +447,12 @@ class LocalHotspotOwner private constructor(context: Context) {
         val held = reservation ?: return
         reservation = null
         closeQuietly(held)
+        retire(held)
+    }
+
+    /** 不再用的热点对象留到进程结束（原因见 [retired]）。只在工作线程上调用。 */
+    private fun retire(held: Any) {
+        if (retired.none { it === held }) retired += held
     }
 
     private fun closeQuietly(held: Any) {
@@ -517,7 +531,7 @@ class LocalHotspotOwner private constructor(context: Context) {
         WifiManager.LocalOnlyHotspotCallback.ERROR_GENERIC ->
             "系统内部错误（刚关掉热点又马上申请、或安卓 8～12 系统定位开关没开时常见）"
         WifiManager.LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE ->
-            "当前状态开不了：车机可能开着个人热点或在共享网络，或者本应用不在前台"
+            "系统不让再开一个热点：车机设置里的个人热点可能正开着，或者本应用不在前台"
         WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED -> "系统策略不允许开热点"
         else -> "原因 $reason"
     }

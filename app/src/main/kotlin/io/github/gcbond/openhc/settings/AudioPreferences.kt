@@ -6,6 +6,7 @@ import io.github.gcbond.openhc.core.dmsdp.audio.AudioCodec
 import io.github.gcbond.openhc.core.dmsdp.audio.AudioTransport
 import io.github.gcbond.openhc.core.dmsdp.audio.MicProfile
 import io.github.gcbond.openhc.core.dmsdp.audio.PcmVerdict
+import io.github.gcbond.openhc.core.dmsdp.audio.PhoneRef
 import io.github.gcbond.openhc.core.session.AudioSettings
 import io.github.gcbond.openhc.core.session.MicSettings
 import io.github.gcbond.openhc.platform.media.AudioStreamChoice
@@ -104,9 +105,24 @@ class AudioPreferences(context: Context) {
         prefs.edit { putString(KEY_PCM_BOOK, book.encode()) }
     }
 
+    /** 要用 UDP 传声音的手机（它们不走 TCP 方式的声音连接，见 [AudioSettings]）：条目是「编号@HiCar 版本」，旧条目只有编号。 */
+    fun udpPhones(): Set<String> = synchronized(LOCK) { prefs.getStringSet(KEY_UDP_PHONES, null)?.toSet() ?: emptySet() }
+
+    /**
+     * 记下一台要用 UDP 的手机（协议线程上调用）：同一台手机以前的条目（别的 HiCar 版本）换成这一条；
+     * 最多记 [MAX_UDP_PHONES] 台，多了清掉重记。
+     */
+    fun addUdpPhone(phone: PhoneRef) = synchronized(LOCK) {
+        val now = prefs.getStringSet(KEY_UDP_PHONES, null)?.toMutableSet() ?: HashSet()
+        now.removeAll { PhoneRef.entryOf(it, phone.key) }
+        if (now.size >= MAX_UDP_PHONES) now.clear()
+        now += phone.listEntry
+        prefs.edit { putStringSet(KEY_UDP_PHONES, now) }
+    }
+
     /** 下一次连接的音频设置；关掉声音时为 null（不声明扬声器，声音留在手机上）。 */
     fun toSettings(): AudioSettings? = if (enabled) {
-        AudioSettings(transport, codec, multiBus, if (codec == AudioCodec.PCM) pcmFallbacks().aacPhones() else emptySet())
+        AudioSettings(transport, codec, multiBus, if (codec == AudioCodec.PCM) pcmFallbacks().aacPhones() else emptySet(), udpPhones())
     } else {
         null
     }
@@ -130,6 +146,8 @@ class AudioPreferences(context: Context) {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_CODEC = "debug_codec"
         private const val KEY_TRANSPORT = "debug_transport"
+        private const val KEY_UDP_PHONES = "udp_phones"
+        private const val MAX_UDP_PHONES = 32
         private const val KEY_MULTI_BUS = "debug_multi_bus"
         private const val KEY_DELAY = "delay_millis"
         private const val KEY_LOW_LATENCY = "debug_low_latency"

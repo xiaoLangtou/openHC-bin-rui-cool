@@ -39,6 +39,7 @@ internal object Synthetic {
         name: String = "测试车机 Ünï",
         additionalServices: List<DmsdpConfig.Service> = emptyList(),
         speaker: DmsdpConfig.Speaker? = null,
+        phoneVersion: String? = null,
     ) = DmsdpConfig(
         host = host(name),
         deviceId = SELF_ID,
@@ -48,6 +49,7 @@ internal object Synthetic {
         display = display,
         speaker = speaker,
         additionalServices = additionalServices,
+        phoneVersion = phoneVersion,
     )
 }
 
@@ -126,4 +128,49 @@ internal fun encryptedSession(
     val outputs = session.feed(DmsdpChannel.CONTROL, Phone().plainFrame(CRYPTO_SELECT + select + "\r\n"), nowMillis)
     check(session.isEncrypted)
     return session to outputs
+}
+
+/** 合成的控制连接声音：组头和分片（格式见 ControlChannelAudio）。值都是编的。 */
+internal object ControlAudioFrames {
+    /** 一组：[header] 字节组头（第 0 字节是服务类型，18 字节时 6～9 是用途、10～13 是路号，最后 4 字节是整组长度）+ [pcm]。 */
+    fun group(pcm: ByteArray, header: Int = 14, service: Int = 3, usage: Int = 1, bus: Int = 8): ByteArray {
+        val total = header + pcm.size
+        val head = ByteArray(header) { (it + 0x30).toByte() }
+        head[0] = service.toByte()
+        if (header == 18) {
+            putU32(head, 6, usage.toLong())
+            putU32(head, 10, bus.toLong())
+        }
+        putU32(head, header - 4, total.toLong())
+        return head + pcm
+    }
+
+    /** 把一组切成 [parts] 片，每片带 18 字节片头；位置标记首片 1、末片 3、其余 2。 */
+    fun fragments(seq: Long, whole: ByteArray, parts: Int, stream: Long = 0x51525354, service: Int = 3): List<ByteArray> {
+        val size = (whole.size + parts - 1) / parts
+        return (0 until parts).map { i ->
+            val data = whole.copyOfRange(i * size, minOf(whole.size, (i + 1) * size))
+            val h = ByteArray(18)
+            h[0] = '#'.code.toByte()
+            putU32(h, 1, stream)
+            putU32(h, 5, 0xFEDCBA00L or service.toLong())
+            h[9] = when (i) {
+                parts - 1 -> 3
+                0 -> 1
+                else -> 2
+            }
+            putU32(h, 10, seq)
+            h[14] = (i shr 8).toByte()
+            h[15] = i.toByte()
+            h[16] = (data.size shr 8).toByte()
+            h[17] = data.size.toByte()
+            h + data
+        }
+    }
+
+    fun pcm(frames: Int, seed: Int) = ByteArray(frames * 4) { ((it * 7 + seed) and 0xFF).toByte() }
+
+    private fun putU32(b: ByteArray, at: Int, v: Long) {
+        for (k in 0 until 4) b[at + k] = (v shr (24 - 8 * k)).toByte()
+    }
 }

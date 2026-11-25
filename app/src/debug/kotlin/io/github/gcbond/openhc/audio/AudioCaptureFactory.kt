@@ -93,7 +93,11 @@ private class FileAudioCapture(private val dir: File, private val attemptId: Int
         if (closed) return
         closed = true
         try {
-            executor.execute { closeFiles() }
+            // 关完文件再置位：关闭前已经过了检查、排在后面的写任务不会再打开新文件。
+            executor.execute {
+                closeFiles()
+                broken = true
+            }
         } catch (e: RejectedExecutionException) {
             return
         }
@@ -176,6 +180,7 @@ private class FileAudioCapture(private val dir: File, private val attemptId: Int
         is AudioEvent.Note -> event.stream
         is AudioEvent.Ended -> event.stream
         is AudioEvent.PhoneFocus, is AudioEvent.SpeakerDeclared, is AudioEvent.CarFocusSent, is AudioEvent.CodecVerdict,
+        is AudioEvent.TransportFallback,
         is AudioEvent.PhoneCallState, is AudioEvent.PhoneVoiceState -> null
     }
 

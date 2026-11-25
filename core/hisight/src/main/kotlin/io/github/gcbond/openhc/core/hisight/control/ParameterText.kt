@@ -53,13 +53,21 @@ internal object ParameterText {
         return names
     }
 
-    /** SET 的键值；名字转小写，未知或重复的名字都拒绝，值去掉两端空格和 TAB。 */
-    fun parameters(body: ByteArray): Map<String, String> {
+    /**
+     * SET 的键值；名字转小写，值去掉两端空格和 TAB。缺冒号或重复的名字拒绝。
+     * 不认识的名字：[unknown] 为 null 时拒绝；给了就跳过，把「名字: 值」（值截短）记进去，例如手机投屏期间发的事件通知
+     * 带 `module_id`、`event`、`param`。
+     */
+    fun parameters(body: ByteArray, unknown: MutableList<String>? = null): Map<String, String> {
         val result = LinkedHashMap<String, String>()
         for (line in lines(body)) {
             val colon = line.indexOf(':')
             val name = (if (colon >= 0) line.substring(0, colon) else line).lowercase()
             val known = name in CAPABILITY_FIELDS || name in METADATA_FIELDS || name == TRIGGER
+            if (colon >= 0 && !known && unknown != null && name !in result) {
+                unknown += "$name: " + trimSpaceTab(line.substring(colon + 1)).filter { it in ' '..'~' }.take(UNKNOWN_VALUE_SHOWN)
+                continue
+            }
             if (colon < 0 || !known || name in result) {
                 throw MalformedMessageException("能力参数缺少冒号、名字未知或重复")
             }
@@ -67,6 +75,9 @@ internal object ParameterText {
         }
         return result
     }
+
+    /** 不认识的参数记说明时，值最多留这么多字符。 */
+    private const val UNKNOWN_VALUE_SHOWN = 80
 
     /**
      * 分号分隔的 `名字 整数` 列表（末尾分号可有可无）；整数是 0..2^31-1 的十进制。
