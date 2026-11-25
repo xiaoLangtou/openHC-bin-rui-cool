@@ -719,9 +719,13 @@ class SpeakerSessionTest {
     fun callAndVoiceStatesAreReportedFromEitherModule() {
         val audio = AudioRecorder()
         val session = speakerSession(audio = audio)
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).withoutRaw().isEmpty())
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(4, 504, "{\"callState\":2}".toByteArray()), 0).withoutRaw().isEmpty())
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 505, "{\"voiceState\":1}".toByteArray()), 0).withoutRaw().isEmpty())
+        // P0 修复后：扬声器分支处理完 504/505 还要补发结构化事件（app 层通话保护/防抢麦依赖）。
+        val call1 = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).withoutRaw()
+        assertEquals(1, call1.filterIsInstance<DmsdpEvent.PhoneCallStateChanged>().single().state, "module 1 的 504")
+        val call4 = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(4, 504, "{\"callState\":2}".toByteArray()), 0).withoutRaw()
+        assertEquals(2, call4.filterIsInstance<DmsdpEvent.PhoneCallStateChanged>().single().state, "module 4 的 504")
+        val voice1 = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 505, "{\"voiceState\":1}".toByteArray()), 0).withoutRaw()
+        assertEquals(1, voice1.filterIsInstance<DmsdpEvent.PhoneVoiceStateChanged>().single().state, "module 1 的 505")
         session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "oops".toByteArray()), 0)
         val calls = audio.events.filterIsInstance<AudioEvent.PhoneCallState>()
         assertEquals(listOf(1 to 1L, 2 to 4L), calls.map { it.state to it.module })

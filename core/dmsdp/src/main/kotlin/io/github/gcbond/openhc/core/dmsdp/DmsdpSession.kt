@@ -594,8 +594,20 @@ class DmsdpSession(
                 }
             }
             // 通话 / 语音助手状态：正常走 module 1，module 4 上同样的 type 也认（放在焦点消息前面）。
-            speaker != null && PhoneStateMessages.accepts(record.module, record.type) ->
+            // 扬声器要在这里做音频侧处理（AudioEvent.PhoneCallState 等）；但 app 层的通话保护/防抢麦
+            // 依赖结构化事件，所以在扬声器处理完之后同步补发（P0 修复：否则实车开扬声器时 504/505
+            // 在此分支返回，PhoneCallStateChanged/PhoneVoiceStateChanged 永远不会发）。
+            speaker != null && PhoneStateMessages.accepts(record.module, record.type) -> {
                 audioQuietly(out) { speaker.onPhoneState(record.module, record.type, record.data, out) }
+                val state = PhoneStateMessages.parse(record.type, record.data)
+                if (state != null) {
+                    if (record.type == PhoneStateMessages.TYPE_CALL_STATE) {
+                        out.event(DmsdpEvent.PhoneCallStateChanged(state))
+                    } else {
+                        out.event(DmsdpEvent.PhoneVoiceStateChanged(state))
+                    }
+                }
+            }
             speaker != null && record.module == PhoneAudioFocus.MODULE_AUDIO ->
                 audioQuietly(out) { speaker.onFocusRecord(record.type, record.data, nowMillis, out) }
             record.module == MODULE_MANAGEMENT && record.type == TYPE_MANAGEMENT && files != null -> {

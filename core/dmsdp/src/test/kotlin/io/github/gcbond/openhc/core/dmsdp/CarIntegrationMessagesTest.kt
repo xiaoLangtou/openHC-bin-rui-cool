@@ -15,6 +15,7 @@ class CarIntegrationMessagesTest {
     private fun config(
         brandIcon: ByteArray? = null,
         voicePromptSupport: Int = 0,
+        speaker: DmsdpConfig.Speaker? = null,
     ): DmsdpConfig = DmsdpConfig(
         host = Synthetic.host(),
         deviceId = Synthetic.SELF_ID,
@@ -23,6 +24,7 @@ class CarIntegrationMessagesTest {
         phoneIp = Synthetic.PHONE_IP,
         brandIcon = brandIcon,
         voicePromptSupport = voicePromptSupport,
+        speaker = speaker,
     )
 
     /** 已加密的会话；喂一条 module 1 管理消息，返回输出。 */
@@ -92,6 +94,31 @@ class CarIntegrationMessagesTest {
 
         val done = feedManagement(505, """{"voiceState":0}""", config())
         assertEquals(0, done.filterIsInstance<DmsdpEvent.PhoneVoiceStateChanged>().single().state)
+    }
+
+    @Test
+    fun callAndVoiceStatesEmitEventsEvenWhenSpeakerIsEnabled() {
+        // P0 修复回归：实车声明扬声器时，504/505 在扬声器分支被拦截处理，但 app 层的通话保护/防抢麦
+        // 依赖结构化事件——扬声器处理完之后仍必须补发（module 1 与 module 4 上都验证）。
+        val config = config(speaker = DmsdpConfig.Speaker())
+        val call = feedManagement(504, """{"callState":1}""", config)
+        assertEquals(1, call.filterIsInstance<DmsdpEvent.PhoneCallStateChanged>().single().state, "module 1 的 504")
+        val voice = feedManagement(505, """{"voiceState":1}""", config)
+        assertEquals(1, voice.filterIsInstance<DmsdpEvent.PhoneVoiceStateChanged>().single().state, "module 1 的 505")
+
+        val (session, _) = encryptedSession(config)
+        val callOnAudio = session.feed(
+            DmsdpChannel.CONTROL,
+            Phone().encryptedRecord(4L, 504, """{"callState":2}""".toByteArray()),
+            100_700L,
+        )
+        assertEquals(2, callOnAudio.filterIsInstance<DmsdpEvent.PhoneCallStateChanged>().single().state, "module 4 的 504")
+        val voiceOnAudio = session.feed(
+            DmsdpChannel.CONTROL,
+            Phone().encryptedRecord(4L, 505, """{"voiceState":0}""".toByteArray()),
+            100_710L,
+        )
+        assertEquals(0, voiceOnAudio.filterIsInstance<DmsdpEvent.PhoneVoiceStateChanged>().single().state, "module 4 的 505")
     }
 
     @Test

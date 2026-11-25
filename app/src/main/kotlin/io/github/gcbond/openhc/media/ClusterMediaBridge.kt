@@ -135,12 +135,20 @@ class ClusterMediaBridge(
         }
 
         override fun ctrlPlayMediaList(i: Int): Boolean {
+            if (inCallState != 0) {
+                Log.i(TAG, "通话中（callState=$inCallState），忽略 EAS 卡片的播放列表指令")
+                return true
+            }
             onCommand(MediaKeyForwarder.Command.PLAY)
             return true
         }
 
         override fun onSourceSelected(i: Int): Boolean {
             if (i == SOURCE_TYPE_HICAR || i == SOURCE_TYPE_CARLINK || i == SOURCE_TYPE_FLYMELINK) {
+                if (inCallState != 0) {
+                    Log.i(TAG, "通话中（callState=$inCallState），忽略音源切回 HiCar 的播放指令")
+                    return true
+                }
                 onCommand(MediaKeyForwarder.Command.PLAY)
             }
             return true
@@ -224,11 +232,20 @@ class ClusterMediaBridge(
         }
     }
 
-    /** 手机 504 通话状态变化（原厂对齐）：[state] 0 空闲、非 0 通话中。通话期间暂停音乐推送与焦点抢占。 */
+    /**
+     * 手机 504 通话状态变化（原厂对齐）：[state] 0 空闲、非 0 通话中。通话期间暂停音乐推送与焦点抢占。
+     * 值域对齐原厂 HiCarService2：999（挂断信号）视为挂断复位 0、3（微信通话）归一化为 2，
+     * 内部只存 0/1/2，判断逻辑统一按「非 0 = 通话中」。
+     */
     fun onCallStateChanged(state: Int) {
-        if (inCallState == state) return
-        Log.i(TAG, "手机通话状态：$inCallState -> $state${if (state != 0) "（通话期间不推音乐、不抢焦点）" else "（恢复音乐推送）"}")
-        inCallState = state
+        val normalized = when (state) {
+            999 -> 0 // 挂断信号：复位为空闲
+            3 -> 2 // 微信通话等三方通话：按通话中归一化
+            else -> state
+        }
+        if (inCallState == normalized) return
+        Log.i(TAG, "手机通话状态：$inCallState -> $normalized（raw=$state）${if (normalized != 0) "（通话期间不推音乐、不抢焦点）" else "（恢复音乐推送）"}")
+        inCallState = normalized
     }
 
     /** 音频焦点状态变化：拿到媒体焦点时触发 CarMedia 音源切换或直推 Link EAS 卡片，并开启蓝牙 AVRCP 元数据兜底轮询。 */

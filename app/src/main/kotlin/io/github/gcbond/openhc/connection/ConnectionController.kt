@@ -510,9 +510,11 @@ class ConnectionController(context: Context) {
             }
             is SessionEvent.DeviceSessionReady -> {
                 CarHome.onDeviceSessionReady()
-                // 原厂吉利对齐：设备会话就绪后把日夜模式（501）和驻车态（506）发一次给手机。
+                // 原厂吉利对齐：设备会话就绪后把日夜模式（501）和驻车态（506）发一次给手机；
+                // 同时预热 NaviAPI / VrVoiceAPI（init + onAPIReady），之后 503/505 到达立即生效。
                 sendDayNight(current, "设备会话就绪")
                 current.runner.submit { current.session.sendDrivingMode(false) }
+                CarIntegrationBridge.warmUp(app)
             }
             SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("有线 #${current.id}")
             is SessionEvent.MediaMetadataUpdated -> MediaKeys.onMetadata(app, event.metadata)
@@ -526,7 +528,10 @@ class ConnectionController(context: Context) {
             }
             is SessionEvent.PhoneVoiceStateChanged -> MediaKeys.onVoiceStateChanged(app, event.state)
             is SessionEvent.Ended -> {
+                // 兜底复位：通话状态归零 + 恢复车机本地语音（手机 voiceState=1 期间断连时，
+                // 不复位车机会一直闭麦；enableVr(true) 是幂等的安全复位）。
                 CarIntegrationBridge.writeLinkIncallState(app, 0)
+                CarIntegrationBridge.enableVr(app, true)
                 if (current.tearingDown) maybeFinish(current) else teardown(current)
             }
             else -> Unit
@@ -534,8 +539,7 @@ class ConnectionController(context: Context) {
     }
 
     /** 把车机当前日夜模式发给手机（501，原厂吉利对齐）。投屏开始（VideoStarted）与 uiMode 切换时也调。 */
-    private fun sendDayNight(current: Attempt, reason: String) {
-        val night = isNightMode()
+    private fun sendDayNight(current: Attempt, reason: String, night: Boolean = isNightMode()) {
         Log.i(TAG, "发送日夜模式（$reason）：${if (night) "night" else "day"}")
         current.runner.submit { current.session.sendDayNightMode(night) }
     }
@@ -545,9 +549,12 @@ class ConnectionController(context: Context) {
         (app.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
 
-    /** uiMode 昼夜切换（MainActivity.onConfigurationChanged 调）：给当前活跃的会话补发 501。 */
-    fun onUiModeChanged() {
-        attempt?.let { sendDayNight(it, "uiMode 切换") }
+    /**
+     * uiMode 昼夜切换（MainActivity.onConfigurationChanged 调）：给当前活跃的会话补发 501。
+     * night 由调用方从 newConfig.uiMode 直接算出传入（app.resources 可能滞后）。
+     */
+    fun onUiModeChanged(night: Boolean) {
+        attempt?.let { sendDayNight(it, "uiMode 切换", night) }
     }
 
     private fun startWired(current: Attempt, port: Int) {

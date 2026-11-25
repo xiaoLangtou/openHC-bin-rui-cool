@@ -128,17 +128,23 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
 
+    /** 上次发出的日夜模式（null = 还没发过）：onConfigurationChanged 旋转/尺寸变更也会触发，只在天/夜真变时补发 501。 */
+    private var lastNightMode: Boolean? = null
+
     /**
      * 车机 uiMode 昼夜切换（大灯/暗色模式）：给当前活跃的有线/无线会话补发 501 `{"dayNightMode":…}`，
      * 手机高德/百度地图和 HiCar 桌面随车机换日夜间皮肤（原厂 HiCarService2 onConfigurationChanged 同款，需求文档第 2 项）。
+     * 天/夜没变（旋转、尺寸变更）时不发；night 直接取自 newConfig（app.resources 可能滞后）。
      */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         val night = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
+        if (lastNightMode == night) return
+        lastNightMode = night
         Log.i(TAG, "uiMode 切换：${if (night) "夜间" else "日间"}，补发日夜模式给手机")
-        controller.onUiModeChanged()
-        wireless.onUiModeChanged()
+        controller.onUiModeChanged(night)
+        wireless.onUiModeChanged(night)
     }
 
     /**
