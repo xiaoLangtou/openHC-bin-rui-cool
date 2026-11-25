@@ -33,6 +33,28 @@ enum class KeepAliveMode {
     UDP,
 }
 
+/**
+ * 手机通过 type 515 推送的结构化音频元数据（全量包或每秒进度包）。
+ * [totalTimeSec] 与 [elapsedTimeSec] 单位均为秒（华为手机端 MediaMetaDataClient 已做 /1000）。
+ */
+class DmsdpMediaData(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val appName: String? = null,
+    val appPackage: String? = null,
+    val totalTimeSec: Int? = null,
+    val elapsedTimeSec: Int? = null,
+    val status: Int? = null,
+    val albumArtBytes: ByteArray? = null,
+    val albumArtUrl: String? = null,
+    val lyricContent: String? = null,
+    val currentLyric: String? = null,
+) {
+    override fun toString() =
+        "DmsdpMediaData(title=$title, artist=$artist, status=$status, elapsed=$elapsedTimeSec/$totalTimeSec)"
+}
+
 /** [DmsdpSession] 各方法的输出：按产生顺序排列，事件和动作混排。 */
 sealed interface DmsdpOutput
 
@@ -257,9 +279,12 @@ sealed class DmsdpEvent : DmsdpOutput {
     /**
      * 手机推送的音频元数据（管理通道 type 515 的 MediaData，见 [ManagementMessages]）：
      * 歌名/歌手/专辑/播放状态/进度，HarmonyOS 6.0+ 华为音乐与 QQ 音乐带 Lyric（标准 LRC 文本）。
-     * 上层（桌面 HMI / 未来的 EAS MediaCenter 喂数）从这里取数据。
+     * 上层（桌面 HMI / EAS MediaCenter 喂数）从这里取数据。
      */
-    class MediaDataReceived(val media: JsonObject) : DmsdpEvent() {
+    class MediaDataReceived(
+        val media: JsonObject,
+        val info: DmsdpMediaData = ManagementMessages.extractMediaData(media),
+    ) : DmsdpEvent() {
         override fun toString() = "MediaDataReceived(${media.keys.joinToString()})"
     }
 

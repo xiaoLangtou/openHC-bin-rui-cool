@@ -300,7 +300,7 @@ class ConnectionController(context: Context) {
         } catch (e: IOException) {
             return block(Notice.TrustStoreUnavailable(e.message ?: e.javaClass.simpleName))
         }
-        val bluetooth = BluetoothAddressPolicy.choose(DeviceInfo.systemBluetoothAddress(), settings.manualBluetoothAddress)
+        val bluetooth = BluetoothAddressPolicy.choose(DeviceInfo.systemBluetoothAddress(), DeviceInfo.localBluetoothAddress(app), settings.manualBluetoothAddress)
         val fullScreen = settings.fullScreen
         val display = try {
             DisplayPlan.resolve(DisplayArea.screenFor(app, fullScreen), ResolutionChoice.Auto, settings.fps, settings.uiScalePercent)
@@ -327,6 +327,7 @@ class ConnectionController(context: Context) {
                 authEnvelopeVersion = identity.authEnvelopeVersion,
                 trustStore = trustStore,
                 touchInput = true,
+                requestMetadata = true,
                 mediaKeyInput = MediaKeyPreferences(app).enabled,
                 audio = audio,
                 mic = mic,
@@ -496,6 +497,7 @@ class ConnectionController(context: Context) {
             }
             is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
             SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("有线 #${current.id}")
+            is SessionEvent.MediaMetadataUpdated -> MediaKeys.onMetadata(app, event.metadata)
             is SessionEvent.Ended -> if (current.tearingDown) maybeFinish(current) else teardown(current)
             else -> Unit
         }

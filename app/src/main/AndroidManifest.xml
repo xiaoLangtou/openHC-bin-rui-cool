@@ -5,6 +5,12 @@
 
     <!-- 和手机之间的 TCP/UDP（经 USB 网卡）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 手填蓝牙地址备份进系统全局设置表（signature 权限，系统签名自动授予；普通签名版写不进，备份静默跳过）。 -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <!-- 读取车机蓝牙 AVRCP MediaSession 元数据兜底（手机部分鸿蒙/三方播放器不发 515 时，从 com.android.bluetooth 会话补齐歌名歌手）。 -->
+    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
+    <!-- 车机无 CarMedia 时，直连 ECARX MediaCenterAPI 主动向仪表屏与桌面推送 Link EAS 媒体卡片。 -->
+    <uses-permission android:name="ecarx.oem.permission.OPENAPI_MEDIACENTER_PERMISSION" />
     <!-- 连接期间留在前台，切到后台不断（安卓 9 起要声明）。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- 安卓 14 起前台服务要按类型声明权限。 -->
@@ -93,7 +99,12 @@
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:usesCleartextTraffic="true">
+        <!--
+            usesCleartextTraffic：诊断上报的服务器地址是车主自己填的（默认 http://121.36.29.74:3800），
+            局域网/公网 http 都算明文，targetSdk 28 起默认拦。这里放开（投屏本身的 TCP 不受这个策略管）。
+        -->
 
         <!--
             车机屏幕可能会旋转、切换昼夜，界面自己处理，不重建 Activity。
@@ -103,7 +114,8 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:screenOrientation="sensorLandscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -164,5 +176,20 @@
                 <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
             </intent-filter>
         </receiver>
+
+        <!-- 暴露给车机 ECARX 媒体中心（系统进程）读取 HiCar 专辑封面的 ContentProvider。 -->
+        <provider
+            android:name=".media.ClusterArtProvider"
+            android:authorities="${applicationId}.eas"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+
+        <!-- ECARX OpenAPI 鉴权元数据（与吉利 CarLink / LinkHMI 同款，供无蓝牙音乐时直推 Link EAS 卡片）。 -->
+        <meta-data
+            android:name="eCarX_OpenAPI_AppId"
+            android:value="42b8433d3528471a98504554cc4ea5ad" />
+        <meta-data
+            android:name="eCarX_OpenAPI_AppKey"
+            android:value="a0a3234cc6584253b0ea2a102d173ce8" />
     </application>
 </manifest>

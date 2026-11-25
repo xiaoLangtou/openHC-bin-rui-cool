@@ -21,7 +21,10 @@ class VideoClarityTest {
     fun highAndHighestDeclareTwelveAndFifteenMbps() {
         assertEquals(12_000_000, VideoClarity.HIGH.bitrate)
         assertEquals(15_000_000, VideoClarity.HIGHEST.bitrate)
-        assertEquals(listOf(VideoClarity.STANDARD, VideoClarity.HIGH, VideoClarity.HIGHEST), VideoClarity.entries, "设置页按这个顺序列出")
+        assertEquals(listOf(VideoClarity.STANDARD, VideoClarity.HIGH, VideoClarity.HIGHEST, VideoClarity.STEADY), VideoClarity.entries, "设置页按这个顺序列出")
+        assertEquals(8_000_000, VideoClarity.STEADY.minBitrate)
+        assertEquals(15_000_000, VideoClarity.STEADY.maxBitrate)
+        assertNull(VideoClarity.HIGH.minBitrate, "只有稳定档声明码率下限")
     }
 
     @Test

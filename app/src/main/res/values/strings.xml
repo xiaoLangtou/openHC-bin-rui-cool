@@ -119,11 +119,14 @@
     <string name="settings_ui_scale_hint">手机界面在车机屏上显得太大（图标、文字偏大，一屏放不下多少内容）时调小。只影响投屏画面，不改车机自己的界面，清晰度和流畅度不变。75% 和 65% 还没在车上试过，排版不对就调回来。下次连接生效。</string>
     <string name="settings_bt">车机蓝牙地址</string>
     <string name="settings_bt_current_property">当前使用：%1$s（读自车机系统）</string>
+    <string name="settings_bt_current_adapter">当前使用：%1$s（读自本机蓝牙）</string>
     <string name="settings_bt_current_manual">当前使用：%1$s（手动填写）</string>
     <string name="settings_bt_current_unavailable">当前：没有取到，按 02:00:00:00:00:00 处理（有线照样能连）</string>
     <string name="settings_bt_manual_label">手动填写（格式 AA:BB:CC:DD:EE:FF）</string>
     <string name="settings_bt_invalid">格式不对，或者是占位地址</string>
-    <string name="settings_bt_hint">手填了有效地址时优先用手填的，清空就改用车机系统里读到的。地址变了，手机会把车机当成另一台车，需要重新输入连接码配对。</string>
+    <string name="settings_bt_hint">手填了有效地址时优先用手填的，清空就改用自动读到的（车机系统属性，读不到再读本机蓝牙）。地址变了，手机会把车机当成另一台车，需要重新输入连接码配对。手填的地址会自动备份到系统设置表：清除数据丢了也能找回。</string>
+    <string name="settings_bt_restore_backup">从备份恢复（%1$s）</string>
+    <string name="settings_bt_restored">已从备份恢复：%1$s</string>
 
     <!-- 通知 -->
     <string name="notification_channel_name">投屏连接</string>

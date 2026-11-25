@@ -1,14 +1,17 @@
 package io.github.gcbond.openhc.connection
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.graphics.Point
 import android.hardware.display.DisplayManager
+import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Display
+import io.github.gcbond.openhc.core.common.identity.BluetoothAddress
 import io.github.gcbond.openhc.platform.media.DisplayRefreshRate
 
-/** 从系统读车机的蓝牙地址属性和屏幕参数。 */
+/** 从系统读车机的蓝牙地址属性、本机蓝牙适配器地址和屏幕参数。 */
 internal object DeviceInfo {
 
     /**
@@ -24,6 +27,30 @@ internal object DeviceInfo {
         null
     } catch (e: RuntimeException) {
         null
+    }
+
+    /**
+     * 读「本机」蓝牙适配器的地址：先问 [BluetoothManager]（安卓 6.0 起普通应用多半只拿到
+     * `02:00:00:00:00:00` 掩码值，[BluetoothAddressPolicy.normalize] 会拒掉），再试系统设置里的
+     * `bluetooth_address`（有的厂商把真地址放在这儿，普通应用可读；华为系有 ACL 挡 shell，应用自身能不能读要实测）。
+     * 读不到或都是掩码值返回 null。别在界面线程上调（读设置要跨进程）。
+     */
+    fun localBluetoothAddress(context: Context): String? {
+        // 掩码值（02:00:00:00:00:00）当没读到：安卓 6.0 起普通应用问适配器要地址多半只拿到它，不能因此跳过后面的来源。
+        val masked = BluetoothAddress.UNAVAILABLE
+        val adapter = try {
+            (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter?.address
+        } catch (e: SecurityException) {
+            null // 安卓 12+ 没有 BLUETOOTH_CONNECT 运行时权限。
+        } catch (e: RuntimeException) {
+            null
+        }
+        if (adapter != null && adapter.isNotBlank() && adapter != masked) return adapter
+        return try {
+            Settings.Secure.getString(context.contentResolver, "bluetooth_address")?.takeIf { it.isNotBlank() }
+        } catch (e: RuntimeException) {
+            null // 厂商 ACL 拦读（华为 HwSettingsAcl）。
+        }
     }
 
     /** 默认屏幕（车机主屏）的实际像素、DPI 和按刷新率算出的帧率。 */
@@ -45,6 +72,10 @@ internal object DeviceInfo {
             metrics.densityDpi = fallback.densityDpi
         }
         val dpi = if (metrics.densityDpi > 0) metrics.densityDpi else DisplayMetrics.DENSITY_DEFAULT
-        return ScreenSpec(size.x, size.y, dpi, DisplayRefreshRate.declaredFps(context))
+        // 车机投屏画布一律按横屏（宽 >= 高）声明：避免用手机当测试车机（如 Magic 2）时，点开始或弹 USB 授权框瞬间
+        // 处于竖屏（1080x2340），导致向华为手机声明了竖屏画布，转回横屏后画面变成中间一条竖屏。
+        val width = maxOf(size.x, size.y)
+        val height = minOf(size.x, size.y)
+        return ScreenSpec(width, height, dpi, DisplayRefreshRate.declaredFps(context))
     }
 }

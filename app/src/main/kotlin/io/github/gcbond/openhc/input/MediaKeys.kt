@@ -4,9 +4,11 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
+import io.github.gcbond.openhc.core.dmsdp.DmsdpMediaData
 import io.github.gcbond.openhc.core.hisight.HiSightInput
 import io.github.gcbond.openhc.core.session.SessionAction
 import io.github.gcbond.openhc.core.session.SessionOutput
+import io.github.gcbond.openhc.media.ClusterMediaBridge
 import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.MediaKeyForwarder
 import io.github.gcbond.openhc.platform.media.MediaKeySession
@@ -37,6 +39,9 @@ object MediaKeys {
 
     // 以下只在主线程上访问。
     private val forwarder = MediaKeyForwarder()
+    private val clusterBridge = ClusterMediaBridge { command ->
+        main.post { SessionListener.onCommand(command) }
+    }
     private var appContext: Context? = null
     private var target: Target? = null
     private var session: MediaKeySession? = null
@@ -47,6 +52,7 @@ object MediaKeys {
         main.post {
             if (target.retired) return@post
             appContext = app
+            clusterBridge.ensureInitialized(app)
             this.target?.takeIf { it !== target }?.let {
                 Log.w(TAG, "上一个连接（${it.label}）没报结束，按已结束处理")
                 forwarder.ready = false
@@ -59,7 +65,7 @@ object MediaKeys {
         }
     }
 
-    /** 连接收尾：不再转键，关掉媒体按钮会话。可重复调用。 */
+    /** 连接收尾：不再转键，关掉媒体按钮会话，清空仪表屏歌曲信息。可重复调用。 */
     fun gone(target: Target) {
         main.post {
             target.retired = true
@@ -68,8 +74,26 @@ object MediaKeys {
             if (this.target !== target) return@post
             this.target = null
             forwarder.ready = false
+            clusterBridge.clear()
             Log.i(TAG, "按键停用（${target.label}）：连接结束，媒体键交还车机")
             updateSession("连接结束")
+        }
+    }
+
+    /** 收到手机 515 推来的音频元数据或播放进度：同步到 MediaKeySession（供 CoolHome 与 CarMedia 读取）并推送歌词到 CarMedia。 */
+    fun onMetadata(context: Context, metadata: DmsdpMediaData) {
+        val app = context.applicationContext ?: context
+        main.post {
+            appContext = app
+            val snapshot = clusterBridge.onMetadata(app, metadata) { refreshed ->
+                main.post {
+                    updateSession("异步歌词就绪")
+                    applySnapshotToSession(refreshed)
+                }
+            }
+            updateSession("收到媒体元数据")
+            applySnapshotToSession(snapshot)
+            clusterBridge.pushToCarMedia(app, snapshot)
         }
     }
 
@@ -81,6 +105,18 @@ object MediaKeys {
             if (this.target !== target) return@post
             Log.i(TAG, "替手机拿着媒体焦点：${yesNo(held)}（${target.label}）")
             updateSession(if (held) "拿到媒体焦点" else "媒体焦点放掉了")
+            if (held) {
+                session?.pulseActive()
+            }
+            val app = appContext
+            if (app != null) {
+                clusterBridge.onAudioFocusChanged(app, held) { refreshed ->
+                    main.post {
+                        updateSession("蓝牙兜底元数据")
+                        applySnapshotToSession(refreshed)
+                    }
+                }
+            }
         }
     }
 
@@ -159,10 +195,13 @@ object MediaKeys {
         }
     }
 
-    /** 媒体按钮会话只在「按键就绪」且「替手机拿着媒体焦点」时存在。 */
+    /** 媒体按钮会话在「按键就绪且拿着媒体焦点」或「已有当前曲目元数据」时保持存在，暂停时不销毁以免 CarMedia 丢失音源。 */
     private fun updateSession(why: String) {
         val current = target
-        val want = current != null && current.keysReady && current.mediaFocus
+        val want = current != null && (
+            (current.keysReady && current.mediaFocus) ||
+                clusterBridge.currentSnapshot() != null
+            )
         val open = session
         if (want && open == null) {
             val context = appContext ?: return
@@ -172,12 +211,28 @@ object MediaKeys {
                 Log.w(TAG, "建媒体按钮会话失败（${e.javaClass.simpleName}：${e.message}），只能在投屏页前台时转键")
                 null
             }
-            if (session != null) Log.i(TAG, "建媒体按钮会话（$why）：不在前台时按方向盘也转给手机")
+            if (session != null) {
+                Log.i(TAG, "建媒体按钮会话（$why）：不在前台时按方向盘也转给手机")
+                clusterBridge.currentSnapshot()?.let { applySnapshotToSession(it) }
+            }
         } else if (!want && open != null) {
             open.close()
             session = null
             Log.i(TAG, "关媒体按钮会话（$why）：不在前台时方向盘键交还车机")
         }
+    }
+
+    private fun applySnapshotToSession(snapshot: ClusterMediaBridge.Snapshot) {
+        session?.updateMediaState(
+            title = snapshot.title,
+            artist = snapshot.artist,
+            album = snapshot.album,
+            durationMs = snapshot.durationMs,
+            positionMs = snapshot.positionMs,
+            playing = snapshot.playing,
+            artwork = snapshot.artworkBitmap,
+            lyric = snapshot.lyricContent.ifEmpty { snapshot.currentLyric },
+        )
     }
 
     private object SessionListener : MediaKeySession.Listener {

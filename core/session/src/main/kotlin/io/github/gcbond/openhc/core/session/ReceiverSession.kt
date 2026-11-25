@@ -588,6 +588,10 @@ class ReceiverSession internal constructor(
                 is DmsdpEvent.KeepAliveTimeout -> finish(EndReason.KeepAliveTimeout(o.mode), out)
                 is DmsdpEvent.DisplayPortAnnounced -> beginHiSight(o.port, out)
                 is DmsdpEvent.CarDesktopRequested -> finish(EndReason.CarDesktopRequested(o.detail), out)
+                is DmsdpEvent.MediaDataReceived -> {
+                    diag(SessionLayer.DMSDP, o.toString(), out)
+                    out.add(SessionEvent.MediaMetadataUpdated(o.info))
+                }
                 // 显示服务状态（命令 103）。action=202 对显示服务 = 手机暂停投屏（投屏界面点「车机」图标，或
                 // 融合桌面磁贴点击——两者同报文，回桌面都是对的）。v22 曾把 202 当成结束连接（自杀），v25 撤掉；
                 // 上游 0.2.5 给了正确形态：**不结束会话**，报 ProjectionPaused 让界面回车机桌面，连接、声音、

@@ -10,6 +10,9 @@ enum class BluetoothSource {
     /** 用户在设置里手填。 */
     MANUAL,
 
+    /** 本机蓝牙适配器 / 系统设置里读到的（手机上跑时它是「车机」的蓝牙芯片本身）。 */
+    LOCAL_ADAPTER,
+
     /** 都没有：按取不到处理（线上发 `02:00:00:00:00:00`，设备 ID 按退化规则算），有线照样能连。 */
     UNAVAILABLE,
 }
@@ -33,18 +36,21 @@ object BluetoothAddressPolicy {
     /** 全 0、全 F：属性没初始化或读错了。 */
     private val INVALID = setOf("00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF", BluetoothAddress.UNAVAILABLE)
 
-    fun choose(systemProperty: String?, manual: String?): BluetoothChoice {
+    fun choose(systemProperty: String?, localAdapter: String?, manual: String?): BluetoothChoice {
         normalize(manual)?.let { return BluetoothChoice(it, BluetoothSource.MANUAL) }
         normalize(systemProperty)?.let { return BluetoothChoice(it, BluetoothSource.SYSTEM_PROPERTY) }
+        normalize(localAdapter)?.let { return BluetoothChoice(it, BluetoothSource.LOCAL_ADAPTER) }
         return BluetoothChoice(null, BluetoothSource.UNAVAILABLE)
     }
 
     /**
-     * 无线连接用的地址：系统里读到的优先，读不到才用手填的。二维码里的地址手机要拿去直接连车机蓝牙，
-     * 必须是车机真实地址；有线那边手填优先（可以借它换一个身份），无线不行。
+     * 无线连接用的地址：二维码里的地址手机要拿去直接连车机蓝牙，必须是真实地址。
+     * 顺序：车机系统属性（车机上最可靠）→ 本机蓝牙适配器（手机上跑时它就是「车机」的蓝牙芯片，
+     * 安卓 10 及更早或拿过 BLUETOOTH_CONNECT 的能读到真地址，读到的多半是 `02:00…` 掩码值会被 [normalize] 拒掉）→ 手填。
      */
-    fun chooseForWireless(systemProperty: String?, manual: String?): BluetoothChoice {
+    fun chooseForWireless(systemProperty: String?, localAdapter: String?, manual: String?): BluetoothChoice {
         normalize(systemProperty)?.let { return BluetoothChoice(it, BluetoothSource.SYSTEM_PROPERTY) }
+        normalize(localAdapter)?.let { return BluetoothChoice(it, BluetoothSource.LOCAL_ADAPTER) }
         normalize(manual)?.let { return BluetoothChoice(it, BluetoothSource.MANUAL) }
         return BluetoothChoice(null, BluetoothSource.UNAVAILABLE)
     }

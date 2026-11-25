@@ -1,8 +1,10 @@
 package io.github.gcbond.openhc.core.dmsdp
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -65,7 +67,14 @@ internal object ManagementMessages {
      */
     fun parse(type: Int, data: ByteArray): Parsed? {
         val json = runCatching { DeviceMessageHandler.parseObject(data, "管理消息 $type") }.getOrNull() ?: return null
-        val mediaData = if (type == TYPE_MEDIA_DATA) json[KEY_MEDIA_DATA] as? JsonObject else null
+        val mediaData = if (type == TYPE_MEDIA_DATA) {
+            (json[KEY_MEDIA_DATA] as? JsonObject)
+                ?: json.takeIf {
+                    it.containsKey(KEY_ELAPSED_TIME) || it.containsKey("Name") || it.containsKey("Status")
+                }
+        } else {
+            null
+        }
         val needsResp = mediaData != null || (type == TYPE_MEDIA_DATA && json.containsKey(KEY_ELAPSED_TIME))
         val reply = when {
             needsResp -> mediaDataResp()
@@ -85,13 +94,45 @@ internal object ManagementMessages {
     }
 
     /**
-     * type 514 元数据请求（车机→手机）：请求音频(bit1)+通话(bit2)+导航(bit3)元数据。
+     * type 514 元数据请求（车机→手机）：请求全量应用元数据掩码 127（0x7F，与吉利原厂一致，含 bit0 音频、bit1 通话、bit2 导航等）。
      * [RequestCaller] 按官方文档必须是车型 modelId，与设备信息 101 属性 2003 一致。
      */
     fun metadataRequest(fullModel: String): JsonObject = buildJsonObject {
-        put(KEY_REQUEST_AA_DATA, REQUEST_AA_DATA_MEDIA or REQUEST_AA_DATA_CALL or REQUEST_AA_DATA_NAVIGATION)
+        put(KEY_REQUEST_AA_DATA, REQUEST_AA_DATA_ALL)
         put(KEY_REQUEST_CALLER, fullModel)
     }
+
+    /** 从 515 JSON 对象（可能是 MediaData 子对象，也可能是顶层 ElapsedTime 进度对象）提取结构化字段。 */
+    fun extractMediaData(media: JsonObject): DmsdpMediaData {
+        val artArray = media["AlbumArtIcon"] as? JsonArray
+        val artBytes = if (artArray != null && artArray.isNotEmpty()) {
+            ByteArray(artArray.size) { idx ->
+                ((artArray[idx] as? JsonPrimitive)?.intOrNull ?: 0).toByte()
+            }
+        } else {
+            null
+        }
+        return DmsdpMediaData(
+            title = optString(media, "Name"),
+            artist = optString(media, "Artist"),
+            album = optString(media, "AlbumName"),
+            appName = optString(media, "AppName"),
+            appPackage = optString(media, "AppPackageName") ?: optString(media, "AppPackage"),
+            totalTimeSec = optInt(media, "TotalTime"),
+            elapsedTimeSec = optInt(media, KEY_ELAPSED_TIME),
+            status = optInt(media, "Status"),
+            albumArtBytes = artBytes,
+            albumArtUrl = optString(media, "AlbumArtURL"),
+            lyricContent = optString(media, "lyricContent") ?: optString(media, "Lyrics") ?: optString(media, "Lyric"),
+            currentLyric = optString(media, "currentLyricSentence") ?: optString(media, "CurrentLyric"),
+        )
+    }
+
+    private fun optString(json: JsonObject, key: String): String? =
+        (json[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    private fun optInt(json: JsonObject, key: String): Int? =
+        (json[key] as? JsonPrimitive)?.intOrNull
 
     /** type 515 元数据接收应答（车机→手机）：100000 = 接收成功。 */
     private fun mediaDataResp(): JsonObject = buildJsonObject {
@@ -215,10 +256,11 @@ internal object ManagementMessages {
     private const val KEY_ELAPSED_TIME = "ElapsedTime"
     private const val KEY_RESP_CODE = "RespCode"
 
-    /** RequestAAData 位定义：bit1 音频、bit2 通话、bit3 导航。 */
+    /** RequestAAData 位定义：bit0 音频(1)、bit1 通话(2)、bit2 导航(4)；吉利原厂请求 127 (0x7F)。 */
     private const val REQUEST_AA_DATA_MEDIA = 1
     private const val REQUEST_AA_DATA_CALL = 2
     private const val REQUEST_AA_DATA_NAVIGATION = 4
+    private const val REQUEST_AA_DATA_ALL = 127
 
     /** MediaDataResp.RespCode：100000 接收成功（100001 接收失败）。 */
     private const val RESP_CODE_OK = 100000

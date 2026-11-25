@@ -2,6 +2,7 @@ package io.github.gcbond.openhc.core.session
 
 import io.github.gcbond.openhc.core.auth.AuthFailure
 import io.github.gcbond.openhc.core.auth.AuthMode
+import io.github.gcbond.openhc.core.dmsdp.DmsdpMediaData
 import io.github.gcbond.openhc.core.dmsdp.KeepAliveMode
 import io.github.gcbond.openhc.core.hisight.HiSightEndReason
 
@@ -190,6 +191,11 @@ sealed class SessionEvent : SessionOutput {
      */
     object ProjectionPaused : SessionEvent() {
         override fun toString() = "ProjectionPaused"
+    }
+
+    /** 手机推送了 515 音频元数据（全量曲目信息或每秒播放进度）。 */
+    class MediaMetadataUpdated(val metadata: DmsdpMediaData) : SessionEvent() {
+        override fun toString() = "MediaMetadataUpdated($metadata)"
     }
 
     /** 不影响会话继续的信息：各层没处理的消息、被丢弃的数据、被忽略的请求等。[message] 可以直接写日志。 */

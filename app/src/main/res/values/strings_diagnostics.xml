@@ -8,4 +8,14 @@
     <string name="settings_diag_exporting">正在导出…</string>
     <string name="settings_diag_saved">已保存：%1$s。报告问题时把这个文件附上（可以用车机的文件管理拷到 U 盘再上传）。</string>
     <string name="settings_diag_failed">没导出来：%1$s</string>
+
+    <!-- 设置 → 诊断 → 诊断上报 -->
+    <string name="settings_group_diag_upload">诊断上报</string>
+    <string name="settings_diag_upload">上传诊断日志</string>
+    <string name="settings_diag_upload_hint">把和导出一样的诊断全文直接发给日志服务器（不用拷文件），网页上就能看。服务器地址和令牌在下面填，输入即保存。</string>
+    <string name="settings_diag_upload_button">上传</string>
+    <string name="settings_diag_uploading">正在上传…</string>
+    <string name="settings_diag_upload_failed">没上传成功：%1$s</string>
+    <string name="settings_diag_upload_url">服务器地址（如 http://121.36.29.74:3800）</string>
+    <string name="settings_diag_upload_token">上报令牌</string>
 </resources>

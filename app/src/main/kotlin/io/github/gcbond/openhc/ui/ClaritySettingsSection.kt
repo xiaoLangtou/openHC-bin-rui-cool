@@ -36,6 +36,7 @@ private fun shortLabel(clarity: VideoClarity): Int = when (clarity) {
     VideoClarity.STANDARD -> R.string.settings_clarity_standard_short
     VideoClarity.HIGH -> R.string.settings_clarity_high_short
     VideoClarity.HIGHEST -> R.string.settings_clarity_highest_short
+    VideoClarity.STEADY -> R.string.settings_clarity_steady_short
 }
 
 @Composable
@@ -45,5 +46,6 @@ private fun clarityLabel(clarity: VideoClarity): String {
         VideoClarity.STANDARD -> stringResource(R.string.settings_clarity_standard)
         VideoClarity.HIGH -> stringResource(R.string.settings_clarity_high, mbps)
         VideoClarity.HIGHEST -> stringResource(R.string.settings_clarity_highest, mbps)
+        VideoClarity.STEADY -> stringResource(R.string.settings_clarity_steady, mbps, (clarity.minBitrate ?: 0) / 1_000_000)
     }
 }

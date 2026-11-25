@@ -49,6 +49,19 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
         set(value) = prefs.edit { putBoolean(KEY_NOTIFICATION_ASKED, value) }
 
+    /**
+     * 诊断日志上传的日志服务器：填到端口即可（例如 http://121.36.29.74:3800），上报时拼 /logs。
+     * 代码里带默认值（自己部署的日志服务器），清空保存即恢复默认。
+     */
+    var logServerUrl: String
+        get() = prefs.getString(KEY_LOG_SERVER_URL, null)?.trim().takeUnless { it.isNullOrEmpty() } ?: DEFAULT_LOG_SERVER_URL
+        set(value) = prefs.edit { putString(KEY_LOG_SERVER_URL, value.trim()) }
+
+    /** 日志服务器的上报令牌（X-Report-Token 头）；没填则不带头上报。 */
+    var logServerToken: String
+        get() = prefs.getString(KEY_LOG_SERVER_TOKEN, null)?.trim().takeUnless { it.isNullOrEmpty() } ?: DEFAULT_LOG_SERVER_TOKEN
+        set(value) = prefs.edit { putString(KEY_LOG_SERVER_TOKEN, value.trim()) }
+
     private companion object {
         const val FILE = "openhc-settings"
         const val KEY_FPS = "fps"
@@ -57,5 +70,9 @@ class AppSettings(context: Context) {
         const val KEY_USB_ATTACH_ACCEPTED = "usb_attach_accepted"
         const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
         const val KEY_FULL_SCREEN = "full_screen"
+        const val KEY_LOG_SERVER_URL = "log_server_url"
+        const val KEY_LOG_SERVER_TOKEN = "log_server_token"
+        const val DEFAULT_LOG_SERVER_URL = "http://121.36.29.74:3800"
+        const val DEFAULT_LOG_SERVER_TOKEN = "a7b140f74313db0fbf09001528b48c65"
     }
 }

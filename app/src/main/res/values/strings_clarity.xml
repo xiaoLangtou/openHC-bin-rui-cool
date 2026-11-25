@@ -5,5 +5,6 @@
     <string name="settings_clarity_standard">标准（默认）：手机按自己的默认码率</string>
     <string name="settings_clarity_high">高：%1$d Mbps</string>
     <string name="settings_clarity_highest">最高：%1$d Mbps</string>
+    <string name="settings_clarity_steady">稳定（实验）：目标 %1$d Mbps，并要求手机码率不低于 %2$d Mbps，静止文字更清楚</string>
     <string name="settings_clarity_hint">越高画面越清楚，手机也越耗电、越容易发热（发热后手机会自己降帧）；无线连接时码率越高越容易卡。有线、无线都按这里声明，下次连接生效。</string>
 </resources>

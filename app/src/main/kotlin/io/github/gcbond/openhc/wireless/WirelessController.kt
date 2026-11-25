@@ -479,12 +479,14 @@ class WirelessController(
         }
         // 二维码、握手、认证里的车机身份都由它推出，必须是真实地址：读不到就只能让车主填。
         val systemAddress = DeviceInfo.systemBluetoothAddress()
-        val bluetooth = BluetoothAddressPolicy.chooseForWireless(systemAddress, settings.manualBluetoothAddress)
+        val localAdapter = DeviceInfo.localBluetoothAddress(app)
+        val bluetooth = BluetoothAddressPolicy.chooseForWireless(systemAddress, localAdapter, settings.manualBluetoothAddress)
         val address = bluetooth.address
             ?: return blocked(kind, WirelessNotice.BluetoothAddressMissing, AutoHold.BLUETOOTH_ADDRESS_MISSING)
-        // 无线用系统里读到的真实地址；手填的只在读不到时用。手填的像编出来的地址时，界面提醒一句。
+        Log.i(TAG, "蓝牙地址来源 ${bluetooth.source}：$address")
+        // 无线用自动读到的真实地址；手填的只在读不到时用。手填的像编出来的地址时，界面提醒一句。
         val manual = BluetoothAddressPolicy.normalize(settings.manualBluetoothAddress)
-        if (bluetooth.source == BluetoothSource.SYSTEM_PROPERTY && manual != null && manual != address) {
+        if (bluetooth.source != BluetoothSource.MANUAL && manual != null && manual != address) {
             Log.i(TAG, "手填的蓝牙地址和系统里读到的不同：无线用系统里的真实地址，手填的只用于有线")
         }
         val addressMismatch = bluetooth.source == BluetoothSource.MANUAL && BluetoothAddressPolicy.isLocallyAdministered(address)
@@ -830,7 +832,7 @@ class WirelessController(
     private fun reconnectConditions(forDial: Boolean = false): ReconnectPolicy.Conditions {
         val adapter = BluetoothStatus.adapter(app)
         val sdk = Build.VERSION.SDK_INT
-        val address = BluetoothAddressPolicy.chooseForWireless(DeviceInfo.systemBluetoothAddress(), settings.manualBluetoothAddress).address
+        val address = BluetoothAddressPolicy.chooseForWireless(DeviceInfo.systemBluetoothAddress(), DeviceInfo.localBluetoothAddress(app), settings.manualBluetoothAddress).address
         return ReconnectPolicy.Conditions(
             enabled = forDial || wirelessPrefs.connectOnBluetooth,
             wiredOnly = wirelessPrefs.wiredOnly,
@@ -1108,6 +1110,7 @@ class WirelessController(
             }
             is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
             SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("无线 #${current.id}")
+            is SessionEvent.MediaMetadataUpdated -> MediaKeys.onMetadata(app, event.metadata)
             else -> Unit
         }
     }

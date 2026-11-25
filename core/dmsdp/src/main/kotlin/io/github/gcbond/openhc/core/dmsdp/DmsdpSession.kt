@@ -60,6 +60,7 @@ class DmsdpSession(
     // 理论上不依赖融合桌面；实弹验证时 _launcher 也在场，这次单独开就是验证它到底依不依赖（2026-11-24）。
     // 若实车发现它也触发窗口化，就证明元数据真的挂在融合桌面上，只能等桌面参数修对后一起回来。
     private var metadataRequested = false
+    private var metadataRequestedOnDisplayStart = false
     private val files = config.fileShare?.let { IncomingFileTransfer(config, it) }
     private val speaker = config.speaker?.let {
         SpeakerSession(it, cipher, audioListener, ::sendSpeakerText) { nextCSeq++ }
@@ -528,13 +529,17 @@ class DmsdpSession(
                     // 手机不会主动推音频元数据/歌词，必须车机先请求（2026-11-23 实弹验证，当时 _launcher 在场）。
                     if (config.requestMetadata && event is DmsdpEvent.ServicesRequested && !metadataRequested) {
                         metadataRequested = true
-                        sendRecord(
-                            MODULE_MANAGEMENT,
-                            ManagementMessages.METADATA_REQUEST_TYPE,
-                            JsonCodec.encodeToUtf8(ManagementMessages.metadataRequest(config.host.fullModel)),
-                            out,
-                        )
-                        out.event(DmsdpEvent.ManagementParsed(ManagementMessages.METADATA_REQUEST_TYPE, "已请求应用元数据（RequestAAData=7，RequestCaller=${config.host.fullModel}）"))
+                        sendMetadataRequest("服务协商完成", out)
+                    }
+                    // 手机端 MediaClient (s.java) 只有在投屏虚拟桌面 CarLauncher 创建完成后才转发媒体回调；
+                    // 实测日志显示 VideoStarted 后手机紧接着发 ServiceStatusChanged(serviceType=8, action=202)，
+                    // 此刻 CarLauncher 已完成初始化，补发一次 514 触发手机端 sendCurrentDataToCar()。
+                    if (config.requestMetadata && event is DmsdpEvent.ServiceStatusChanged &&
+                        !metadataRequestedOnDisplayStart &&
+                        (event.serviceType == 8L || event.serviceType == 1L)
+                    ) {
+                        metadataRequestedOnDisplayStart = true
+                        sendMetadataRequest("显示服务状态同步(action=${event.action})", out)
                     }
                 },
             )
@@ -618,6 +623,21 @@ class DmsdpSession(
     /** 扬声器的消息只在加密的控制连接上发；控制连接已经不在加密状态（例如被手机关了）时丢掉。 */
     private fun sendSpeakerText(text: ByteArray, out: Outputs) {
         if (controlState == ControlState.ENCRYPTED) sendText(text, out)
+    }
+
+    private fun sendMetadataRequest(reason: String, out: Outputs) {
+        sendRecord(
+            MODULE_MANAGEMENT,
+            ManagementMessages.METADATA_REQUEST_TYPE,
+            JsonCodec.encodeToUtf8(ManagementMessages.metadataRequest(config.host.fullModel)),
+            out,
+        )
+        out.event(
+            DmsdpEvent.ManagementParsed(
+                ManagementMessages.METADATA_REQUEST_TYPE,
+                "已请求应用元数据（$reason，RequestAAData=127，RequestCaller=${config.host.fullModel}）",
+            ),
+        )
     }
 
     private fun sendRecord(module: Long, type: Int, data: ByteArray, out: Outputs) {

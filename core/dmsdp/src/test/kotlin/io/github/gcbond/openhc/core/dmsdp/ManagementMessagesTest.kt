@@ -76,4 +76,27 @@ class ManagementMessagesTest {
         assertFalse(ManagementMessages.accepts(17))
         assertTrue(ManagementMessages.accepts(500))
     }
+
+    @Test
+    fun mediaData515FullAndElapsedTimeTickAreExtracted() {
+        val full = ManagementMessages.parse(
+            515,
+            """{"MediaData":{"Name":"晴天","Artist":"周杰伦","AlbumName":"叶惠美","TotalTime":269,"ElapsedTime":15,"Status":3,"AlbumArtIcon":[1,2,-1]}}""".toByteArray(),
+        )
+        assertTrue(full != null && full.mediaData != null && full.reply != null)
+        val info = ManagementMessages.extractMediaData(full!!.mediaData!!)
+        assertEquals("晴天", info.title)
+        assertEquals("周杰伦", info.artist)
+        assertEquals("叶惠美", info.album)
+        assertEquals(269, info.totalTimeSec)
+        assertEquals(15, info.elapsedTimeSec)
+        assertEquals(3, info.status)
+        assertTrue(info.albumArtBytes.contentEquals(byteArrayOf(1, 2, -1)))
+
+        val tick = ManagementMessages.parse(515, """{"ElapsedTime":42}""".toByteArray())
+        assertTrue(tick != null && tick.mediaData != null && tick.reply != null)
+        val tickInfo = ManagementMessages.extractMediaData(tick!!.mediaData!!)
+        assertNull(tickInfo.title)
+        assertEquals(42, tickInfo.elapsedTimeSec)
+    }
 }

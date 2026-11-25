@@ -21,10 +21,17 @@ enum class VideoClarity(
     val key: String,
     /** 声明给手机的目标码率；null 表示不声明，由手机决定。 */
     val bitrate: Int?,
+    /** 声明的码率下限（官方 1029）；null 不声明。手机的可变码率编码器不会把静止画面压到它以下。 */
+    val minBitrate: Int? = null,
+    /** 声明的码率上限（官方 1028）；null 不声明。 */
+    val maxBitrate: Int? = null,
 ) {
     STANDARD("standard", null),
     HIGH("high", 12_000_000),
     HIGHEST("highest", 15_000_000),
+
+    /** 实验档：目标 12 Mbps，并声明下限 8 Mbps、上限 15 Mbps，减轻静止文字的轻微模糊。 */
+    STEADY("steady", 12_000_000, 8_000_000, 15_000_000),
     ;
 
     companion object {
@@ -56,6 +63,6 @@ fun DisplaySettings.withClarity(clarity: VideoClarity): DisplaySettings = Displa
     density = density,
     gop = gop,
     bitrate = clarity.bitrate ?: bitrate,
-    maxBitrate = maxBitrate,
-    minBitrate = minBitrate,
+    maxBitrate = clarity.maxBitrate,
+    minBitrate = clarity.minBitrate,
 )

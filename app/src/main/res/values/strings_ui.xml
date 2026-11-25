@@ -25,5 +25,6 @@
     <string name="settings_clarity_standard_short">标准</string>
     <string name="settings_clarity_high_short">高</string>
     <string name="settings_clarity_highest_short">最高</string>
+    <string name="settings_clarity_steady_short">稳定</string>
     <string name="settings_bt_value_missing">未取到</string>
 </resources>

@@ -120,6 +120,9 @@ internal class DeviceMessageHandler(
                 put("1014", d.codec)
                 d.gop?.let { put("1016", it) }
                 d.bitrate?.let { put("1017", it) }
+                // 码率上下限：只在显式配置（清晰度「稳定」档）时声明，默认不发。
+                d.maxBitrate?.takeIf { it > 0 }?.let { put("1028", it) }
+                d.minBitrate?.takeIf { it > 0 }?.let { put("1029", it) }
             }
             // 手机按这个值（设备信息 detail 里的 CAR_MODE_ID）比对 ConvergedLauncherController
             // 白名单，决定 HiCar 应用列表"车辆"磁贴是否可点；必须用白名单内的型号（v10 起 00048900）。

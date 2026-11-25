@@ -317,7 +317,7 @@ object WirelessReducer {
      */
     private fun feedsProjection(event: SessionEvent): Boolean = when (event) {
         is SessionEvent.AuthStarted, is SessionEvent.Authenticated, is SessionEvent.ShowPinCode,
-        is SessionEvent.ControlListening, is SessionEvent.Ended,
+        is SessionEvent.ControlListening, is SessionEvent.Ended, is SessionEvent.MediaMetadataUpdated,
         -> false
         else -> true
     }

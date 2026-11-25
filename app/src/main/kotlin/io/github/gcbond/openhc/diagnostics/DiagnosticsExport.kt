@@ -15,11 +15,14 @@ import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.WirelessPreferences
 import io.github.gcbond.openhc.startup.BootStart
 import io.github.gcbond.openhc.wireless.WirelessPermissions
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.io.Writer
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -34,6 +37,9 @@ import java.util.Locale
  * 阻塞：要读写几 MB 文件，别在界面线程上调。
  */
 internal object DiagnosticsExport {
+    /** 服务器应答里的记录 id（`{"ok":true,"id":"…"}`），给车主看上传落到了哪条。 */
+    private val ID_FIELD = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"")
+
     sealed class Result {
         /** 存好了；[location] 是给车主看的位置。 */
         class Saved(val location: String) : Result()
@@ -43,11 +49,11 @@ internal object DiagnosticsExport {
 
     fun export(context: Context): Result {
         val app = context.applicationContext ?: context
-        LogRecorder.flush()
         val now = Date()
         val name = DiagnosticsReport.fileName(SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(now))
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) saveToDownloads(app, name, now) else saveToAppFolder(app, name, now)
+            val text = reportText(app, now)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) saveToDownloads(app, name, text) else saveToAppFolder(app, name, text)
         } catch (e: IOException) {
             Result.Failed(describe(e))
         } catch (e: RuntimeException) {
@@ -55,8 +61,55 @@ internal object DiagnosticsExport {
         }
     }
 
+    /**
+     * 「上传诊断日志」：把和导出一样的全文以 text/plain POST 给日志服务器（HttpURLConnection，安卓 9 自带，不用引依赖）。
+     * 服务器地址和令牌在 [AppSettings]；服务器只认 2xx。阻塞（几 MB 文本 + 网络），别在界面线程上调。
+     */
+    fun upload(context: Context): Result {
+        val app = context.applicationContext ?: context
+        val settings = AppSettings(app)
+        val base = settings.logServerUrl.trimEnd('/')
+        if (!base.startsWith("http://") && !base.startsWith("https://")) return Result.Failed("服务器地址要以 http:// 或 https:// 开头")
+        return try {
+            val text = reportText(app, Date())
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            val conn = URL("$base/logs").openConnection() as HttpURLConnection
+            try {
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 5000
+                conn.readTimeout = 15000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                settings.logServerToken.takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("X-Report-Token", it) }
+                conn.setFixedLengthStreamingMode(bytes.size)
+                conn.outputStream.use { it.write(bytes) }
+                val code = conn.responseCode
+                val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                if (code !in 200..299) {
+                    Result.Failed("服务器返回 HTTP $code${if (body.isNotBlank()) "（${body.take(120)}）" else ""}")
+                } else {
+                    Result.Saved(ID_FIELD.find(body)?.groupValues?.get(1)?.let { "已上传，服务器记录 id=$it" } ?: "已上传")
+                }
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: IOException) {
+            Result.Failed(describe(e))
+        } catch (e: RuntimeException) {
+            Result.Failed(describe(e))
+        }
+    }
+
+    /** 生成诊断报告全文（导出和上传共用）。阻塞：要读几 MB 文件，别在界面线程上调。 */
+    private fun reportText(app: Context, now: Date): String {
+        LogRecorder.flush()
+        val bytes = ByteArrayOutputStream()
+        bytes.writer(Charsets.UTF_8).use { writeReport(app, it, now) }
+        return bytes.toString()
+    }
     @TargetApi(Build.VERSION_CODES.Q)
-    private fun saveToDownloads(app: Context, name: String, now: Date): Result {
+    private fun saveToDownloads(app: Context, name: String, text: String): Result {
         val resolver = app.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -68,7 +121,7 @@ internal object DiagnosticsExport {
             ?: return Result.Failed("系统不让在「下载」里建文件")
         try {
             val out = resolver.openOutputStream(uri) ?: throw IOException("打不开要写的文件")
-            out.use { writeReport(app, it, now) }
+            out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
@@ -79,17 +132,16 @@ internal object DiagnosticsExport {
         return Result.Saved("下载/${DiagnosticsReport.FOLDER}/$name")
     }
 
-    private fun saveToAppFolder(app: Context, name: String, now: Date): Result {
+    private fun saveToAppFolder(app: Context, name: String, text: String): Result {
         val base = app.getExternalFilesDir(null) ?: return Result.Failed("读不到存储（可能没挂载）")
         val dir = File(base, DiagnosticsReport.FOLDER)
         if (!dir.isDirectory && !dir.mkdirs()) return Result.Failed("建不了文件夹 ${dir.absolutePath}")
         val file = File(dir, name)
-        FileOutputStream(file).use { writeReport(app, it, now) }
+        FileOutputStream(file).use { it.write(text.toByteArray(Charsets.UTF_8)) }
         return Result.Saved(file.absolutePath)
     }
 
-    private fun writeReport(app: Context, out: OutputStream, now: Date) {
-        val writer = out.bufferedWriter(Charsets.UTF_8)
+    private fun writeReport(app: Context, writer: Writer, now: Date) {
         writer.write(DiagnosticsReport.header(facts(app, now)))
         LogRecorder.crashFile()?.let {
             writer.write(DiagnosticsReport.section("上次崩溃的记录"))

@@ -11,21 +11,26 @@ import kotlin.test.assertNull
 class BluetoothAddressPolicyTest {
 
     private val property = "0A:1B:2C:3D:4E:5F"
+    private val adapter = "C4:06:83:11:22:33"
     private val manual = "02:12:34:56:78:9A"
 
     @Test
-    fun wirelessPrefersSystemPropertyThenManual() {
+    fun wirelessPrefersSystemPropertyThenAdapterThenManual() {
         assertEquals(
             BluetoothChoice(property, BluetoothSource.SYSTEM_PROPERTY),
-            BluetoothAddressPolicy.chooseForWireless(property, manual),
+            BluetoothAddressPolicy.chooseForWireless(property, adapter, manual),
         )
-        assertEquals(BluetoothChoice(manual, BluetoothSource.MANUAL), BluetoothAddressPolicy.chooseForWireless(null, manual))
+        assertEquals(
+            BluetoothChoice(adapter, BluetoothSource.LOCAL_ADAPTER),
+            BluetoothAddressPolicy.chooseForWireless(null, adapter, manual),
+            "没有车机系统属性时用本机适配器",
+        )
         assertEquals(
             BluetoothChoice(manual, BluetoothSource.MANUAL),
-            BluetoothAddressPolicy.chooseForWireless("02:00:00:00:00:00", manual),
-            "系统属性是占位值时退到手填的",
+            BluetoothAddressPolicy.chooseForWireless("02:00:00:00:00:00", "02:00:00:00:00:00", manual),
+            "系统属性和本机适配器都是占位值时退到手填的",
         )
-        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.chooseForWireless(null, ""))
+        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.chooseForWireless(null, null, ""))
     }
 
     @Test
@@ -39,29 +44,43 @@ class BluetoothAddressPolicyTest {
 
     @Test
     fun manualWins() {
-        assertEquals(BluetoothChoice(manual, BluetoothSource.MANUAL), BluetoothAddressPolicy.choose(property, manual))
+        assertEquals(BluetoothChoice(manual, BluetoothSource.MANUAL), BluetoothAddressPolicy.choose(property, adapter, manual))
     }
 
     @Test
     fun systemPropertyIsUsedWhenManualIsMissingOrUnusable() {
         val expected = BluetoothChoice(property, BluetoothSource.SYSTEM_PROPERTY)
         for (bad in listOf(null, "", "   ", "garbage", "00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF", "02:00:00:00:00:00")) {
-            assertEquals(expected, BluetoothAddressPolicy.choose(property, bad), "手填值：$bad")
+            assertEquals(expected, BluetoothAddressPolicy.choose(property, adapter, bad), "手填值：$bad")
         }
     }
 
     @Test
-    fun manualIsUsedWhenThePropertyIsMissingOrUnusable() {
+    fun localAdapterIsUsedWhenPropertyIsUnusable() {
+        assertEquals(
+            BluetoothChoice(adapter, BluetoothSource.LOCAL_ADAPTER),
+            BluetoothAddressPolicy.choose("02:00:00:00:00:00", adapter, null),
+            "系统属性是占位值时退到本机适配器",
+        )
+        // 有线路径手填优先于本机适配器（可以借手填换一个身份）。
+        assertEquals(
+            BluetoothChoice(manual, BluetoothSource.MANUAL),
+            BluetoothAddressPolicy.choose(null, adapter, manual),
+        )
+    }
+
+    @Test
+    fun manualIsUsedWhenNothingElseIsUsable() {
         val expected = BluetoothChoice(manual, BluetoothSource.MANUAL)
         for (bad in listOf(null, "", "   ", "garbage", "00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF", "02:00:00:00:00:00")) {
-            assertEquals(expected, BluetoothAddressPolicy.choose(bad, manual), "属性值：$bad")
+            assertEquals(expected, BluetoothAddressPolicy.choose(bad, null, manual), "属性值：$bad")
         }
     }
 
     @Test
     fun unavailableWhenNeitherIsUsable() {
-        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.choose(null, null))
-        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.choose("", "12:34"))
+        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.choose(null, null, null))
+        assertEquals(BluetoothChoice(null, BluetoothSource.UNAVAILABLE), BluetoothAddressPolicy.choose("", null, "12:34"))
     }
 
     @Test
