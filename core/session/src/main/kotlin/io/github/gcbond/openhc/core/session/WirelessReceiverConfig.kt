@@ -51,6 +51,8 @@ class WirelessReceiverConfig(
     val extraDmsdpServices: List<DmsdpConfig.Service> = emptyList(),
     /** 服务协商完成后主动请求应用元数据（514/515）。手机可见的行为，由 app 层显式打开。 */
     val requestMetadata: Boolean = false,
+    /** 车机品牌图标（PNG 字节），规则与有线的 [ReceiverConfig.brandIcon] 相同；null（默认）不回。 */
+    val brandIcon: ByteArray? = null,
 ) {
     /** 本机 deviceId（64 位大写十六进制），与有线同一算法。 */
     val deviceId: String
@@ -92,6 +94,7 @@ class WirelessReceiverConfig(
         mediaKeyInput = mediaKeyInput,
         audio = audio,
         extraDmsdpServices = extraDmsdpServices,
+        brandIcon = brandIcon,
     )
 
     internal fun authConfig(pinCode: String): HiCarAuthConfig =

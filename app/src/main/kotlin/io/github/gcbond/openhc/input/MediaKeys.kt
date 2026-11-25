@@ -8,6 +8,7 @@ import io.github.gcbond.openhc.core.dmsdp.DmsdpMediaData
 import io.github.gcbond.openhc.core.hisight.HiSightInput
 import io.github.gcbond.openhc.core.session.SessionAction
 import io.github.gcbond.openhc.core.session.SessionOutput
+import io.github.gcbond.openhc.media.CarIntegrationBridge
 import io.github.gcbond.openhc.media.ClusterMediaBridge
 import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.MediaKeyForwarder
@@ -78,6 +79,23 @@ object MediaKeys {
             Log.i(TAG, "按键停用（${target.label}）：连接结束，媒体键交还车机")
             updateSession("连接结束")
         }
+    }
+
+    /** 收到手机 505 语音拾音状态（任意线程）：抑制/恢复车机本地语音（反射，无对应系统库时静默跳过）。 */
+    fun onVoiceStateChanged(context: Context, state: Int) {
+        val app = context.applicationContext ?: context
+        main.post { CarIntegrationBridge.enableVr(app, state == 0) }
+    }
+
+    /** 收到手机 504 通话状态（任意线程）：同步给 [ClusterMediaBridge]（通话期间不推音乐、不抢焦点）。 */
+    fun onCallStateChanged(state: Int) {
+        main.post { clusterBridge.onCallStateChanged(state) }
+    }
+
+    /** 收到手机 503 导航焦点 HICAR（任意线程）：让出车机原厂导航（反射，无对应系统库时静默跳过）。 */
+    fun onNaviFocusRequested(context: Context) {
+        val app = context.applicationContext ?: context
+        main.post { CarIntegrationBridge.yieldNativeNavi(app) }
     }
 
     /** 收到手机 515 推来的音频元数据或播放进度：同步到 MediaKeySession（供 CoolHome 与 CarMedia 读取）并推送歌词到 CarMedia。 */

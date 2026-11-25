@@ -24,6 +24,8 @@ import io.github.gcbond.openhc.core.session.SessionEvent
 import io.github.gcbond.openhc.core.session.SocketRunner
 import io.github.gcbond.openhc.core.session.VideoParameters
 import io.github.gcbond.openhc.input.MediaKeys
+import io.github.gcbond.openhc.media.CarBrandIcon
+import io.github.gcbond.openhc.media.CarIntegrationBridge
 import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.VideoDecoder
 import io.github.gcbond.openhc.platform.net.VpnConsent
@@ -331,6 +333,7 @@ class ConnectionController(context: Context) {
                 mediaKeyInput = MediaKeyPreferences(app).enabled,
                 audio = audio,
                 mic = mic,
+                brandIcon = CarBrandIcon.bytes(app),
             )
         } catch (e: IllegalArgumentException) {
             return block(Notice.StartFailed("配置不合法：${e.message}"))
@@ -505,12 +508,46 @@ class ConnectionController(context: Context) {
                 current.inputReady = current.touchNegotiated && !current.tearingDown
                 if (current.keyNegotiated && !current.tearingDown) MediaKeys.ready(app, current.keys)
             }
-            is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
+            is SessionEvent.DeviceSessionReady -> {
+                CarHome.onDeviceSessionReady()
+                // 原厂吉利对齐：设备会话就绪后把日夜模式（501）和驻车态（506）发一次给手机。
+                sendDayNight(current, "设备会话就绪")
+                current.runner.submit { current.session.sendDrivingMode(false) }
+            }
             SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("有线 #${current.id}")
             is SessionEvent.MediaMetadataUpdated -> MediaKeys.onMetadata(app, event.metadata)
-            is SessionEvent.Ended -> if (current.tearingDown) maybeFinish(current) else teardown(current)
+            // 原厂吉利对齐（需求文档模块 B）：
+            is SessionEvent.ForegroundLaunchRequested ->
+                ForegroundLauncher.launch(app, "有线 #${current.id} action=${event.action}")
+            is SessionEvent.NaviFocusRequested -> MediaKeys.onNaviFocusRequested(app)
+            is SessionEvent.PhoneCallStateChanged -> {
+                MediaKeys.onCallStateChanged(event.state)
+                CarIntegrationBridge.writeLinkIncallState(app, event.state)
+            }
+            is SessionEvent.PhoneVoiceStateChanged -> MediaKeys.onVoiceStateChanged(app, event.state)
+            is SessionEvent.Ended -> {
+                CarIntegrationBridge.writeLinkIncallState(app, 0)
+                if (current.tearingDown) maybeFinish(current) else teardown(current)
+            }
             else -> Unit
         }
+    }
+
+    /** 把车机当前日夜模式发给手机（501，原厂吉利对齐）。投屏开始（VideoStarted）与 uiMode 切换时也调。 */
+    private fun sendDayNight(current: Attempt, reason: String) {
+        val night = isNightMode()
+        Log.i(TAG, "发送日夜模式（$reason）：${if (night) "night" else "day"}")
+        current.runner.submit { current.session.sendDayNightMode(night) }
+    }
+
+    /** 车机 uiMode 现在是不是夜间（原厂判据：UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES）。 */
+    private fun isNightMode(): Boolean =
+        (app.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    /** uiMode 昼夜切换（MainActivity.onConfigurationChanged 调）：给当前活跃的会话补发 501。 */
+    fun onUiModeChanged() {
+        attempt?.let { sendDayNight(it, "uiMode 切换") }
     }
 
     private fun startWired(current: Attempt, port: Int) {

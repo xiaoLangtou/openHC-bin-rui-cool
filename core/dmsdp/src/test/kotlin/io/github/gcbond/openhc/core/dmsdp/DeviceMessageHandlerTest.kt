@@ -98,7 +98,7 @@ class DeviceMessageHandlerTest {
         }
         val noDisplay = DeviceMessageHandler(Synthetic.config(display = null))
         assertTrue(noDisplay.run(hex("e8ffffffff")).replies.isEmpty(), "默认不声明显示")
-        assertEquals("{\"2003\":\"ABCDEF01\"}", noDisplay.localDeviceObject()["properties"].toString(), "没有显示就不带视频属性")
+        assertEquals("{\"2003\":\"ABCDEF01\",\"5007\":true,\"5042\":true,\"5032\":true}", noDisplay.localDeviceObject()["properties"].toString(), "没有显示就不带视频属性（5007 兼容/5042 元数据/5032 文件分享，实车基线）")
     }
 
     /** 扩展点：显示以外的服务按各自的服务类型位回应，显示在前。 */

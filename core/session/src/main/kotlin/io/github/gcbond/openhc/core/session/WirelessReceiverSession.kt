@@ -465,6 +465,27 @@ class WirelessReceiverSession internal constructor(
         return w.sendAudioFocus(change).map { WirelessOutput.Common(it) }
     }
 
+    /** 主动给手机发一条设备数据，规则同 [ReceiverSession.sendDeviceData]；WiFi 阶段之前返回空列表。 */
+    fun sendDeviceData(module: Long, type: Int, data: ByteArray): List<WirelessOutput> {
+        if (ended) return emptyList()
+        val w = wired ?: return emptyList()
+        return w.sendDeviceData(module, type, data).map { WirelessOutput.Common(it) }
+    }
+
+    /** 把车机日夜模式告诉手机（管理通道 501，吉利原厂对齐）；WiFi 阶段之前返回空列表。 */
+    fun sendDayNightMode(night: Boolean): List<WirelessOutput> {
+        if (ended) return emptyList()
+        val w = wired ?: return emptyList()
+        return w.sendDayNightMode(night).map { WirelessOutput.Common(it) }
+    }
+
+    /** 把驻车/行车状态告诉手机（管理通道 506，吉利原厂对齐）；WiFi 阶段之前返回空列表。 */
+    fun sendDrivingMode(driving: Boolean): List<WirelessOutput> {
+        if (ended) return emptyList()
+        val w = wired ?: return emptyList()
+        return w.sendDrivingMode(driving).map { WirelessOutput.Common(it) }
+    }
+
     // ---------------- 蓝牙控制通道 ----------------
 
     private fun handleBluetooth(outputs: List<BluetoothOutput>, nowMillis: Long, out: Out) {

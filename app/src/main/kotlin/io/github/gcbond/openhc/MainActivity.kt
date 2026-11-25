@@ -129,6 +129,19 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * 车机 uiMode 昼夜切换（大灯/暗色模式）：给当前活跃的有线/无线会话补发 501 `{"dayNightMode":…}`，
+     * 手机高德/百度地图和 HiCar 桌面随车机换日夜间皮肤（原厂 HiCarService2 onConfigurationChanged 同款，需求文档第 2 项）。
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val night = (newConfig.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        Log.i(TAG, "uiMode 切换：${if (night) "夜间" else "日间"}，补发日夜模式给手机")
+        controller.onUiModeChanged()
+        wireless.onUiModeChanged()
+    }
+
+    /**
      * 界面没处理的方向盘、媒体键交给 [io.github.gcbond.openhc.input.MediaKeys]：有能发键的连接时转给手机并吃掉，
      * 系统就不再把它派给别的媒体应用；没有连接时照常交给系统。
      */

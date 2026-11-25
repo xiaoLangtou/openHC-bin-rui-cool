@@ -99,4 +99,71 @@ class ManagementMessagesTest {
         assertNull(tickInfo.title)
         assertEquals(42, tickInfo.elapsedTimeSec)
     }
+
+    // ---- 原厂吉利 HiCar 对齐（需求文档模块 A/B）----
+
+    @Test
+    fun brandIcon502RequestIsFlaggedForRawByteReply() {
+        // 手机发 {"brandIconData":"PNG"} 请求品牌图标；应答是原始 PNG 字节（由 DmsdpSession 发，不是 JSON）。
+        val parsed = ManagementMessages.parse(502, """{"brandIconData":"PNG"}""".toByteArray())
+        assertTrue(parsed != null && parsed.brandIconRequested, parsed?.summary ?: "null")
+        assertTrue("brandIconData" in parsed!!.summary, parsed.summary)
+        // 其他类型带同样的键不认成 502 请求（type 限定）。
+        val otherType = ManagementMessages.parse(600, """{"brandIconData":"PNG"}""".toByteArray())
+        assertTrue(otherType != null && !otherType.brandIconRequested)
+    }
+
+    @Test
+    fun navFocus503HiCarIsFlagged() {
+        val hiCar = ManagementMessages.parse(503, """{"navFocus":"HICAR","navPackageName":"com.autonavi.minimap"}""".toByteArray())
+        assertTrue(hiCar != null && hiCar.navFocusHiCar, hiCar?.summary ?: "null")
+
+        // HICAR_STOP（手机导航结束）不是请求焦点，不触发让出原厂导航。
+        val stop = ManagementMessages.parse(503, """{"navFocus":"HICAR_STOP"}""".toByteArray())
+        assertTrue(stop != null && !stop.navFocusHiCar)
+
+        // NATIVE（原厂车机让出焦点）也不触发。
+        val native = ManagementMessages.parse(503, """{"navFocus":"NATIVE"}""".toByteArray())
+        assertTrue(native != null && !native.navFocusHiCar)
+    }
+
+    @Test
+    fun callState504AndVoiceState505AreExtracted() {
+        val ringing = ManagementMessages.parse(504, """{"callState":1}""".toByteArray())
+        assertTrue(ringing != null && ringing.callState == 1, ringing?.summary ?: "null")
+        val idle = ManagementMessages.parse(504, """{"callState":0}""".toByteArray())
+        assertTrue(idle != null && idle.callState == 0)
+        // 缺键时不给状态（app 层不动作）。
+        val missing = ManagementMessages.parse(504, """{"foo":1}""".toByteArray())
+        assertTrue(missing != null && missing.callState == null)
+
+        val picking = ManagementMessages.parse(505, """{"voiceState":1}""".toByteArray())
+        assertTrue(picking != null && picking.voiceState == 1, picking?.summary ?: "null")
+        val done = ManagementMessages.parse(505, """{"voiceState":0}""".toByteArray())
+        assertTrue(done != null && done.voiceState == 0)
+    }
+
+    @Test
+    fun voicePrompt519RequestIsFlaggedAndReplyIsConfigurable() {
+        val parsed = ManagementMessages.parse(519, """{"isVoicePromptSupport":1}""".toByteArray())
+        assertTrue(parsed != null && parsed.voicePromptRequested, parsed?.summary ?: "null")
+        assertTrue("isVoicePromptSupport" in parsed!!.summary, parsed.summary)
+
+        // 应答 JSON 按文档约定 isVoicePromptSupport=0（手机侧播提示音；原厂实测回 2，可配）。
+        val reply = ManagementMessages.voicePromptReply(0)
+        assertEquals("""{"isVoicePromptSupport":0}""", reply.toString())
+
+        // 519 不带 isVoicePromptSupport 键时不应答。
+        val other = ManagementMessages.parse(519, """{"voicePrompt":1}""".toByteArray())
+        assertTrue(other != null && !other.voicePromptRequested)
+    }
+
+    @Test
+    fun dayNightMode501AndDrivingMode506Builders() {
+        assertEquals("""{"dayNightMode":"night"}""", ManagementMessages.dayNightMode(true).toString())
+        assertEquals("""{"dayNightMode":"day"}""", ManagementMessages.dayNightMode(false).toString())
+        // 506：0 = 驻车（允许操作/看视频），1 = 行车限制态。
+        assertEquals("""{"drivingMode":"0"}""", ManagementMessages.drivingMode(false).toString())
+        assertEquals("""{"drivingMode":"1"}""", ManagementMessages.drivingMode(true).toString())
+    }
 }

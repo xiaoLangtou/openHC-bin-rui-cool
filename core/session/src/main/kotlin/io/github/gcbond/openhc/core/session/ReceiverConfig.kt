@@ -87,6 +87,11 @@ class ReceiverConfig(
      * 其他服务（媒体卡片、集成等）由这里声明。
      */
     val extraDmsdpServices: List<DmsdpConfig.Service> = emptyList(),
+    /**
+     * 车机品牌图标（PNG 字节）：手机发 502 请求时原样回给手机（HiCar 桌面车标，吉利原厂对齐）。
+     * 字节从 app 层资源读出来传入，核心层不碰 Android。null（默认）不回。
+     */
+    val brandIcon: ByteArray? = null,
 ) {
     /** 本机 deviceId（64 位大写十六进制）：认证里的本机身份、设备会话里的本机标识都用它。 */
     val deviceId: String = NearbySession.deviceId(identity.host, bluetoothAddress)
@@ -136,6 +141,7 @@ class ReceiverConfig(
         mic = mic?.let { DmsdpConfig.Mic(it.profile) },
         additionalServices = extraDmsdpServices,
         phoneVersion = phoneVersion,
+        brandIcon = brandIcon,
     )
 
     /** 投屏能力：屏幕和允许的编码尺寸都取画布尺寸（编码尺寸不超过画布）。 */

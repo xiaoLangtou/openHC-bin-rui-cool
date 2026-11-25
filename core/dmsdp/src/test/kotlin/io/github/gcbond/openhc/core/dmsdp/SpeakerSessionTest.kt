@@ -573,9 +573,9 @@ class SpeakerSessionTest {
     fun audioFocusMessagesAreReportedWithoutReply() {
         val audio = AudioRecorder()
         val session = speakerSession(audio = audio)
-        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(1, "1"), 0).isEmpty(), "焦点消息不回应")
-        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(5, "1"), 0).isEmpty())
-        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(14, "{\"contentType\":1,\"focusType\":3,\"usage\":12}"), 0).isEmpty())
+        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(1, "1"), 0).withoutRaw().isEmpty(), "焦点消息不回应")
+        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(5, "1"), 0).withoutRaw().isEmpty())
+        assertTrue(session.feed(DmsdpChannel.CONTROL, focus(14, "{\"contentType\":1,\"focusType\":3,\"usage\":12}"), 0).withoutRaw().isEmpty())
         val messages = audio.events.filterIsInstance<AudioEvent.PhoneFocus>().map { it.message }
         assertEquals(
             listOf(PhoneAudioFocus.Action.REQUEST, PhoneAudioFocus.Action.ABANDON, PhoneAudioFocus.Action.REQUEST),
@@ -586,7 +586,7 @@ class SpeakerSessionTest {
         assertTrue(audio.events.any { it is AudioEvent.Note && "看出手机在分流" in it.message })
         // 没声明扬声器时照旧按未处理交出。
         val (plain, _) = encryptedSession()
-        assertIs<DmsdpEvent.UnhandledDeviceData>(plain.feed(DmsdpChannel.CONTROL, focus(1, "1"), 0).single())
+        assertIs<DmsdpEvent.UnhandledDeviceData>(plain.feed(DmsdpChannel.CONTROL, focus(1, "1"), 0).withoutRaw().single())
     }
 
     /** 车机的焦点变化：module 4，type 是变化（-2 暂时失去），数据是本机设备 ID；加密前、没声明扬声器时不发。 */
@@ -719,9 +719,9 @@ class SpeakerSessionTest {
     fun callAndVoiceStatesAreReportedFromEitherModule() {
         val audio = AudioRecorder()
         val session = speakerSession(audio = audio)
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).isEmpty())
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(4, 504, "{\"callState\":2}".toByteArray()), 0).isEmpty())
-        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 505, "{\"voiceState\":1}".toByteArray()), 0).isEmpty())
+        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).withoutRaw().isEmpty())
+        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(4, 504, "{\"callState\":2}".toByteArray()), 0).withoutRaw().isEmpty())
+        assertTrue(session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 505, "{\"voiceState\":1}".toByteArray()), 0).withoutRaw().isEmpty())
         session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "oops".toByteArray()), 0)
         val calls = audio.events.filterIsInstance<AudioEvent.PhoneCallState>()
         assertEquals(listOf(1 to 1L, 2 to 4L), calls.map { it.state to it.module })
@@ -733,10 +733,10 @@ class SpeakerSessionTest {
         assertTrue(audio.events.none { it is AudioEvent.PhoneFocus }, "type 504 在 module 4 上不当焦点消息")
 
         val (plain, _) = encryptedSession()
-        // 没声明扬声器时 module 1 / type 504 不当焦点消息；它是合法 JSON，落成结构化管理消息。
-        assertIs<DmsdpEvent.ManagementParsed>(
-            plain.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).single(),
-        )
+        // 没声明扬声器时 module 1 / type 504 不当焦点消息；它是合法 JSON，落成结构化管理消息 + 通话状态事件（原厂对齐）。
+        val callOut = plain.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(1, 504, "{\"callState\":1}".toByteArray()), 0).withoutRaw()
+        assertIs<DmsdpEvent.ManagementParsed>(callOut.filterIsInstance<DmsdpEvent.ManagementParsed>().single())
+        assertEquals(1, callOut.filterIsInstance<DmsdpEvent.PhoneCallStateChanged>().single().state)
     }
 
     /** 声明 PCM 时：收够能放的 PCM 包判「能出声」；声明 AAC 时什么都不判。 */

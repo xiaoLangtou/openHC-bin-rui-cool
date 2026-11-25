@@ -8,6 +8,7 @@ import io.github.gcbond.openhc.core.dmsdp.audio.MicStreamListener
 import io.github.gcbond.openhc.core.dmsdp.audio.PhoneAudioFocus
 import io.github.gcbond.openhc.core.dmsdp.audio.PhoneStateMessages
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
 import java.security.SecureRandom
 
 /**
@@ -315,6 +316,30 @@ class DmsdpSession(
         return out.list
     }
 
+    /**
+     * 把车机当前的日夜模式告诉手机（管理通道 501 `{"dayNightMode":"night"/"day"}`，吉利原厂对齐）：
+     * 连接建立、投屏开始与 uiMode 昼夜切换时调用，手机地图/桌面随之换日夜间皮肤。
+     * 控制连接不在加密状态（还没协商完或已被手机关掉）、会话已结束时什么都不发（返回空列表），不抛异常。
+     */
+    fun sendDayNightMode(night: Boolean): List<DmsdpOutput> {
+        if (failed || closed || controlState != ControlState.ENCRYPTED) return emptyList()
+        val out = Outputs()
+        sendManagementJson(ManagementMessages.DAY_NIGHT_TYPE, ManagementMessages.dayNightMode(night), out)
+        return out.list
+    }
+
+    /**
+     * 把驻车/行车状态告诉手机（管理通道 506 `{"drivingMode":"0"/"1"}`，吉利原厂对齐）：
+     * 投屏建立后发一次驻车态 `"0"`，解除手机端「行驶中禁止操作/看视频」的限制。
+     * 发送条件同 [sendDayNightMode]。
+     */
+    fun sendDrivingMode(driving: Boolean): List<DmsdpOutput> {
+        if (failed || closed || controlState != ControlState.ENCRYPTED) return emptyList()
+        val out = Outputs()
+        sendManagementJson(ManagementMessages.DRIVING_MODE_TYPE, ManagementMessages.drivingMode(driving), out)
+        return out.list
+    }
+
     // ---------------- 文件分享（需要配置 [DmsdpConfig.fileShare]）----------------
 
     /** 接受 [DmsdpEvent.FileOffered]：回手机 102，之后文件内容以事件交出。过期或已处理的请求忽略。 */
@@ -591,11 +616,22 @@ class DmsdpSession(
                         // 元数据到达走 MediaDataReceived 事件（诊断日志可见），后续接 UI/歌词消费方。
                         parsed.reply?.let { sendRecord(MODULE_MANAGEMENT, record.type, JsonCodec.encodeToUtf8(it), out) }
                         parsed.mediaData?.let { out.event(DmsdpEvent.MediaDataReceived(it)) }
-                        if (parsed.carDesktop) {
+                        // 原厂吉利对齐（需求文档模块 A/B）：
+                        // 502 品牌图标请求：应答是原始 PNG 字节（不是 JSON），字节由 DmsdpConfig.brandIcon 注入。
+                        if (parsed.brandIconRequested) sendBrandIcon(out)
+                        // 519 语音提示音握手：按配置回 {"isVoicePromptSupport":N}（文档约定 0 = 手机侧播）。
+                        if (parsed.voicePromptRequested) sendVoicePromptReply(out)
+                        // 503 navFocus=HICAR：手机导航拿到焦点，交给 app 层让出原厂导航。
+                        if (parsed.navFocusHiCar) {
+                            out.event(DmsdpEvent.NaviFocusRequested(parsed.summary))
+                        } else if (parsed.carDesktop) {
                             out.event(DmsdpEvent.CarDesktopRequested(parsed.summary))
                         } else {
                             out.event(DmsdpEvent.ManagementParsed(parsed.type, parsed.summary))
                         }
+                        // 504 通话状态 / 505 语音拾音：结构化事件交给 app 层（通话保护、防抢麦）。
+                        parsed.callState?.let { out.event(DmsdpEvent.PhoneCallStateChanged(it)) }
+                        parsed.voiceState?.let { out.event(DmsdpEvent.PhoneVoiceStateChanged(it)) }
                     }
                 }
             }
@@ -646,6 +682,48 @@ class DmsdpSession(
             DmsdpEvent.ManagementParsed(
                 ManagementMessages.METADATA_REQUEST_TYPE,
                 "已请求应用元数据（$reason，RequestAAData=127，RequestCaller=${config.host.fullModel}）",
+            ),
+        )
+    }
+
+    /** 发一条管理通道 JSON 消息并给诊断事件（501 日夜、506 驻车这类本机主动发的通知共用）。 */
+    private fun sendManagementJson(type: Int, json: JsonObject, out: Outputs) {
+        sendRecord(MODULE_MANAGEMENT, type, JsonCodec.encodeToUtf8(json), out)
+        out.event(DmsdpEvent.ManagementParsed(type, "已发送（$json）"))
+    }
+
+    /** 回手机 502 品牌图标：原始 PNG 字节（不是 JSON）。没配置图标或图太大时只记诊断事件、不发。 */
+    private fun sendBrandIcon(out: Outputs) {
+        val icon = config.brandIcon
+        if (icon == null || icon.isEmpty()) {
+            out.event(DmsdpEvent.ManagementParsed(ManagementMessages.BRAND_ICON_TYPE, "手机要品牌图标，未配置（不回）"))
+            return
+        }
+        if (icon.size > DeviceRecords.MAX_SEND_DATA) {
+            out.event(
+                DmsdpEvent.ManagementParsed(
+                    ManagementMessages.BRAND_ICON_TYPE,
+                    "手机要品牌图标，${icon.size} 字节超过一条记录的上限 ${DeviceRecords.MAX_SEND_DATA}（不回）",
+                ),
+            )
+            return
+        }
+        sendRecord(MODULE_MANAGEMENT, ManagementMessages.BRAND_ICON_TYPE, icon, out)
+        out.event(DmsdpEvent.ManagementParsed(ManagementMessages.BRAND_ICON_TYPE, "已回品牌图标（${icon.size} 字节 PNG）"))
+    }
+
+    /** 回手机 519 语音提示音握手：`{"isVoicePromptSupport":N}`，N 由配置注入（默认 0 = 手机侧播）。 */
+    private fun sendVoicePromptReply(out: Outputs) {
+        sendRecord(
+            MODULE_MANAGEMENT,
+            ManagementMessages.VOICE_PROMPT_TYPE,
+            JsonCodec.encodeToUtf8(ManagementMessages.voicePromptReply(config.voicePromptSupport)),
+            out,
+        )
+        out.event(
+            DmsdpEvent.ManagementParsed(
+                ManagementMessages.VOICE_PROMPT_TYPE,
+                "已回语音提示音握手（isVoicePromptSupport=${config.voicePromptSupport}）",
             ),
         )
     }

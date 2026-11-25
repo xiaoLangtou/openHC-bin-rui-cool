@@ -39,6 +39,12 @@ internal object CarHome {
         if (this.activity?.get() === activity) this.activity = null
     }
 
+    /** OpenHC 的界面是否在前台（自动拉回前台前先看一眼）。任意线程。 */
+    fun isActivityFront(): Boolean {
+        val front = activity?.get() ?: return false
+        return !front.isFinishing
+    }
+
     /** 设备会话就绪（每次连接一次）：重新开始算启动竞态的窗口。任意线程。 */
     fun onDeviceSessionReady() {
         val now = SystemClock.elapsedRealtime()

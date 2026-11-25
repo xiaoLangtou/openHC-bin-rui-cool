@@ -98,6 +98,12 @@ internal interface DmsdpLayer {
 
     /** 主动给手机发一条设备数据（module/type/原始负载，实验/扩展用；核心流程不经过这里）。 */
     fun sendDeviceData(module: Long, type: Int, data: ByteArray): List<DmsdpOutput> = emptyList()
+
+    /** 把车机日夜模式告诉手机（管理通道 501，吉利原厂对齐）；DMSDP 层还没就绪时为空。 */
+    fun sendDayNightMode(night: Boolean): List<DmsdpOutput> = emptyList()
+
+    /** 把驻车/行车状态告诉手机（管理通道 506，吉利原厂对齐）；DMSDP 层还没就绪时为空。 */
+    fun sendDrivingMode(driving: Boolean): List<DmsdpOutput> = emptyList()
 }
 
 internal interface HiSightLayer {

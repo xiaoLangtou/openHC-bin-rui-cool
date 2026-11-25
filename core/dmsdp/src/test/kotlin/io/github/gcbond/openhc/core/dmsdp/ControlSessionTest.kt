@@ -113,10 +113,10 @@ class ControlSessionTest {
         assertEquals(Synthetic.SELF_ID, info.deviceId)
         assertEquals(4L, info.deviceType)
         assertEquals(1, device.sends(DmsdpChannel.CONTROL).size)
-        val service = session.feed(DmsdpChannel.CONTROL, hex(CrossVectors.TCP_DEVICE_102)).single() as DmsdpEvent.PeerServiceInfo
+        val service = session.feed(DmsdpChannel.CONTROL, hex(CrossVectors.TCP_DEVICE_102)).withoutRaw().single() as DmsdpEvent.PeerServiceInfo
         assertEquals(8L, service.serviceType)
         assertEquals("display1", service.serviceId)
-        assertEquals(17, (session.feed(DmsdpChannel.CONTROL, hex(CrossVectors.TCP_MANAGEMENT_9)).single() as DmsdpEvent.UnhandledDeviceData).type)
+        assertEquals(17, (session.feed(DmsdpChannel.CONTROL, hex(CrossVectors.TCP_MANAGEMENT_9)).withoutRaw().single() as DmsdpEvent.UnhandledDeviceData).type)
         val time = (session.feed(DmsdpChannel.CONTROL, hex(CrossVectors.TCP_TIME_200)).single() as DmsdpEvent.UnhandledControlMessage).message
         assertEquals(200, time.statusCode)
         assertEquals("007", time.header("CSeq"))
@@ -325,7 +325,7 @@ class ControlSessionTest {
             phone.record(1, 17, "{\"cmdId\":\"9\"}".toByteArray()) +
             phone.record(5, -1, hex("e5") + Ea.encode(40078)) +
             phone.record(1, 546, "{}".toByteArray())
-        val out = session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(payload))
+        val out = session.feed(DmsdpChannel.CONTROL, phone.encryptedFrame(payload)).withoutRaw()
         assertEquals(5, out.size)
         assertEquals(110, assertIs<DmsdpEvent.UnhandledDeviceData>(out[0]).type)
         assertEquals(2, assertIs<DmsdpEvent.DisconnectTypeNotified>(out[1]).disconnectType)
@@ -343,7 +343,7 @@ class ControlSessionTest {
         for ((data, port) in listOf("e581" to 1, "e5ff" to 127, "e50081" to 128, "e57f7f83" to 65535)) {
             val (session, _) = encryptedSession()
             val out = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(5, -1, hex(data)))
-            assertEquals(port, (out.single() as DmsdpEvent.DisplayPortAnnounced).port)
+            assertEquals(port, (out.withoutRaw().single() as DmsdpEvent.DisplayPortAnnounced).port)
         }
         for (bad in listOf("e5", "e580", "e5000084", "e58181", "e5000000")) {
             val (session, _) = encryptedSession()
@@ -352,7 +352,7 @@ class ControlSessionTest {
             }
         }
         val (session, _) = encryptedSession()
-        val other = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(5, -1, hex("e681"))).single()
+        val other = session.feed(DmsdpChannel.CONTROL, phone.encryptedRecord(5, -1, hex("e681"))).withoutRaw().single()
         assertEquals(102, (other as DmsdpEvent.UnsupportedDeviceCommand).command)
     }
 

@@ -361,7 +361,7 @@ class ReceiverSessionTest {
         assertTrue("auth.closed" !in d.layers.calls)
     }
 
-    /** 显示服务的暂停（202）报成「手机暂停投屏」，连接照常；别的动作、别的服务只记诊断。 */
+    /** 显示服务的暂停（202）报成「手机暂停投屏」，连接照常；204（恢复投屏）额外要求拉回前台；别的动作、别的服务只记诊断。 */
     @Test
     fun displayServicePauseIsReportedAndTheSessionGoesOn() {
         val d = Driver()
@@ -378,7 +378,8 @@ class ReceiverSessionTest {
         }
         assertEquals(listOf("diag", "event ProjectionPaused"), d.data(SessionChannel.DMSDP_CONTROL, "pause-display"))
         assertEquals(listOf("diag"), d.data(SessionChannel.DMSDP_CONTROL, "pause-speaker"))
-        assertEquals(listOf("diag"), d.data(SessionChannel.DMSDP_CONTROL, "other-display"))
+        // 204 = 手机要求恢复投屏（原厂对齐）：除诊断外还交出 ForegroundLaunchRequested 给 app 层拉回前台。
+        assertEquals(listOf("diag", "event ForegroundLaunchRequested(action=204)"), d.data(SessionChannel.DMSDP_CONTROL, "other-display"))
         assertTrue(d.data(SessionChannel.DMSDP_CONTROL, "pause-display").none { it.startsWith("event Ended") })
     }
 

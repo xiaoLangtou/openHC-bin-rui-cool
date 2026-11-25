@@ -61,9 +61,9 @@ class FileShareTest {
     /** 建好两条文件连接，返回会话。 */
     private fun connected(fileShare: DmsdpConfig.FileShare = DmsdpConfig.FileShare()): DmsdpSession {
         val session = session(fileShare)
-        assertEquals(40100, assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":\"7\",\"port\":40100}").single()).port)
+        assertEquals(40100, assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":\"7\",\"port\":40100}").withoutRaw().single()).port)
         assertTrue(session.onConnected(DmsdpChannel.FILE_CONTROL, 0).isEmpty())
-        val data = assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":8,\"port\":\"40101\"}").single())
+        val data = assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":8,\"port\":\"40101\"}").withoutRaw().single())
         assertEquals(DmsdpChannel.FILE_DATA, data.channel)
         assertEquals(40101, data.port)
         assertTrue(session.onConnected(DmsdpChannel.FILE_DATA, 0).isEmpty())
@@ -71,7 +71,7 @@ class FileShareTest {
     }
 
     private fun DmsdpSession.offered(vararg files: Pair<String, Long>, nowMillis: Long = 0): Long {
-        val event = feed(DmsdpChannel.FILE_CONTROL, offer(*files), nowMillis).single()
+        val event = feed(DmsdpChannel.FILE_CONTROL, offer(*files), nowMillis).withoutRaw().single()
         return assertIs<DmsdpEvent.FileOffered>(event).offerId
     }
 
@@ -98,13 +98,13 @@ class FileShareTest {
         val session = session()
         // 单字节只认旧格式 1/2/9，其余（包括 "{"）都交出，不当 JSON 解析。
         for (raw in listOf("0", "3", "{", "{\"cmdId\":\"99\"}", "{\"cmdId\":7.0}", "{\"cmdId\":true}", "{\"other\":1}")) {
-            val event = session.management(raw).single()
+            val event = session.management(raw).withoutRaw().single()
             assertEquals(17, assertIs<DmsdpEvent.UnhandledDeviceData>(event).type, raw)
         }
         for (raw in listOf("{\"cmdId\"", "[1]", "\"x\"")) {
-            assertNull(assertIs<DmsdpEvent.FileShareFailed>(session.management(raw).single()).offerId, raw)
+            assertNull(assertIs<DmsdpEvent.FileShareFailed>(session.management(raw).withoutRaw().single()).offerId, raw)
         }
-        assertTrue(session.management(byteArrayOf(0x7B, 0xFF.toByte())).single() is DmsdpEvent.FileShareFailed, "坏 UTF-8")
+        assertTrue(session.management(byteArrayOf(0x7B, 0xFF.toByte())).withoutRaw().single() is DmsdpEvent.FileShareFailed, "坏 UTF-8")
         // DMSDP 会话不受影响。
         assertEquals(1, managementReplies(session.management("1")).size)
         assertTrue(session.isEncrypted)
@@ -114,21 +114,21 @@ class FileShareTest {
     fun portsAreStrictAndDuplicatesIgnored() {
         for ((value, expected) in listOf("1" to 1, "65535" to 65535, "\"1\"" to 1, "\"65535\"" to 65535, "\"00001\"" to 1)) {
             val out = session().management("{\"cmdId\":\"8\",\"port\":$value,\"info\":\"ignored\"}")
-            assertEquals(expected, assertIs<DmsdpAction.Connect>(out.single()).port, value)
+            assertEquals(expected, assertIs<DmsdpAction.Connect>(out.withoutRaw().single()).port, value)
         }
         val invalid = listOf(
             "true", "1.0", "0", "-1", "65536", "null", "[]", "{}", "\"\"", "\"0\"", "\"65536\"", "\"000001\"",
             "\"+1\"", "\"-1\"", "\" 1\"", "\"1 \"", "\"１\"", "\"1e2\"",
         )
         for (value in invalid) {
-            val event = session().management("{\"cmdId\":\"7\",\"port\":$value}").single()
+            val event = session().management("{\"cmdId\":\"7\",\"port\":$value}").withoutRaw().single()
             assertEquals("文件分享手机端口无效", assertIs<DmsdpEvent.FileShareFailed>(event).reason, value)
         }
-        assertIs<DmsdpEvent.FileShareFailed>(session().management("{\"cmdId\":\"7\"}").single())
+        assertIs<DmsdpEvent.FileShareFailed>(session().management("{\"cmdId\":\"7\"}").withoutRaw().single())
 
         val session = connected()
-        assertTrue(session.management("{\"cmdId\":\"7\",\"port\":40200}").isEmpty(), "已连上时重复的端口通知忽略")
-        assertTrue(session.management("{\"cmdId\":\"8\",\"port\":40201}").isEmpty())
+        assertTrue(session.management("{\"cmdId\":\"7\",\"port\":40200}").withoutRaw().isEmpty(), "已连上时重复的端口通知忽略")
+        assertTrue(session.management("{\"cmdId\":\"8\",\"port\":40201}").withoutRaw().isEmpty())
     }
 
     @Test
@@ -152,7 +152,7 @@ class FileShareTest {
             events += session.feed(DmsdpChannel.FILE_CONTROL, offerFrame, pos, size, 0)
             pos += size
         }
-        val offered = assertIs<DmsdpEvent.FileOffered>(events.single())
+        val offered = assertIs<DmsdpEvent.FileOffered>(events.withoutRaw().single())
         assertEquals(listOf("照片.jpg" to 5L, "b.txt" to 0L), offered.files.map { it.name to it.size })
         assertEquals(5L, offered.totalBytes)
         assertEquals(1000, session.nextTickAtMillis?.let { it - 29_000 }, "等用户确认 30 秒")
@@ -187,14 +187,14 @@ class FileShareTest {
         assertNull(session.nextTickAtMillis?.takeIf { it > 1_000_000 }, "没有文件时限")
         // 数据连接已关闭：迟到的字节丢弃；手机再给数据端口时重新连接。
         assertTrue(session.feed(DmsdpChannel.FILE_DATA, hex("00")).isEmpty())
-        assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":\"8\",\"port\":40102}").single())
+        assertIs<DmsdpAction.Connect>(session.management("{\"cmdId\":\"8\",\"port\":40102}").withoutRaw().single())
     }
 
     @Test
     fun stickyControlFramesAndChunkedData() {
         val session = connected()
         val out = session.feed(DmsdpChannel.FILE_CONTROL, offer("a.bin" to 70_000L) + frame(111), 0)
-        val id = assertIs<DmsdpEvent.FileOffered>(out.single()).offerId
+        val id = assertIs<DmsdpEvent.FileOffered>(out.withoutRaw().single()).offerId
         session.acceptFileOffer(id, 0)
         session.feed(DmsdpChannel.FILE_CONTROL, frame(106), 0)
         val content = ByteArray(70_000) { (it * 7).toByte() }
@@ -308,7 +308,7 @@ class FileShareTest {
             assertTrue(session.feed(DmsdpChannel.FILE_CONTROL, frame(101, "[]")).isEmpty(), "文件连接已放弃，迟到数据丢弃")
         }
         val okName = "好".repeat(85)
-        assertIs<DmsdpEvent.FileOffered>(connected().feed(DmsdpChannel.FILE_CONTROL, offer(okName to 1)).single(), "255 字节的名字可以")
+        assertIs<DmsdpEvent.FileOffered>(connected().feed(DmsdpChannel.FILE_CONTROL, offer(okName to 1)).withoutRaw().single(), "255 字节的名字可以")
     }
 
     @Test
@@ -323,7 +323,7 @@ class FileShareTest {
     @Test
     fun unassignedCodePointsAreAllowedInNames() {
         // U+0378 在各版 Unicode 里都未分配；老系统上新 emoji 也是这种情况，不能因此拒收。
-        val offered = connected().feed(DmsdpChannel.FILE_CONTROL, offer("a\u0378b.jpg" to 1, "图\uD83E\uDD23.png" to 1)).single()
+        val offered = connected().feed(DmsdpChannel.FILE_CONTROL, offer("a\u0378b.jpg" to 1, "图\uD83E\uDD23.png" to 1)).withoutRaw().single()
         assertEquals(2, assertIs<DmsdpEvent.FileOffered>(offered).files.size)
     }
 
@@ -373,7 +373,7 @@ class FileShareTest {
         val late = session()
         late.management("{\"cmdId\":\"7\",\"port\":40100}")
         late.management("{\"cmdId\":\"8\",\"port\":0}")
-        assertEquals(DmsdpChannel.FILE_CONTROL, assertIs<DmsdpAction.Close>(late.onConnected(DmsdpChannel.FILE_CONTROL, 0).single()).channel)
+        assertEquals(DmsdpChannel.FILE_CONTROL, assertIs<DmsdpAction.Close>(late.onConnected(DmsdpChannel.FILE_CONTROL, 0).withoutRaw().single()).channel)
     }
 
     @Test
@@ -391,7 +391,7 @@ class FileShareTest {
     @Test
     fun withoutFileShareManagementIsUnhandled() {
         val session = session(fileShare = null)
-        val event = session.management("{\"cmdId\":\"7\",\"port\":40100}").single()
+        val event = session.management("{\"cmdId\":\"7\",\"port\":40100}").withoutRaw().single()
         assertEquals(17, assertIs<DmsdpEvent.UnhandledDeviceData>(event).type)
         assertFailsWith<IllegalStateException> { session.feed(DmsdpChannel.FILE_CONTROL, hex("00")) }
         assertFailsWith<IllegalStateException> { session.acceptFileOffer(1, 0) }

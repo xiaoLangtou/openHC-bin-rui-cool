@@ -21,6 +21,7 @@ import io.github.gcbond.openhc.connection.BluetoothSource
 import io.github.gcbond.openhc.connection.CarHome
 import io.github.gcbond.openhc.connection.DeviceInfo
 import io.github.gcbond.openhc.connection.DisplayPlan
+import io.github.gcbond.openhc.connection.ForegroundLauncher
 import io.github.gcbond.openhc.connection.VideoClarity
 import io.github.gcbond.openhc.connection.withClarity
 import io.github.gcbond.openhc.core.common.identity.HostIdentity
@@ -39,6 +40,8 @@ import io.github.gcbond.openhc.core.session.WirelessReceiverConfig
 import io.github.gcbond.openhc.core.session.WirelessReceiverSession
 import io.github.gcbond.openhc.core.session.WirelessRunnerBridge
 import io.github.gcbond.openhc.input.MediaKeys
+import io.github.gcbond.openhc.media.CarBrandIcon
+import io.github.gcbond.openhc.media.CarIntegrationBridge
 import io.github.gcbond.openhc.platform.bluetooth.BleBeacon
 import io.github.gcbond.openhc.platform.bluetooth.BluetoothStatus
 import io.github.gcbond.openhc.platform.bluetooth.RfcommClient
@@ -576,6 +579,7 @@ class WirelessController(
                 // 514/515 元数据（歌词/歌曲信息）单独开启：不带 "_launcher"、不带屏幕参数键——v29 拆分验证
                 // （2026-11-24）。若实车发现它也触发窗口化，这里改回 false。
                 requestMetadata = true,
+                brandIcon = CarBrandIcon.bytes(app),
             )
         } catch (e: IllegalArgumentException) {
             return blocked(kind, WirelessNotice.StartFailed("配置不合法：${e.message}"), AutoHold.START_FAILED)
@@ -1139,6 +1143,8 @@ class WirelessController(
                 current.phoneAddress?.let { address ->
                     if (wirelessPrefs.rememberPhone(address)) Log.i(TAG, "记下连成功的手机（${MacText.mask(address)}），之后会自动连它")
                 }
+                // 原厂对齐：投屏画面开始时把当前日夜模式刷一次（手机地图/桌面换日夜间皮肤）。
+                sendDayNight(current, "投屏开始")
             }
             is SessionEvent.VideoNegotiated -> {
                 current.touchNegotiated = event.video.touchInput
@@ -1150,11 +1156,43 @@ class WirelessController(
                 current.inputReady = current.touchNegotiated && !current.tearingDown
                 if (current.keyNegotiated && !current.tearingDown) MediaKeys.ready(app, current.keys)
             }
-            is SessionEvent.DeviceSessionReady -> CarHome.onDeviceSessionReady()
+            is SessionEvent.DeviceSessionReady -> {
+                CarHome.onDeviceSessionReady()
+                // 原厂吉利对齐：设备会话就绪后把日夜模式（501）和驻车态（506）发一次给手机。
+                sendDayNight(current, "设备会话就绪")
+                current.runner.submit { current.bridge.sendDrivingMode(false) }
+            }
             SessionEvent.ProjectionPaused -> CarHome.onProjectionPaused("无线 #${current.id}")
             is SessionEvent.MediaMetadataUpdated -> MediaKeys.onMetadata(app, event.metadata)
+            // 原厂吉利对齐（需求文档模块 B）：
+            is SessionEvent.ForegroundLaunchRequested ->
+                ForegroundLauncher.launch(app, "无线 #${current.id} action=${event.action}")
+            is SessionEvent.NaviFocusRequested -> MediaKeys.onNaviFocusRequested(app)
+            is SessionEvent.PhoneCallStateChanged -> {
+                MediaKeys.onCallStateChanged(event.state)
+                CarIntegrationBridge.writeLinkIncallState(app, event.state)
+            }
+            is SessionEvent.PhoneVoiceStateChanged -> MediaKeys.onVoiceStateChanged(app, event.state)
+            is SessionEvent.Ended -> CarIntegrationBridge.writeLinkIncallState(app, 0)
             else -> Unit
         }
+    }
+
+    /** 把车机当前日夜模式发给手机（501，原厂吉利对齐）。投屏开始与 uiMode 切换时也调。 */
+    private fun sendDayNight(current: Attempt, reason: String) {
+        val night = isNightMode()
+        Log.i(TAG, "发送日夜模式（$reason）：${if (night) "night" else "day"}")
+        current.runner.submit { current.bridge.sendDayNightMode(night) }
+    }
+
+    /** 车机 uiMode 现在是不是夜间（原厂判据：UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES）。 */
+    private fun isNightMode(): Boolean =
+        (app.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    /** uiMode 昼夜切换（MainActivity.onConfigurationChanged 调）：给当前活跃的会话补发 501。 */
+    fun onUiModeChanged() {
+        attempt?.let { sendDayNight(it, "uiMode 切换") }
     }
 
     private fun prepareDecoder(current: Attempt, video: VideoParameters) {

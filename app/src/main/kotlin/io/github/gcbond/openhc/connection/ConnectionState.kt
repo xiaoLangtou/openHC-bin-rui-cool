@@ -298,6 +298,11 @@ object ConnectionReducer {
             )
             is SessionEvent.Diagnostic -> state
             is SessionEvent.MediaMetadataUpdated -> state
+            // 原厂吉利对齐的新事件（拉回前台 / 导航焦点 / 通话与语音状态）由控制器与桥接层处理，连接状态不变。
+            is SessionEvent.ForegroundLaunchRequested -> state
+            is SessionEvent.NaviFocusRequested -> state
+            is SessionEvent.PhoneCallStateChanged -> state
+            is SessionEvent.PhoneVoiceStateChanged -> state
             // 回车机桌面由界面层处理（CarHome），连接状态不变。
             SessionEvent.ProjectionPaused -> state
             is SessionEvent.Ended -> stopping(state)

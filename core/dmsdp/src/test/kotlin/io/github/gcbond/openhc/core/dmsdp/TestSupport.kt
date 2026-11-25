@@ -101,14 +101,19 @@ internal fun hex(text: String): ByteArray = text.hexToBytes()
 internal fun DmsdpSession.feed(channel: DmsdpChannel, data: ByteArray) = feed(channel, data, 0L)
 
 internal inline fun <reified T : DmsdpOutput> List<DmsdpOutput>.only(): T {
-    assertEquals(1, size, "期望只有一个输出: $this")
-    return assertIs(this[0])
+    // RawRecord 是收发每条记录的全量转储（诊断用），不算业务输出；除非测试本身就是要断言它。
+    val candidates = if (T::class == DmsdpEvent.RawRecord::class) this else filterNot { it is DmsdpEvent.RawRecord }
+    assertEquals(1, candidates.size, "期望只有一个输出: $candidates")
+    return assertIs(candidates[0])
 }
 
 internal fun List<DmsdpOutput>.sends(channel: DmsdpChannel): List<ByteArray> =
     filterIsInstance<DmsdpAction.Send>().filter { it.channel == channel }.map { it.bytes }
 
-internal fun List<DmsdpOutput>.events(): List<DmsdpEvent> = filterIsInstance<DmsdpEvent>()
+internal fun List<DmsdpOutput>.events(): List<DmsdpEvent> = filterNot { it is DmsdpEvent.RawRecord }.filterIsInstance<DmsdpEvent>()
+
+/** 去掉 RawRecord 转储，只留业务输出（断言输出条数/顺序前先套这个）。 */
+internal fun List<DmsdpOutput>.withoutRaw(): List<DmsdpOutput> = filterNot { it is DmsdpEvent.RawRecord }
 
 /**
  * 走完业务 20 协商、OPTIONS 和加密选择，返回已加密的会话。[select] 是加密选择请求里 CSeq 之后、

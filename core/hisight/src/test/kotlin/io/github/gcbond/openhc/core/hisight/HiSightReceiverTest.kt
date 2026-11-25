@@ -11,6 +11,7 @@ import java.util.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** 会话状态机：PLAY 的时机、输入通道、各种结束方式。手机一侧用合成报文模拟。 */
@@ -198,16 +199,15 @@ class HiSightReceiverTest {
         s.feedVideo(packet, 0, packet.size)
         assertEquals(1, frames.size)
         assertTrue(es.contentEquals(frames[0]))
-        // 同一序号再来一次 = 重复包：只算断档（手机拥塞时会整批丢帧，序号会跳），这一包是完整的一帧，照交并带上断档情况。
+        // 同一序号再来一次 = 重复包：进丢弃重对齐（丢到下一个 marker），这一包不交、会话不断（实车行为，锁定）。
         s.feedVideo(packet, 0, packet.size)
-        assertEquals(2, frames.size)
-        assertEquals(null, gaps[0])
-        assertEquals(1, gaps[1]!!.receivedSequence)
-        // SSRC 变了才是真错：视频流失败，错误报出来。
+        assertEquals(1, frames.size)
+        assertNull(gaps[0])
+        // SSRC 变了也按重对齐处理：丢弃直到下一个 marker，不终结会话、不报错。
         val other = rtp.copyOf().also { it[3] = 2; it[11] = 2 }
         val bad = byteArrayOf(0, 0, 0, other.size.toByte()) + other
-        assertFailsWith<MalformedMessageException> { s.feedVideo(bad, 0, bad.size) }
-        assertFailsWith<MalformedMessageException> { s.onVideoClosed() }
+        s.feedVideo(bad, 0, bad.size)
+        assertEquals(1, frames.size)
         assertEquals(listOf("TEARDOWN  RTSP/1.0#4"), phone.read(s.shutdown()))
     }
 

@@ -212,6 +212,30 @@ sealed class SessionEvent : SessionOutput {
         override fun toString() = "MediaMetadataUpdated($metadata)"
     }
 
+    /**
+     * 手机要求恢复投屏（显示服务状态通知 action=203 恢复 / 204 开始 / 207 显示服务同步，serviceType 8 或 1）：
+     * 用户在 HiCar 里点了「车辆」图标回车机桌面后手机侧再次触发投屏，OpenHC 不在前台时应把自己拉回前台
+     * （app 层带防抖，避免死循环）。
+     */
+    class ForegroundLaunchRequested(val action: Int) : SessionEvent() {
+        override fun toString() = "ForegroundLaunchRequested(action=$action)"
+    }
+
+    /** 手机 503 导航焦点给了 HiCar（`{"navFocus":"HICAR"}`）：车机应让出原厂导航（app 层反射调用）。 */
+    class NaviFocusRequested(val detail: String) : SessionEvent() {
+        override fun toString() = "NaviFocusRequested($detail)"
+    }
+
+    /** 手机 504 通话状态变化（`{"callState":0/1/2}`）：非 0 通话中，车机不做音乐焦点抢占。 */
+    class PhoneCallStateChanged(val state: Int) : SessionEvent() {
+        override fun toString() = "PhoneCallStateChanged($state)"
+    }
+
+    /** 手机 505 语音拾音状态（`{"voiceState":0/1}`）：1 = 手机语音拾音中，车机临时抑制本地语音。 */
+    class PhoneVoiceStateChanged(val state: Int) : SessionEvent() {
+        override fun toString() = "PhoneVoiceStateChanged($state)"
+    }
+
     /** 不影响会话继续的信息：各层没处理的消息、被丢弃的数据、被忽略的请求等。[message] 可以直接写日志。 */
     class Diagnostic(val layer: SessionLayer, val message: String) : SessionEvent() {
         override fun toString() = "Diagnostic($layer: $message)"

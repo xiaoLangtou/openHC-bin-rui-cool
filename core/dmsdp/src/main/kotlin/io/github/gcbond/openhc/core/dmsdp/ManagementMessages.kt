@@ -44,15 +44,31 @@ import kotlinx.serialization.json.put
  */
 internal object ManagementMessages {
 
-    /** 一条解析好的管理消息：[summary] 给诊断日志；[carDesktop] 表示手机要求退出投屏回车机桌面；
-     *  [reply] 非空时调用方要把它作为同类型消息发回手机（如 515 的 MediaDataResp）；
-     *  [mediaData] 非空表示这是一条音频元数据（515 MediaData），结构化数据已提取。 */
+    /**
+     * 一条解析好的管理消息：[summary] 给诊断日志；[carDesktop] 表示手机要求退出投屏回车机桌面；
+     * [reply] 非空时调用方要把它作为同类型消息发回手机（如 515 的 MediaDataResp）；
+     * [mediaData] 非空表示这是一条音频元数据（515 MediaData），结构化数据已提取。
+     *
+     * 原厂吉利 HiCar 的其他标记（对齐需求文档模块 A/B，报文样本来自原厂 HiCarService2 反汇编）：
+     * - [brandIconRequested]：502 `{"brandIconData":"PNG"}`，手机要车机品牌图标；应答是**原始 PNG 字节**（不是 JSON），
+     *   字节来自 [DmsdpConfig.brandIcon]，见 [DmsdpSession] 的管理消息分支。
+     * - [voicePromptRequested]：519 带了 `isVoicePromptSupport` 键，要应答 `{"isVoicePromptSupport":N}`
+     *   （N 由 [DmsdpConfig.voicePromptSupport] 注入，文档约定 0 = 手机侧负责播放提示音）。
+     * - [navFocusHiCar]：503 `navFocus=="HICAR"`，手机导航拿到了焦点，车机应让出原厂导航（app 层接）。
+     * - [callState]：504 手机通话状态 0/1/2（原厂写 `Settings.Global link_incall_state`）。
+     * - [voiceState]：505 手机语音拾音状态 0/1（原厂调 `VrVoiceAPI.enableVR` 防抢麦）。
+     */
     class Parsed(
         val type: Int,
         val summary: String,
         val carDesktop: Boolean,
         val reply: JsonObject? = null,
         val mediaData: JsonObject? = null,
+        val brandIconRequested: Boolean = false,
+        val voicePromptRequested: Boolean = false,
+        val navFocusHiCar: Boolean = false,
+        val callState: Int? = null,
+        val voiceState: Int? = null,
     )
 
     /** module 1 上除文件分享管理（17）以外的消息都尝试按 JSON 解析。 */
@@ -90,7 +106,36 @@ internal object ManagementMessages {
             carDesktop = json.keys.any { it in CAR_DESKTOP_KEYS } || isCarDesktopAppOperation(type, json),
             reply = reply,
             mediaData = mediaData,
+            brandIconRequested = type == TYPE_BRAND_ICON && json.containsKey(KEY_BRAND_ICON_DATA),
+            voicePromptRequested = type == TYPE_VOICE_PROMPT && json.containsKey(KEY_IS_VOICE_PROMPT_SUPPORT),
+            navFocusHiCar = type == TYPE_NAV_FOCUS && value(json, KEY_NAV_FOCUS) == NAV_FOCUS_HICAR,
+            callState = if (type == TYPE_CALL_STATE) optInt(json, KEY_CALL_STATE) else null,
+            voiceState = if (type == TYPE_VOICE_STATE) optInt(json, KEY_VOICE_STATE) else null,
         )
+    }
+
+    /**
+     * type 501 日夜模式（车机→手机，吉利原厂 HiCarDataProcessor dayNightModeRequestBody）：
+     * 连接建立、投屏开始（207）与 uiMode 昼夜切换时发，让手机地图/桌面随车机大灯换日夜间皮肤。
+     */
+    fun dayNightMode(night: Boolean): JsonObject = buildJsonObject {
+        put(KEY_DAY_NIGHT_MODE, if (night) DAY_NIGHT_MODE_NIGHT else DAY_NIGHT_MODE_DAY)
+    }
+
+    /**
+     * type 506 驻车/行车状态（车机→手机，吉利原厂 drivingModeRequestBody）：
+     * 投屏建立后发一次驻车态 `"0"`，解除手机端「行驶中禁止操作/看视频」的限制；行车限制态为 `"1"`。
+     */
+    fun drivingMode(driving: Boolean): JsonObject = buildJsonObject {
+        put(KEY_DRIVING_MODE, if (driving) DRIVING_MODE_ON else DRIVING_MODE_PARKED)
+    }
+
+    /**
+     * type 519 语音提示音握手应答（车机→手机）：`isVoicePromptSupport` 声明车机要不要自己播提示音。
+     * 文档约定回 0 = 手机侧负责播放（原厂实测回 2，按文档取 0；由 [DmsdpConfig.voicePromptSupport] 注入）。
+     */
+    fun voicePromptReply(support: Int): JsonObject = buildJsonObject {
+        put(KEY_IS_VOICE_PROMPT_SUPPORT, support)
     }
 
     /**
@@ -166,10 +211,14 @@ internal object ManagementMessages {
     /** 已知类型给结构化摘要；未知类型列字段名，内容预览由 UnhandledDeviceData 的旧路径兜底。 */
     private fun describe(type: Int, json: JsonObject): String = when (type) {
         TYPE_CAPABILITY_QUERY -> "手机能力查询（${json.keys.joinToString()}）"
-        TYPE_BRAND_ICON -> "车机品牌图标"
+        TYPE_BRAND_ICON -> "车机品牌图标（brandIconData=${value(json, KEY_BRAND_ICON_DATA)}）"
         TYPE_NAV_FOCUS ->
-            "导航焦点（navFocus=${value(json, "navFocus")}，navPackageName=${value(json, "navPackageName")}）"
-        TYPE_VOICE_PROMPT -> "语音提示支持（isVoicePromptSupport=${value(json, "isVoicePromptSupport")}）"
+            "导航焦点（navFocus=${value(json, KEY_NAV_FOCUS)}，navPackageName=${value(json, "navPackageName")}）"
+        TYPE_VOICE_PROMPT -> "语音提示支持（isVoicePromptSupport=${value(json, KEY_IS_VOICE_PROMPT_SUPPORT)}）"
+        TYPE_DAY_NIGHT -> "日夜模式（dayNightMode=${value(json, KEY_DAY_NIGHT_MODE)}）"
+        TYPE_CALL_STATE -> "通话状态（callState=${value(json, KEY_CALL_STATE)}）"
+        TYPE_VOICE_STATE -> "语音拾音状态（voiceState=${value(json, KEY_VOICE_STATE)}）"
+        TYPE_DRIVING_MODE -> "驻车/行车状态（drivingMode=${value(json, KEY_DRIVING_MODE)}）"
         TYPE_VIRTUAL_MODEM ->
             "虚拟调制解调器（service=${value(json, "service")}，subService=${value(json, "subService")}，" +
                 "command=${value(json, "command")}）"
@@ -231,10 +280,45 @@ internal object ManagementMessages {
     private const val TYPE_APP_OPERATION = 529
     private const val TYPE_APP_STATUS = 533
 
+    // ---- 原厂吉利 HiCar 对齐（需求文档模块 A；报文样本来自 HiCarService2/HiCarDataProcessor 反汇编）----
+
+    /** 501 日夜模式（车机→手机）：`{"dayNightMode":"night"/"day"}`。 */
+    const val DAY_NIGHT_TYPE = 501
+    /** 502 车机品牌图标：请求是 JSON，应答是原始 PNG 字节。 */
+    const val BRAND_ICON_TYPE = 502
+    /** 504 手机通话状态（手机→车机）：`{"callState":0/1/2}`。 */
+    const val CALL_STATE_TYPE = 504
+    /** 505 手机语音拾音状态（手机→车机）：`{"voiceState":0/1}`。 */
+    const val VOICE_STATE_TYPE = 505
+    /** 506 驻车/行车状态（车机→手机）：`{"drivingMode":"0"/"1"}`。 */
+    const val DRIVING_MODE_TYPE = 506
+
+    private const val TYPE_DAY_NIGHT = DAY_NIGHT_TYPE
+    private const val TYPE_CALL_STATE = CALL_STATE_TYPE
+    private const val TYPE_VOICE_STATE = VOICE_STATE_TYPE
+    private const val TYPE_DRIVING_MODE = DRIVING_MODE_TYPE
+
+    private const val KEY_BRAND_ICON_DATA = "brandIconData"
+    private const val KEY_NAV_FOCUS = "navFocus"
+    private const val KEY_IS_VOICE_PROMPT_SUPPORT = "isVoicePromptSupport"
+    private const val KEY_DAY_NIGHT_MODE = "dayNightMode"
+    private const val KEY_CALL_STATE = "callState"
+    private const val KEY_VOICE_STATE = "voiceState"
+    private const val KEY_DRIVING_MODE = "drivingMode"
+
+    private const val NAV_FOCUS_HICAR = "HICAR"
+    private const val DAY_NIGHT_MODE_NIGHT = "night"
+    private const val DAY_NIGHT_MODE_DAY = "day"
+    private const val DRIVING_MODE_PARKED = "0"
+    private const val DRIVING_MODE_ON = "1"
+
     private const val REQUEST_APP = "RequestApp"
 
     /** HiCar 车机应用包名："车辆"磁贴（BackToHiCarLauncher）的 AppPackage。 */
     private const val CAR_LAUNCHER_PACKAGE = "com.huawei.hicar"
+
+    /** 519 语音提示音握手（应答用同类型号）：`{"isVoicePromptSupport":N}`。 */
+    const val VOICE_PROMPT_TYPE = 519
 
     // ---- 应用列表互通（type 528，官方 AppDataProcessor/AppTransManager 反汇编）----
 

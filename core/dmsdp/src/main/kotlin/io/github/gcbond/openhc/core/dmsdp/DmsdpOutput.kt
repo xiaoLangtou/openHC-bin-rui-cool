@@ -280,6 +280,31 @@ sealed class DmsdpEvent : DmsdpOutput {
     }
 
     /**
+     * 手机 503 导航焦点给了 HiCar（`{"navFocus":"HICAR"}`，见 [ManagementMessages]）：
+     * 手机导航开始播报，车机应让出原厂导航（结束车机正在进行的导航、请求互联导航焦点），
+     * 避免两边同时播报。Android 侧能力由 app 层做（ECarXInteractiveManager / NaviAPI 反射）。
+     */
+    class NaviFocusRequested(val detail: String) : DmsdpEvent() {
+        override fun toString() = "NaviFocusRequested($detail)"
+    }
+
+    /**
+     * 手机 504 通话状态变化（`{"callState":0/1/2}`，原厂写 `Settings.Global link_incall_state`）：
+     * 非 0 = 响铃/通话中，车机期间不应向媒体中心抢音乐焦点、忽略外部的「恢复播放」指令。
+     */
+    class PhoneCallStateChanged(val state: Int) : DmsdpEvent() {
+        override fun toString() = "PhoneCallStateChanged($state)"
+    }
+
+    /**
+     * 手机 505 语音拾音状态（`{"voiceState":0/1}`）：1 = 手机语音助手正在拾音，
+     * 车机应临时抑制本地语音（防两边同时拾音抢麦，原厂调 `VrVoiceAPI.enableVR(false,…)`）。
+     */
+    class PhoneVoiceStateChanged(val state: Int) : DmsdpEvent() {
+        override fun toString() = "PhoneVoiceStateChanged($state)"
+    }
+
+    /**
      * 手机推送的音频元数据（管理通道 type 515 的 MediaData，见 [ManagementMessages]）：
      * 歌名/歌手/专辑/播放状态/进度，HarmonyOS 6.0+ 华为音乐与 QQ 音乐带 Lyric（标准 LRC 文本）。
      * 上层（桌面 HMI / EAS MediaCenter 喂数）从这里取数据。

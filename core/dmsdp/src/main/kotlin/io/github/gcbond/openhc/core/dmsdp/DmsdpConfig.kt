@@ -59,6 +59,17 @@ class DmsdpConfig(
     val platform: Int = 0,
     /** 认证时手机报的 HiCar 版本（没有为 null）：扬声器按手机记的传输方式时连版本一起比对，手机升级后重新试。 */
     val phoneVersion: String? = null,
+    /**
+     * 车机品牌图标（PNG 字节）：手机发 502 `{"brandIconData":"PNG"}` 请求时，把这份字节原样回给手机
+     * （注意应答是原始字节流，不是 JSON），HiCar 桌面的「车辆」磁贴显示成车标。null（默认）不回。
+     * 一条设备记录载荷上限 65508 字节，超过的图标本层发不出去（由调用方压缩）。
+     */
+    val brandIcon: ByteArray? = null,
+    /**
+     * 手机发 519 语音提示音握手时要应答的 `isVoicePromptSupport` 值。0（默认）= 手机侧负责播放提示音，
+     * 车机不播（对齐需求文档；原厂吉利实测回 2，可按实车效果调整）。
+     */
+    val voicePromptSupport: Int = 0,
 ) {
     val bluetoothMac: String = bluetoothMac.uppercase()
 

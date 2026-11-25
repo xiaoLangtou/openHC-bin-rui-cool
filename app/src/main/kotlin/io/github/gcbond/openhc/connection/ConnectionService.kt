@@ -3,7 +3,10 @@ package io.github.gcbond.openhc.connection
 import android.Manifest
 import android.app.Notification
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -38,11 +41,25 @@ class ConnectionService : Service() {
 
     private val listener = ConnectionController.HostListener { onControllerChanged() }
 
+    /**
+     * 车机熄屏广播（`ecarx.intent.action.DISPLAY_OFF`，吉利原厂 DisplayStateChangedReceiver 同款，需求文档第 8 项）：
+     * 熄火锁车时主动优雅断开投屏会话、释放音频焦点与直连 EAS 状态，避免手机一直连着车机热点耗电。
+     * 只在前台服务运行期间动态注册（onCreate 注册、onDestroy 注销），收不到广播时行为与之前完全一致。
+     */
+    private val displayOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != DISPLAY_OFF_ACTION) return
+            Log.i(TAG, "收到车机熄屏广播，优雅断开有线投屏会话")
+            runCatching { controller.stop() }.onFailure { Log.w(TAG, "熄屏断连失败：${it.message}") }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         controller = (application as OpenHcApp).connection
         controller.addHostListener(listener)
         createChannel()
+        registerDisplayOffReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -60,7 +77,19 @@ class ConnectionService : Service() {
         controller.removeHostListener(listener)
         if (inForeground) controller.serviceInForeground = false
         if (!leaving) controller.onServiceDestroyed()
+        unregisterDisplayOffReceiver()
         super.onDestroy()
+    }
+
+    /** 动态注册熄屏广播（ECARX 系统广播，manifest 里不声明，避免安卓 9 PackageParser 兼容问题）。 */
+    private fun registerDisplayOffReceiver() {
+        runCatching {
+            registerReceiver(displayOffReceiver, IntentFilter(DISPLAY_OFF_ACTION))
+        }.onFailure { Log.w(TAG, "注册熄屏广播失败（${it.javaClass.simpleName}），熄屏不自动断连") }
+    }
+
+    private fun unregisterDisplayOffReceiver() {
+        runCatching { unregisterReceiver(displayOffReceiver) }
     }
 
     private fun enterForeground(): Boolean {
@@ -158,5 +187,8 @@ class ConnectionService : Service() {
         const val TAG = "OpenHC-Connection"
         const val CHANNEL_ID = "connection"
         const val NOTIFICATION_ID = 1
+
+        /** 车机熄屏广播（吉利/ECARX 系统广播，原厂 DisplayStateChangedReceiver 同款）。 */
+        const val DISPLAY_OFF_ACTION = "ecarx.intent.action.DISPLAY_OFF"
     }
 }

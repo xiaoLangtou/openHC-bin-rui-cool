@@ -99,6 +99,14 @@ class ClusterMediaBridge(
     private var interactiveManager: Any? = null
     private var interactiveActiveNotified: Boolean = false
 
+    /**
+     * 手机通话状态（504 `callState`，原厂 MediaCtrlMgr 同款保护）：非 0 = 响铃/通话/微信语音中。
+     * 通话期间不向 EAS MediaCenter 抢音乐焦点、忽略外部卡片发来的「恢复播放」，避免接电话时音乐突然响起。
+     * 连接断开复位 0（[clear] 一并复位）。
+     */
+    @Volatile
+    private var inCallState: Int = 0
+
     private val directMusicClient = object : MusicClient() {
         override fun getMediaSourceTypeList(): IntArray = LINK_SOURCE_TYPES
 
@@ -109,11 +117,19 @@ class ClusterMediaBridge(
         override fun getMusicPlaybackInfo(): MusicPlaybackInfo? = latestPlaybackInfo
 
         override fun onPlay(): Boolean {
+            if (inCallState != 0) {
+                Log.i(TAG, "通话中（callState=$inCallState），忽略 EAS 卡片的恢复播放指令")
+                return true
+            }
             onCommand(MediaKeyForwarder.Command.PLAY)
             return true
         }
 
         override fun onReplay(): Boolean {
+            if (inCallState != 0) {
+                Log.i(TAG, "通话中（callState=$inCallState），忽略 EAS 卡片的重播指令")
+                return true
+            }
             onCommand(MediaKeyForwarder.Command.PLAY)
             return true
         }
@@ -208,6 +224,13 @@ class ClusterMediaBridge(
         }
     }
 
+    /** 手机 504 通话状态变化（原厂对齐）：[state] 0 空闲、非 0 通话中。通话期间暂停音乐推送与焦点抢占。 */
+    fun onCallStateChanged(state: Int) {
+        if (inCallState == state) return
+        Log.i(TAG, "手机通话状态：$inCallState -> $state${if (state != 0) "（通话期间不推音乐、不抢焦点）" else "（恢复音乐推送）"}")
+        inCallState = state
+    }
+
     /** 音频焦点状态变化：拿到媒体焦点时触发 CarMedia 音源切换或直推 Link EAS 卡片，并开启蓝牙 AVRCP 元数据兜底轮询。 */
     fun onAudioFocusChanged(context: Context, held: Boolean, onSnapshotUpdated: (Snapshot) -> Unit) {
         val app = context.applicationContext ?: context
@@ -216,6 +239,11 @@ class ClusterMediaBridge(
         audioFocusHeld = held
         main.removeCallbacks(btFallbackRunnable)
         if (held) {
+            // 通话中（504）：不向 CarMedia 切音源、不推 EAS 卡片，等挂断后 515 推送自然恢复。
+            if (inCallState != 0) {
+                Log.i(TAG, "通话中（callState=$inCallState），拿到媒体焦点也不切音源/推卡片")
+                return
+            }
             if (title.isEmpty()) {
                 pollBluetoothFallbackIfNeeded(app)
             }
@@ -331,10 +359,13 @@ class ClusterMediaBridge(
         appContext = app
         latestSnapshot = snapshot
 
+        // 通话中（504）：不切音源、不推 EAS 卡片（不抢焦点），歌词广播照常（不影响焦点）。
+        val inCall = inCallState != 0
+
         val carMediaInstalled = isCarMediaInstalled(app)
         val carMediaEasActive = carMediaInstalled && isCarMediaEasEnabled(app)
 
-        if (carMediaInstalled) {
+        if (carMediaInstalled && !inCall) {
             val shouldSwitch = forceSwitch || (snapshot.playing && snapshot.title.isNotEmpty() && snapshot.title != lastSwitchedTitle)
             if (shouldSwitch && snapshot.title.isNotEmpty()) {
                 lastSwitchedTitle = snapshot.title
@@ -365,6 +396,8 @@ class ClusterMediaBridge(
             if (easRegistered || easToken != null) {
                 teardownDirectEas("检测到 CarMedia 已开启 EAS 推送，交由 CarMedia 接管")
             }
+        } else if (inCall) {
+            Log.i(TAG, "通话中（callState=$inCallState），跳过 Link EAS 卡片推送，不抢音乐焦点")
         } else {
             // 车机未安装 CarMedia（或 CarMedia 关闭了 EAS 推送）：主动直推 Link EAS 卡片到仪表盘与桌面
             pushDirectLinkEasCard(app, snapshot, forceFocus = forceSwitch)
@@ -380,6 +413,7 @@ class ClusterMediaBridge(
         main.removeCallbacks(delayedLyricPushRunnable)
         notifyDirectEasDisconnected()
         audioFocusHeld = false
+        inCallState = 0
         last515AtElapsedMs = 0L
         lastSwitchedTitle = ""
         lastBroadcastLrcTitle = ""

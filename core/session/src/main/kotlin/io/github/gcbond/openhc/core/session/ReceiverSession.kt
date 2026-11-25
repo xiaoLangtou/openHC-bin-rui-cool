@@ -438,6 +438,20 @@ class ReceiverSession internal constructor(
         return session { out -> handleDmsdp(call(SessionLayer.DMSDP) { layer.sendAudioFocus(change) }, out) }
     }
 
+    /** 把车机日夜模式告诉手机（管理通道 501，吉利原厂对齐）。要在协议线程上调用（SocketRunner.submit）。 */
+    fun sendDayNightMode(night: Boolean): List<SessionOutput> {
+        val out = Out()
+        handleDmsdp(dmsdp?.sendDayNightMode(night) ?: emptyList(), out)
+        return out.list
+    }
+
+    /** 把驻车/行车状态告诉手机（管理通道 506，吉利原厂对齐）。要在协议线程上调用（SocketRunner.submit）。 */
+    fun sendDrivingMode(driving: Boolean): List<SessionOutput> {
+        val out = Out()
+        handleDmsdp(dmsdp?.sendDrivingMode(driving) ?: emptyList(), out)
+        return out.list
+    }
+
     // ---------------- nearby ----------------
 
     private fun handleNearby(outputs: List<NearbyOutput>, out: Out) {
@@ -622,7 +636,19 @@ class ReceiverSession internal constructor(
                     if (o.action == SERVICE_ACTION_PAUSE && o.serviceType == SERVICE_TYPE_DISPLAY) {
                         out.add(SessionEvent.ProjectionPaused)
                     }
+                    // 原厂对齐：action=203（恢复投屏）/204（服务开始）/207（显示服务同步）= 手机要求回到投屏，
+                    // 限显示/应用服务（serviceType 8 或 1，与 514 元数据触发同一组），OpenHC 不在前台时 app 层
+                    // 把自己拉回前台（带防抖）。
+                    if ((o.serviceType == SERVICE_TYPE_DISPLAY || o.serviceType == SERVICE_TYPE_APP) &&
+                        (o.action == SERVICE_ACTION_RESUME || o.action == SERVICE_ACTION_START ||
+                            o.action == SERVICE_ACTION_DISPLAY_SYNC)
+                    ) {
+                        out.add(SessionEvent.ForegroundLaunchRequested(o.action))
+                    }
                 }
+                is DmsdpEvent.NaviFocusRequested -> out.add(SessionEvent.NaviFocusRequested(o.detail))
+                is DmsdpEvent.PhoneCallStateChanged -> out.add(SessionEvent.PhoneCallStateChanged(o.state))
+                is DmsdpEvent.PhoneVoiceStateChanged -> out.add(SessionEvent.PhoneVoiceStateChanged(o.state))
                 is DmsdpEvent -> diag(SessionLayer.DMSDP, o.toString(), out)
             }
         }
@@ -965,8 +991,16 @@ class ReceiverSession internal constructor(
         /** 设备服务状态通知（命令 103）的动作：202 是服务暂停（投屏界面上点「车机」图标时，手机对显示服务发这个）。 */
         const val SERVICE_ACTION_PAUSE = 202
 
+        // 原厂对齐（需求文档第 7 项，对应 HiCarService2.onDeviceServiceChange）：203 恢复投屏、204 服务开始、
+        // 207 显示服务同步——三者都表示手机侧要求回到投屏，app 层据此把 OpenHC 拉回前台。
+        const val SERVICE_ACTION_RESUME = 203
+        const val SERVICE_ACTION_START = 204
+        const val SERVICE_ACTION_DISPLAY_SYNC = 207
+
         /** 设备服务类型：显示（投屏画面）。 */
         const val SERVICE_TYPE_DISPLAY = 8L
+        /** 设备服务类型：应用/互联（与显示并列，514 元数据触发也认它）。 */
+        const val SERVICE_TYPE_APP = 1L
         /** 音频端口从这个范围里挑偶数（本机的选择：RTP 习惯用偶数口，不是协议规定）。 */
         const val AUDIO_PORT_MIN = 20_000
         const val AUDIO_PORT_MAX = 59_998
