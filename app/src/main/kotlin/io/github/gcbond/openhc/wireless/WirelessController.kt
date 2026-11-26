@@ -73,6 +73,7 @@ import io.github.gcbond.openhc.wifi.hotspotOpenFailure
 import java.io.File
 import java.io.IOException
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -312,6 +313,7 @@ class WirelessController(
         val current = attempt
         apply(WirelessSignal.StopRequested)
         cancelAutoRetry()
+        cancelPendingAclDials()
         if (current == null) {
             releaseForeground()
             return@post
@@ -383,6 +385,8 @@ class WirelessController(
             refreshIdleStatus("关掉了只用数据线连接")
             return@post
         }
+        // 打开了只用数据线连接：挂着的蓝牙防抖待拨任务一并撤掉，之后不做无线。
+        cancelPendingAclDials()
         val current = attempt
         if (current != null && isWaiting(current)) {
             Log.i(TAG, "打开了只用数据线连接，停止第 ${current.id} 次无线连接（手机还没连上）")
@@ -413,25 +417,37 @@ class WirelessController(
      */
     fun onPhoneBluetooth(connected: Boolean, address: String, profileReady: Boolean = false) = post {
         if (!BluetoothTrigger.listens(wirelessPrefs.connectOnBluetooth, wirelessPrefs.wiredOnly)) return@post
-        val pending = pendingAclDials.remove(address)
+        // 广播里的地址大小写/格式可能前后不一致，统一归一化后再当 key，免得防抖任务挂在两个 key 上互相找不到。
+        val key = address.trim().uppercase(Locale.ROOT)
+        val pending = pendingAclDials.remove(key)
+        // 无论走到哪个分支都先撤掉挂着的防抖任务：重复的 ACL_CONNECTED 不留孤儿定时器。
+        pending?.let { handler.removeCallbacks(it) }
         when {
             // ACL_CONNECTED：先等建链稳定，期间 Profile 连上了就立即拨，蓝牙断了就撤掉。
             connected && !profileReady -> {
-                val dial = Runnable { onPhoneBluetoothConnected(address) }
-                pendingAclDials[address] = dial
+                val dial = Runnable {
+                    pendingAclDials.remove(key)
+                    onPhoneBluetoothConnected(address)
+                    syncHotspotStandby()
+                }
+                pendingAclDials[key] = dial
                 handler.postDelayed(dial, ACL_SETTLE_DELAY_MS)
             }
             // HFP/A2DP Profile 已连上：链路稳了，立即拨（不用再等 ACL 的防抖）。
             connected -> {
-                pending?.let { handler.removeCallbacks(it) }
                 onPhoneBluetoothConnected(address)
+                syncHotspotStandby()
             }
             // ACL_DISCONNECTED：取消待拨的任务。
-            else -> {
-                pending?.let { handler.removeCallbacks(it) }
-                onPhoneBluetoothDisconnected(address)
-            }
+            else -> onPhoneBluetoothDisconnected(address)
         }
+    }
+
+    /** 撤掉所有还挂着的「ACL 连上了，等防抖再拨」任务（用户停止、切仅有线时收尾用）。只在调度线程上调用。 */
+    private fun cancelPendingAclDials() {
+        if (pendingAclDials.isEmpty()) return
+        for (dial in pendingAclDials.values) handler.removeCallbacks(dial)
+        pendingAclDials.clear()
     }
 
     /** 界面那边就开始不了（例如权限被拒）。 */
@@ -654,6 +670,8 @@ class WirelessController(
             carHotspot, carHotspotAutoOpen, dial,
         )
         attempt = current
+        // 这次连接接手了：重试常驻的热点任务完成使命（热点由 syncHotspotStandby 按新连接的状态接着管）。
+        retryKeepsHotspot = false
         // 点「开始」顺带拨的也记进拨号规则：自动拨号不再叠着拨这台手机。
         (reconnect ?: dial)?.let { triggers.commitDial(it.address, SystemClock.elapsedRealtime()) }
         inputTarget = current
@@ -698,6 +716,8 @@ class WirelessController(
 
     /** 开始不了：用户开始的显示原因；自动进入的只记日志、界面上一行说明。 */
     private fun blocked(kind: Kind, notice: WirelessNotice, hold: AutoHold) {
+        // 没拨成：重试常驻的热点不再为这次留着（giveUp 之后 syncHotspotStandby 会收掉）。
+        retryKeepsHotspot = false
         if (kind == Kind.MANUAL) return block(notice)
         Log.i(TAG, "自动回连这次不进入等待：$hold（$notice）")
         setAutoHold(hold)
@@ -810,10 +830,13 @@ class WirelessController(
         kind: Kind = Kind.RECONNECT,
     ) {
         fun giveUp() {
+            // 这次没拨成：重试常驻的热点也到头了，正常收尾（下一次重试时按那时的状态重新预热）。
+            retryKeepsHotspot = false
             if (resumeWiredAfter) {
                 Log.i(TAG, "这次没拨成，让有线回到等插线")
                 resumeWiredWaiting()
             }
+            syncHotspotStandby()
         }
         if (attempt != null || waitingForUi) {
             Log.i(TAG, "已经有连接在进行或在等界面，不拨手机（$why）")
@@ -852,6 +875,8 @@ class WirelessController(
             Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why")
             begin(kind, reconnect = target.takeIf { kind != Kind.MANUAL }, dial = target.takeIf { kind == Kind.MANUAL }, resumeWiredAfter = resumeWiredAfter)
             if (attempt == null) giveUp()
+            // 接手了或没拨成，热点按新状态开或收：界面在前台这条路也要走一遍。
+            syncHotspotStandby()
             return
         }
         Log.i(TAG, "车机主动拨手机（${MacText.mask(address)}）：$why；界面带到前台就拨（最多等 $SURFACE_WAIT_MS 毫秒）")
@@ -1455,10 +1480,12 @@ class WirelessController(
         val retryKind = if (current.kind == Kind.MANUAL) Kind.MANUAL else Kind.RECONNECT
         Log.i(TAG, "投屏没成就结束了，$delay 毫秒后自动重拨（第 $autoRetryCount/$AUTO_RETRY_MAX 次）")
         val retry = Runnable {
+            // retryKeepsHotspot 不在这里清：beginReconnect 里 giveUp（没拨成）或 begin 接手后各自清，
+            // 中间这段窗口期热点常驻，别让 onAppForeground 之类的顺手把它拆了。
             autoRetry = null
             autoRetryPending = false
-            retryKeepsHotspot = false
             beginReconnect(address, "上一次投屏没成，自动重试", preemptWired = false, kind = retryKind)
+            syncHotspotStandby()
         }
         autoRetry = retry
         autoRetryPending = true
@@ -1524,14 +1551,15 @@ class WirelessController(
     /**
      * 按现在的情况开着或关掉留着的热点。有连接在进行、走本地热点就开着——主动回连也提前开（与蓝牙握手/认证并行，
      * 省去等连上再开的 3 秒）；连接结束就关、「退出后恢复车机 WiFi」开着时复查车机 WiFi（[wifiRestore]）。
-     * 自动重试倒计时期间（[retryKeepsHotspot]）热点常驻不拆：下一次重试 0ms 复用，不撞热点重开的 3.5 秒冷却。
+     * 自动重试倒计时（[autoRetryPending]）和它触发的「等界面回到前台再拨」（[waitingForUi]）期间热点常驻不拆：
+     * 下一次重试 0ms 复用，不撞热点重开的 3.5 秒冷却；onAppForeground 也不会把常驻热点拆掉。
      */
     private fun syncHotspotStandby() {
         val current = attempt
         // 建直连组、用车机自带热点的连接不开本地热点（会把车机自己的 WiFi / 车主开的热点挤掉）。
         val activeUsesLocalHotspot = current != null && !current.directGroup && current.carHotspot == null &&
             !wirelessPrefs.wiredOnly && !wiredActive()
-        val retryUsesLocalHotspot = current == null && autoRetryPending && retryKeepsHotspot &&
+        val retryUsesLocalHotspot = current == null && (autoRetryPending || waitingForUi) && retryKeepsHotspot &&
             !wirelessPrefs.wiredOnly && !wiredActive()
         val wanted = activeUsesLocalHotspot || retryUsesLocalHotspot
         if (wanted == hotspotStandby) return

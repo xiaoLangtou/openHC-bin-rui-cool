@@ -43,6 +43,13 @@ public final class HotspotSwitchMain {
     /** 系统签名进程（OpenHC 用平台密钥签名、sharedUserId=android.uid.system 时）：允许进程内直调。 */
     private static final int SYSTEM_UID = 1000;
     private static final String SHELL_PACKAGE = "com.android.shell";
+    /** 系统签名进程（uid 1000）的包名归属：AppOpsManager.checkPackage 按调用方 uid 校验包名，报错包名会被拒。 */
+    private static final String SYSTEM_PACKAGE = "android";
+
+    /** 这次调用该向系统自报的包名：shell 是 com.android.shell，系统签名进程是 android；报错了会被 checkPackage 拒掉。 */
+    private static String callerPackage(int uid) {
+        return uid == SYSTEM_UID ? SYSTEM_PACKAGE : SHELL_PACKAGE;
+    }
     private static final int TETHERING_WIFI = 0;
     /** 系统热点状态：10 正在关、11 关着、12 正在开、13 开着、14 出错。 */
     private static final int AP_ENABLING = 12;
@@ -98,10 +105,10 @@ public final class HotspotSwitchMain {
                 } else if (CHECK.equals(arg)) {
                     result = "READY";
                 } else if (STOP.equals(arg)) {
-                    stop.invoke(connectivity, TETHERING_WIFI, SHELL_PACKAGE);
+                    stop.invoke(connectivity, TETHERING_WIFI, callerPackage(uid));
                     result = "DONE";
                 } else {
-                    String[] outcome = start(wifi, state, connectivity, tethered, start);
+                    String[] outcome = start(wifi, state, connectivity, tethered, start, callerPackage(uid));
                     result = outcome[0];
                     detail = outcome[1];
                 }
@@ -114,8 +121,8 @@ public final class HotspotSwitchMain {
         return HEADER + "|" + result + "|" + detail;
     }
 
-    /** 返回 {结果, 说明}。 */
-    private static String[] start(Object wifi, Method state, Object connectivity, Method tethered, Method start) throws Exception {
+    /** 返回 {结果, 说明}。[callerPkg] 是调用方向系统自报的包名（AppOpsManager.checkPackage 按它校验归属）。 */
+    private static String[] start(Object wifi, Method state, Object connectivity, Method tethered, Method start, String callerPkg) throws Exception {
         int before = (Integer) state.invoke(wifi);
         if (before == AP_ENABLED || before == AP_ENABLING) {
             return new String[]{"ALREADY_ON", "state=" + before};
@@ -129,7 +136,7 @@ public final class HotspotSwitchMain {
                 answered.countDown();
             }
         };
-        start.invoke(connectivity, TETHERING_WIFI, receiver, false, SHELL_PACKAGE);
+        start.invoke(connectivity, TETHERING_WIFI, receiver, false, callerPkg);
         answered.await(RESULT_WAIT_MS, TimeUnit.MILLISECONDS);
         // 0 是成功；没回结果时照样看热点状态。
         if (code.get() != NO_ANSWER && code.get() != 0) return new String[]{"FAILED", "code=" + code.get()};

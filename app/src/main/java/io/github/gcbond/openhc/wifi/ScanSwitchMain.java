@@ -32,6 +32,13 @@ public final class ScanSwitchMain {
     /** 系统签名进程（OpenHC 用平台密钥签名、sharedUserId=android.uid.system 时）：允许进程内直调。 */
     private static final int SYSTEM_UID = 1000;
     private static final String SHELL_PACKAGE = "com.android.shell";
+    /** 系统签名进程（uid 1000）的包名归属：AppOpsManager.checkPackage 按调用方 uid 校验包名，报错包名会被拒。 */
+    private static final String SYSTEM_PACKAGE = "android";
+
+    /** 这次调用该向系统自报的包名：shell 是 com.android.shell，系统签名进程是 android；报错了会被 checkPackage 拒掉。 */
+    private static String callerPackage(int uid) {
+        return uid == SYSTEM_UID ? SYSTEM_PACKAGE : SHELL_PACKAGE;
+    }
 
     private ScanSwitchMain() {
     }
@@ -75,7 +82,7 @@ public final class ScanSwitchMain {
                     result = "UNSUPPORTED";
                 } else {
                     method = setter.getName();
-                    result = CHECK.equals(arg) ? "READY" : invoke(wifi, setter, RESTORE.equals(arg));
+                    result = CHECK.equals(arg) ? "READY" : invoke(wifi, setter, RESTORE.equals(arg), callerPackage(uid));
                 }
             }
         } catch (Throwable t) {
@@ -111,12 +118,12 @@ public final class ScanSwitchMain {
         return old;
     }
 
-    private static String invoke(Object wifi, Method setter, boolean enabled) {
+    private static String invoke(Object wifi, Method setter, boolean enabled, String callerPkg) {
         Class<?>[] types = setter.getParameterTypes();
         Object[] values = new Object[types.length];
         values[0] = enabled;
         for (int i = 1; i < types.length; i++) {
-            values[i] = types[i] == String.class ? SHELL_PACKAGE : new Bundle();
+            values[i] = types[i] == String.class ? callerPkg : new Bundle();
         }
         try {
             setter.invoke(wifi, values);
