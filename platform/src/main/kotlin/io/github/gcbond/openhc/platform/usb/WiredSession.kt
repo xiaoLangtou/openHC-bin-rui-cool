@@ -282,17 +282,33 @@ class WiredSession(
 
     /**
      * 拿到 [device] 的 USB 授权后调用 [granted]（总是经工作线程排队调用，不会在本方法里直接调）。
-     * 没有授权时先等 [WiredTimeouts.permissionGraceMs] 看系统会不会自动授权，再弹授权框。
+     * 没有授权时系统签名进程先尝试静默自授一次（[UsbSystemGrant]），再等 [WiredTimeouts.permissionGraceMs]
+     * 看系统会不会自动授权，最后才弹授权框。
      */
     private fun awaitPermission(device: UsbDevice, stage: UsbStage, timeoutMs: Long, granted: (UsbDevice) -> Unit) {
         val usb = usbManager ?: return
         onGranted = granted
         val token = phaseToken
         val graceUntil = SystemClock.uptimeMillis() + config.timeouts.permissionGraceMs
+        var silentGrantTried = false
         val check = object : Runnable {
             override fun run() {
                 if (phaseToken != token) return
                 if (hasPermission(usb, device)) return permissionGranted(device)
+                // 系统签名进程：静默自授一次，免弹窗；自授没生效就无感回退既有弹窗流程。
+                if (!silentGrantTried) {
+                    silentGrantTried = true
+                    if (android.os.Process.myUid() == android.os.Process.SYSTEM_UID) {
+                        log("系统签名进程，尝试静默自授 USB 权限（$stage）")
+                        try {
+                            UsbSystemGrant.grant(usb, device, app.packageName)
+                        } catch (e: RuntimeException) {
+                            log("USB 静默自授出错，回退系统授权框")
+                        }
+                        if (hasPermission(usb, device)) return permissionGranted(device)
+                        log("USB 静默自授未生效，走系统授权框")
+                    }
+                }
                 if (SystemClock.uptimeMillis() < graceUntil) {
                     handler?.postDelayed(this, GRACE_POLL_MS)
                     return

@@ -28,3 +28,11 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)
 }
+
+// JVM 单元测试里 android 框架桩返回默认值而不是抛异常：VpnConsent 的日志走 android.util.Log，
+// 测试只验证决策分支，不关心日志输出。
+android {
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+}

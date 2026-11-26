@@ -89,6 +89,18 @@
         android.uid.system（与官方 CarLink 同款打包方式），此 signature 级权限即可自动授予，广播放行。
     -->
     <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" tools:ignore="ProtectedPermissions" />
+    <!--
+        有线连接静默自授（系统签名 + android.uid.system 时不再依赖电脑敲 adb 命令）：
+        - CONTROL_VPN：直调 ConnectivityService 的 setVpnPackageAuthorization / prepareVpn，免 VPN 授权框（车机常没有 com.android.vpndialogs）。
+        - MANAGE_APP_OPS_MODES / UPDATE_APP_OPS_STATS：把本应用的 ACTIVATE_VPN appop 置 allow（等价 adb shell appops set <pkg> ACTIVATE_VPN allow）。
+        - MANAGE_USB：经 UsbManager/IUsbManager 直接授予 USB 设备权限，免 USB 授权框。
+        四个都是 signature|privileged 级别，平台密钥签名自动授予；普通签名版拿不到权限时反射调用失败，
+        安全回退到既有的弹窗流程，行为不变。
+    -->
+    <uses-permission android:name="android.permission.CONTROL_VPN" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MANAGE_APP_OPS_MODES" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.UPDATE_APP_OPS_STATS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MANAGE_USB" tools:ignore="ProtectedPermissions" />
     <!-- 比亚迪车机「选择禁止后台启动项」对话框：安卓 11 起要声明，才查得到车机上有没有它（设置 → 启动）。 -->
     <!-- <queries> 仅 API 30+ 有意义（BYD 应用启动管理），Android 9 的 PackageParser 不认识该元素、
          会导致整包 INSTALL_FAILED_INVALID_APK，车机（API 28）上所有包本来可见，直接去掉。 -->
