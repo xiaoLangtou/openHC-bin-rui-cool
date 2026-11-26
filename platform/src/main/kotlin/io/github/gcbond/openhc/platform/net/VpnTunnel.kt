@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import io.github.gcbond.openhc.platform.log.Log
 import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
@@ -81,13 +83,7 @@ internal class VpnTunnel private constructor(
                 }
                 val service = serviceRef.get() ?: throw IOException("绑定到的不是本模块的 VPN 服务")
                 service.revokeListener = onRevoked
-                val descriptor = try {
-                    service.establishTun(spec)
-                } catch (e: RuntimeException) {
-                    // 地址或路由被拒（IllegalArgumentException）、正处于其他 VPN 锁定状态（IllegalStateException）、
-                    // 设备策略禁止 VPN（SecurityException）等。
-                    throw IOException("系统拒绝建 TUN: ${e.javaClass.simpleName}: ${e.message}", e)
-                } ?: throw IOException("系统拒绝建 TUN：没有 VPN 授权，或授权已被别的 VPN 应用取代")
+                val descriptor = establishTunWithReclaim(service, spec, app)
                 val tun = try {
                     TunInterface(descriptor)
                 } catch (e: IOException) {
@@ -115,6 +111,33 @@ internal class VpnTunnel private constructor(
             }
         }
 
+        /**
+         * 建 TUN：首次返回 null（安卓 9 上 uid 1000 共享 android.uid.system 与开机默认的
+         * LEGACY_VPN「mOwnerUID=1000」撞号——prepare 被 1000==1000 短路，mPackage 卡在
+         * 「[Legacy VPN]」，establish 必败；appop 已持久化时 [VpnConsent.check] 还看不出来）
+         * 时，两步换手夺回归属后立即重试一次：插线建 TUN 的瞬间自愈，不浪费已消耗的 carInfo。
+         * 普通签名版没有系统身份，reclaim 直接返回 false，照旧抛原错误走弹窗授权流程。
+         */
+        private fun establishTunWithReclaim(
+            service: WiredVpnService,
+            spec: TunSpec,
+            app: Context,
+        ): ParcelFileDescriptor {
+            tryEstablish(service, spec)?.let { return it }
+            Log.i(TAG, "首次建 TUN 返回 null，尝试系统身份两步换手夺回 VPN 归属后重试")
+            VpnConsent.reclaimSystemVpnOwner(app)
+            tryEstablish(service, spec)?.let { return it }
+            throw IOException("系统拒绝建 TUN：没有 VPN 授权，或授权已被别的 VPN 应用取代")
+        }
+
+        /** 单次建 TUN；系统侧异常（地址/路由被拒、锁定模式、设备策略等）转 [IOException]。 */
+        private fun tryEstablish(service: WiredVpnService, spec: TunSpec): ParcelFileDescriptor? = try {
+            service.establishTun(spec)
+        } catch (e: RuntimeException) {
+            throw IOException("系统拒绝建 TUN: ${e.javaClass.simpleName}: ${e.message}", e)
+        }
+
+        private const val TAG = "OpenHC-VpnTunnel"
         private const val WAIT_SLICE_MS = 100L
     }
 }

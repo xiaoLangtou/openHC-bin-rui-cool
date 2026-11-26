@@ -3,6 +3,7 @@ package io.github.gcbond.openhc.platform.net
 import android.content.Intent
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -149,5 +150,48 @@ class VpnConsentTest {
     @Test
     fun fallbackOpCodeMatchesAndroid9() {
         assertEquals(47, VpnConsent.FALLBACK_ACTIVATE_VPN_OP)
+    }
+
+    // ---------------- 两步换手夺回 VPN 归属（UID 1000 撞 LEGACY_VPN 问题） ----------------
+
+    @Test
+    fun reclaimSkipsForNonSystemUid() {
+        var grantCalls = 0
+        val ok = VpnConsent.reclaimWith(isSystemUid = { false }, autoGrant = { grantCalls++; true })
+        assertFalse(ok, "非系统身份不做换手（普通签名版走弹窗流程）")
+        assertEquals(0, grantCalls)
+    }
+
+    @Test
+    fun reclaimGrantsForSystemUid() {
+        var grantCalls = 0
+        val ok = VpnConsent.reclaimWith(isSystemUid = { true }, autoGrant = { grantCalls++; true })
+        assertTrue(ok, "系统身份执行自授两步走（appop 置 allow + prepareVpn 两步换手）")
+        assertEquals(1, grantCalls)
+    }
+
+    @Test
+    fun reclaimNeverThrowsWhenAutoGrantFails() {
+        // 建重试链路绝不能因夺回流程自身抛异常而中断（复用既有语义：安全捕获记日志）。
+        val ok = VpnConsent.reclaimWith(
+            isSystemUid = { true },
+            autoGrant = { throw IllegalStateException("ConnectivityService 挂了") },
+        )
+        assertFalse(ok)
+    }
+
+    @Test
+    fun reclaimNeverThrowsWhenProbeFails() {
+        val ok = VpnConsent.reclaimWith(
+            isSystemUid = { throw IllegalStateException("探针异常") },
+            autoGrant = { true },
+        )
+        assertFalse(ok)
+    }
+
+    @Test
+    fun bouncePackageIsShell() {
+        // 换手中转包必须是 uid 2000 的 com.android.shell（!= 1000），才能把 mOwnerUID 从 LEGACY_VPN 的 1000 挪开。
+        assertEquals("com.android.shell", VpnConsent.BOUNCE_PACKAGE)
     }
 }
