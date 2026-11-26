@@ -90,6 +90,19 @@ class WirelessPreferences(context: Context) {
         return key !in known
     }
 
+    /** 忘掉一台手机的「无线连成功过」记录（例如手机端删了这辆车、要求重新扫码配对）：之后不再主动拨它，直到重新扫码投屏成功。 */
+    @Synchronized
+    fun forgetPhone(address: String): Boolean {
+        val key = address.trim().uppercase()
+        val known = knownPhoneList
+        if (key !in known) return false
+        val next = known - key
+        prefs.edit {
+            if (next.isEmpty()) remove(KEY_KNOWN_PHONES) else putString(KEY_KNOWN_PHONES, next.joinToString(","))
+        }
+        return true
+    }
+
     /**
      * 旧设置「无线自动回连」：车机空闲时发 BLE 广播、开蓝牙监听，等手机自己连上来。已不再自动进入，设置页去掉了这一项，
      * 相关代码待删。

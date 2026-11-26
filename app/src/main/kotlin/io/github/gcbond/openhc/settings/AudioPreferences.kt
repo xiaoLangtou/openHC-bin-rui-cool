@@ -120,6 +120,19 @@ class AudioPreferences(context: Context) {
         prefs.edit { putStringSet(KEY_UDP_PHONES, now) }
     }
 
+    /** 忘掉一台手机的「改用 UDP」记录（恢复走 TCP），移除该手机所有版本的条目。 */
+    fun forgetUdpPhone(key: String) = synchronized(LOCK) {
+        val now = prefs.getStringSet(KEY_UDP_PHONES, null)?.toMutableSet() ?: return
+        if (now.removeAll { PhoneRef.entryOf(it, key) }) {
+            prefs.edit { putStringSet(KEY_UDP_PHONES, now) }
+        }
+    }
+
+    /** 清空全部「改用 UDP」记录。 */
+    fun clearUdpPhones() = synchronized(LOCK) {
+        prefs.edit { remove(KEY_UDP_PHONES) }
+    }
+
     /** 下一次连接的音频设置；关掉声音时为 null（不声明扬声器，声音留在手机上）。 */
     fun toSettings(): AudioSettings? = if (enabled) {
         AudioSettings(transport, codec, multiBus, if (codec == AudioCodec.PCM) pcmFallbacks().aacPhones() else emptySet(), udpPhones())

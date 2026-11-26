@@ -293,6 +293,7 @@ class WirelessController(
     fun start() = post {
         if (attempt != null) return@post
         cancelAutoRetry()
+        autoRetryCount = 0
         begin(Kind.MANUAL, dial = manualDialTarget())
     }
 
@@ -1430,14 +1431,31 @@ class WirelessController(
         val cause = current.causes.result()
         Log.i(TAG, "第 ${current.id} 次无线连接已收尾：$cause")
         apply(WirelessSignal.AttemptFinished(cause))
-        afterAttempt(current)
+        afterAttempt(current, cause)
     }
 
-    /** 一次连接收尾之后：回到空闲（更新空闲说明、退出前台）。 */
-    private fun afterAttempt(current: Attempt) {
+    /** 一次连接收尾之后：回到空闲（更新空闲说明、退出前台），或在顺带拨号被手机要求重配时直接切纯扫码。 */
+    private fun afterAttempt(current: Attempt, cause: WirelessEndCause) {
         // 热点跟着连接走：连接结束就关、复查车机 WiFi（见 [syncHotspotStandby]）。不再自动回到等待。
         lastEndByUser = current.stopReason == StopReason.USER
-        current.phoneAddress?.let { triggers.onSessionEnded(it, current.projected, stoppedByUser = lastEndByUser) }
+        val needsPairing = ReconnectPolicy.needsPairing(cause)
+        if (needsPairing) {
+            autoRetryCount = 0
+            retryKeepsHotspot = false
+            current.phoneAddress?.let { address ->
+                triggers.forget(address)
+                if (wirelessPrefs.forgetPhone(address)) {
+                    Log.i(TAG, "手机（${MacText.mask(address)}）要求重新配对，已移除自动回连记录，重新扫码投屏成功后再恢复")
+                }
+            }
+            if (current.kind == Kind.MANUAL && current.stopReason == null) {
+                Log.i(TAG, "用户点击开始但顺带拨号被手机要求重新配对：自动切回纯扫码等待（不再拨号）")
+                begin(Kind.MANUAL, dial = null)
+                return
+            }
+        } else {
+            current.phoneAddress?.let { triggers.onSessionEnded(it, current.projected, stoppedByUser = lastEndByUser) }
+        }
         if (current.resumeWiredAfter && !wirelessPrefs.wiredOnly && !wiredActive()) {
             Log.i(TAG, "无线连接结束，让有线回到等插线（之前为无线让出来的）")
             resumeWiredWaiting()
@@ -1447,20 +1465,29 @@ class WirelessController(
             releaseForeground()
             return
         }
-        scheduleAutoRetry(current)
+        if (needsPairing) {
+            refreshIdleStatus("手机要求重新配对")
+            return
+        }
+        scheduleAutoRetry(current, cause)
         refreshIdleStatus("上一次连接结束")
     }
 
     /**
      * 手机侧抽风自愈：投屏没成、会话自己断掉（手机 abort，2026-11-23 实车连着 3 次：第 3 次死在设备会话、
      * 第 4/5 次死在投屏协商，都是 SocketException abort，第 6 次手动重拨才成）→ 渐进退避自动重拨同一台手机
-     * （[autoRetryDelayMs]），最多连试 [AUTO_RETRY_MAX] 次，投屏成功即清零。用户停的、投屏过的结束、手机蓝牙已断开
-     * 都不重试——投屏过的结束是有意义的（手机主动断开或车主收工），自动回拨会惹人烦；没投过屏的 abort 才是「手机没准备好」。
+     * （[autoRetryDelayMs]），最多连试 [AUTO_RETRY_MAX] 次，投屏成功即清零。用户停的、投屏过的结束、手机蓝牙已断开、
+     * 以及手机要求重新配对（[ReconnectPolicy.needsPairing]）都不重试——后者重拨只会秒关二维码。
      * 上次走本地热点的（[retryKeepsHotspot]）重试倒计时期间热点常驻不拆。
      * 用户点「开始」的（[Kind.MANUAL]）重拨仍按 [Kind.MANUAL] 走（保留扫码二维码 + BLE 广播 + 拨号三路并发），
      * 不因为一次拨号失败把二维码弄丢。
      */
-    private fun scheduleAutoRetry(current: Attempt) {
+    private fun scheduleAutoRetry(current: Attempt, cause: WirelessEndCause) {
+        if (ReconnectPolicy.needsPairing(cause)) {
+            autoRetryCount = 0
+            retryKeepsHotspot = false
+            return
+        }
         if (current.stopReason != null || current.projected) {
             if (current.projected) autoRetryCount = 0
             retryKeepsHotspot = false

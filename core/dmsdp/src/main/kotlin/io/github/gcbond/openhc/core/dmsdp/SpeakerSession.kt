@@ -75,6 +75,9 @@ internal class SpeakerSession(
     /** 这次连接里手机不认 TCP（或记着要用 UDP），之后的数据会话都用 UDP。 */
     private var udpFallback = false
 
+    /** 这次连接里已经从 UDP 误记恢复回 TCP，之后锁死在 TCP，避免来回震荡。 */
+    private var udpRecovered = false
+
     /** 这次连接里「应答了 TCP 的 SETUP、却一直不连数据端口」的数据会话数（见 [end]）。 */
     private var answeredNoConnect = 0
 
@@ -285,7 +288,7 @@ internal class SpeakerSession(
      */
     private fun checkControlInstead(nowMillis: Long) {
         val stream = current ?: return
-        if (udpFallback || speaker.transport != AudioTransport.TCP || stream.info.transport != AudioTransport.TCP) return
+        if (udpFallback || udpRecovered || speaker.transport != AudioTransport.TCP || stream.info.transport != AudioTransport.TCP) return
         if (stream.data != null || stream.acceptedAtMillis < 0 || nowMillis - stream.acceptedAtMillis < ACCEPTED_NO_CONNECT_MILLIS) return
         udpFallback = true
         note(stream.info, "手机应答了 SETUP，${(nowMillis - stream.acceptedAtMillis) / 1000} 秒都没连数据端口，声音一直从控制连接送：之后的数据会话改用 UDP")
@@ -391,7 +394,7 @@ internal class SpeakerSession(
             return
         }
         reply(sessionId, cseq)
-        val plan = plan()
+        val codec = plan().codec
         check?.onTrigger()
         val active = current
         if (active != null && active.info.dataSessionId == sessionId) {
@@ -400,14 +403,7 @@ internal class SpeakerSession(
             return
         }
         if (active != null) end(active, AudioEndReason.REPLACED, nowMillis)
-        val paraAudio = message.header(PARA_AUDIO) ?: ""
-        // 手机在 ParaAudio 里明确要 AAC（Codec=1）而声明是 PCM：顺着手机给 AAC。实测华为（HiCar 15.2）有线时
-        // 不应答 PCM 的 SETUP，会话反复拆掉重试直到把整条投屏拆掉；它自己要的编码没有理由不给。
-        // 只从 PCM 往 AAC 让步，不反向：退回 AAC 的手机是按实测记的（PcmFallbackBook），不因请求字段改回 PCM。
-        val requested = streamInfo(sessionId, paraAudio, transport(), plan.codec).requestedCodec
-        val codec = if (plan.codec == AudioCodec.PCM && requested == REQUESTED_AAC) AudioCodec.AAC else plan.codec
-        val stream = Stream(streamInfo(sessionId, paraAudio, transport(), codec))
-        if (codec != plan.codec) note(stream.info, "手机的 ParaAudio 要 AAC（声明的 PCM 它不应答），这次数据会话顺着手机给 AAC")
+        val stream = Stream(streamInfo(sessionId, message.header(PARA_AUDIO) ?: "", transport(), codec))
         current = stream
         emit(AudioEvent.Requested(stream.info))
         out?.add(DmsdpAction.OpenAudioListeners(stream.info.transport))
@@ -485,6 +481,7 @@ internal class SpeakerSession(
      */
     private fun transport(): AudioTransport {
         if (speaker.transport != AudioTransport.TCP) return speaker.transport
+        if (udpRecovered) return AudioTransport.TCP
         if (udpFallback) return AudioTransport.UDP
         val phone = peer
         if (phone != null && phone.listedIn(speaker.udpPhones)) {
@@ -505,12 +502,21 @@ internal class SpeakerSession(
 
     /** [nowMillis] 为 null 时不判断「应答了却不连」（例如车机自己开不了端口）。 */
     private fun end(stream: Stream, reason: AudioEndReason, nowMillis: Long?) {
-        val tcpAsked = stream.info.transport == AudioTransport.TCP && !udpFallback &&
+        val major = peer?.version?.substringBefore('.')?.toIntOrNull()
+        val tcpPreferred = major != null && major >= TCP_MIN_HICAR_MAJOR
+        val tcpAsked = stream.info.transport == AudioTransport.TCP && !udpFallback && !udpRecovered &&
             speaker.transport == AudioTransport.TCP && stream.port != 0 && stream.data == null
-        // 手机对 TCP 方式的 SETUP 一直没有应答、也没连数据端口就拆掉了：它不认 TCP（老鸿蒙），之后改用 UDP。
+        val udpAsked = stream.info.transport == AudioTransport.UDP && !udpRecovered &&
+            speaker.transport == AudioTransport.TCP && stream.port != 0 && stream.data == null
         if (tcpAsked && reason == AudioEndReason.PEER_TEARDOWN && stream.answer == null) {
-            udpFallback = true
-            emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.NO_ANSWER))
+            if (tcpPreferred) {
+                // HiCar 15+ 默认走 TCP（实测纯血鸿蒙 15.2 不认 UDP SETUP）：单次无应答不得误切 UDP / 写进 udpPhones。
+                note(stream.info, "${peer ?: "手机"}（HiCar ${peer?.version}）未应答 TCP 方式的 SETUP，保持 TCP 不改用 UDP")
+            } else {
+                // 老鸿蒙 / 版本未知：不认 TCP，之后改用 UDP。
+                udpFallback = true
+                emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.NO_ANSWER))
+            }
         } else if (tcpAsked && nowMillis != null && stream.acceptedAtMillis >= 0 &&
             nowMillis - stream.acceptedAtMillis >= ACCEPTED_NO_CONNECT_MILLIS
         ) {
@@ -526,13 +532,22 @@ internal class SpeakerSession(
                 udpFallback = true
                 emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.ACCEPTED_NO_CONNECT))
             }
-        }
-        // 声明是 PCM、手机明确要 AAC（ParaAudio Codec=1）、SETUP 没应答就被拆：这台手机在 PCM 下出不了声
-        // （它自己都不要 PCM），记进退回名单，下次连接从头声明 AAC，不再浪费第一轮数据会话。
-        if (reason == AudioEndReason.PEER_TEARDOWN && stream.port != 0 && stream.answer == null &&
-            plan?.codec == AudioCodec.PCM && stream.info.requestedCodec == REQUESTED_AAC
+        } else if (udpAsked && reason == AudioEndReason.PEER_TEARDOWN && stream.answer == null &&
+            (major == null || major >= TCP_MIN_HICAR_MAJOR)
         ) {
-            verdict(PcmVerdict.NO_ANSWER)
+            // 走 UDP 同样不应答 SETUP（多半曾因偶发超时被误记进 UDP 名单）：本次连接恢复 TCP，并请应用忘掉 UDP 记录，
+            // 避免永久卡死在 UDP 死胡同（同时置 udpRecovered 防止 TCP/UDP 来回震荡）。
+            udpFallback = false
+            udpRecovered = true
+            emit(AudioEvent.TransportRecovered(peer, AudioEvent.TransportRecovered.UDP_NO_ANSWER))
+        }
+        // 声明 PCM 且走 TCP、保持 TCP（未改切 UDP）时手机未应答 SETUP 即拆会话：交由 PcmFallbackBook 按谨慎规则
+        // （连续 2 次）决定下次改声明 AAC，避免一次偶发超时误降级，也绝不把编码问题错怪成 TCP 不支持。
+        if (reason == AudioEndReason.PEER_TEARDOWN && stream.info.transport == AudioTransport.TCP &&
+            stream.port != 0 && stream.answer == null && stream.data == null &&
+            plan?.codec == AudioCodec.PCM && (tcpPreferred || udpRecovered)
+        ) {
+            verdict(PcmVerdict.SETUP_UNANSWERED)
         }
         stream.data?.finish()
         if (current === stream) current = null
@@ -746,8 +761,5 @@ internal class SpeakerSession(
         private const val DEFAULT_CHANNELS = 2
         private const val DEFAULT_BITS = 16
         private const val MAX_PARAMETER_CHARS = 200
-
-        /** ParaAudio 的 Codec 里代表 AAC 的值（0 是 PCM）。 */
-        private const val REQUESTED_AAC = 1
     }
 }

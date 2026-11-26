@@ -247,6 +247,18 @@ sealed class AudioEvent {
         }
     }
 
+    /**
+     * 手机在 UDP 方式下同样不应答 SETUP（例如曾因偶发超时被误记入 UDP 名单）：这次连接之后的数据会话恢复使用 TCP，
+     * 应用应忘掉这台手机的 UDP 记录。
+     */
+    class TransportRecovered(val phone: PhoneRef?, val reason: String = UDP_NO_ANSWER) : AudioEvent() {
+        override fun toString() = "手机（${phone ?: "认不出是哪台手机"}）$reason，之后的数据会话恢复使用 TCP"
+
+        companion object {
+            const val UDP_NO_ANSWER = "不应答 UDP 方式的 SETUP"
+        }
+    }
+
     class CodecVerdict(val phone: PhoneRef?, val verdict: PcmVerdict) : AudioEvent() {
         override fun toString() = "PCM 判定（${phone ?: "认不出是哪台手机"}）：${verdict.label}" +
             if (verdict.failure) "，下次连接这台手机可能改用 AAC" else ""

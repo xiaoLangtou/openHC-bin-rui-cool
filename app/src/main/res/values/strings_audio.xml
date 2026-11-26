@@ -30,6 +30,11 @@
     <string name="settings_audio_fallback_item">%1$s（编号 %2$s）：%3$s，%4$s 记下</string>
     <string name="settings_audio_fallback_unnamed">没报名字的手机</string>
     <string name="settings_audio_fallback_reset">恢复 PCM</string>
+    <string name="settings_audio_udp_title">已自动改用 UDP 的手机</string>
+    <string name="settings_audio_udp_help">部分老版本手机不走 TCP 音频连接，会记在这里改用 UDP。若新手机误记导致没声音，点「恢复 TCP」后下次连接重新用 TCP。</string>
+    <string name="settings_audio_udp_item">编号 %1$s（%2$s）</string>
+    <string name="settings_audio_udp_version_unknown">版本未知</string>
+    <string name="settings_audio_udp_reset">恢复 TCP</string>
     <string name="settings_audio_multi_bus">多声道分流（默认开）</string>
     <string name="settings_audio_multi_bus_hint">开着时向手机声明多音频总线：导航播报单独一路，放到车机的导航声道，音乐照常走媒体声道。关掉就回到所有声音混在一起、都走媒体音量，用来对比。</string>
     <string name="settings_audio_transport">传输方式</string>

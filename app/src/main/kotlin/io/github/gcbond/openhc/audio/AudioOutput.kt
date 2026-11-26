@@ -138,6 +138,10 @@ internal class AudioOutput(
                 prefs.addUdpPhone(phone)
                 Log.i(TAG, "[$attemptId] $event；记下这台手机，下次连接直接用 UDP")
             }
+            is AudioEvent.TransportRecovered -> event.phone?.let { phone ->
+                prefs.forgetUdpPhone(phone.key)
+                Log.i(TAG, "[$attemptId] $event；已忘掉这台手机的 UDP 记录，下次连接重新用 TCP")
+            }
             is AudioEvent.Ended -> {
                 stopSession(event.stream.dataSessionId, "数据会话结束（${event.reason.label}）")
                 // 手机拆掉数据会话就是不放了：焦点一并放掉（通话中的通话焦点除外），它重新出声时会再要；被新的替换时不放。

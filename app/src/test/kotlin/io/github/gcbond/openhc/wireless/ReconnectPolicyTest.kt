@@ -1,5 +1,6 @@
 package io.github.gcbond.openhc.wireless
 
+import io.github.gcbond.openhc.core.session.WirelessEndReason
 import io.github.gcbond.openhc.core.session.WirelessEvent
 import io.github.gcbond.openhc.wireless.ReconnectTriggers.Decision
 import kotlin.test.Test
@@ -190,5 +191,33 @@ class ReconnectPolicyTest {
         // 手机经蓝牙连上以后：插线不管（多半是在充电）。
         val scanned = WirelessReducer.reduce(scanning, WirelessSignal.Wireless(WirelessEvent.PhoneBluetoothConnected("02:00:00:00:00:02")))
         assertTrue(ReconnectPolicy.phoneOnWireless(scanned))
+    }
+
+    @Test
+    fun needsPairingOnlyTriggersOnReconnectFailedWithNeedsPairing() {
+        assertTrue(
+            ReconnectPolicy.needsPairing(
+                WirelessEndCause.Session(WirelessEndReason.ReconnectFailed("手机当场拒绝了", needsPairing = true)),
+            ),
+        )
+        assertFalse(
+            ReconnectPolicy.needsPairing(
+                WirelessEndCause.Session(WirelessEndReason.ReconnectFailed("超时", needsPairing = false)),
+            ),
+        )
+        assertFalse(ReconnectPolicy.needsPairing(WirelessEndCause.Session(WirelessEndReason.LocalStop)))
+        assertFalse(ReconnectPolicy.needsPairing(WirelessEndCause.UserStop))
+    }
+
+    @Test
+    fun forgettingAPhoneClearsItsCooldownAndConnectionDialState() {
+        val t = ReconnectTriggers(cooldownMillis = 60_000)
+        t.dialNow(t.onUiShown(phone, known, 0), 0)
+        assertIs<Decision.Skip>(t.onBluetoothConnected(phone, known, 5_000))
+        assertIs<Decision.Skip>(t.onUiShown(phone, known, 5_000))
+
+        t.forget(phone)
+        assertEquals(Decision.Dial(phone), t.onBluetoothConnected(phone, known, 5_001))
+        assertEquals(Decision.Dial(phone), t.onUiShown(phone, known, 5_001))
     }
 }

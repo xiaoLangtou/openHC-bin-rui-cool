@@ -1,5 +1,7 @@
 package io.github.gcbond.openhc.wireless
 
+import io.github.gcbond.openhc.core.session.WirelessEndReason
+
 /**
  * 无线页空闲时的一行说明：「蓝牙连上自动连接」现在能不能起作用，不能的话为什么（[ReconnectPolicy.hold]）。
  * 只是说明，不当成错误。
@@ -105,6 +107,12 @@ internal object ReconnectPolicy {
      * 还在等手机（扫码、等回连、车机在拨）就让给有线（插线优先）。
      */
     fun phoneOnWireless(state: WirelessUiState): Boolean = state.active && state.phoneConnected
+
+    /** 这次无线连接是不是因为「手机要求重新扫码配对」（例如手机删了这辆车，状态 1 秒拒）结束的。 */
+    fun needsPairing(cause: WirelessEndCause): Boolean {
+        val reason = (cause as? WirelessEndCause.Session)?.reason
+        return reason is WirelessEndReason.ReconnectFailed && reason.needsPairing
+    }
 }
 
 /**
@@ -144,6 +152,13 @@ internal class ReconnectTriggers(private val cooldownMillis: Long = DEFAULT_COOL
 
     fun onBluetoothDisconnected(address: String) {
         dialedThisConnection.remove(key(address))
+    }
+
+    /** 忘掉这台手机的冷却和拨号状态（手机要求重新扫码配对时调用）。 */
+    fun forget(address: String) {
+        val key = key(address)
+        lastDialAt.remove(key)
+        dialedThisConnection.remove(key)
     }
 
     fun onUiShown(lastPhone: String?, knownPhones: Set<String>, nowMillis: Long): Decision {

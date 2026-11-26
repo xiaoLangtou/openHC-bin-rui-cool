@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.gcbond.openhc.R
+import io.github.gcbond.openhc.core.dmsdp.audio.PhoneRef
 import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.AudioPreview
 import io.github.gcbond.openhc.platform.media.AudioStreamChoice
@@ -57,6 +58,7 @@ internal fun AudioSettingsSection() {
     var navigationStream by remember { mutableIntStateOf(prefs.navigationStream) }
     var mediaStream by remember { mutableIntStateOf(prefs.mediaStream) }
     var fallbacks by remember { mutableStateOf(prefs.pcmFallbacks().records.filter { it.useAac }) }
+    var udpPhones by remember { mutableStateOf(prefs.udpPhones().sorted()) }
 
     SettingsGroup(stringResource(R.string.settings_audio)) {
         SwitchRow(
@@ -112,6 +114,36 @@ internal fun AudioSettingsSection() {
                     FallbackRow(record) {
                         prefs.forgetPcmFallback(record.key)
                         fallbacks = prefs.pcmFallbacks().records.filter { it.useAac }
+                    }
+                }
+            }
+        }
+        if (udpPhones.isNotEmpty()) {
+            GroupRow {
+                RowHeader(stringResource(R.string.settings_audio_udp_title), stringResource(R.string.settings_audio_udp_help))
+                for (entry in udpPhones) {
+                    val key = entry.substringBefore(PhoneRef.VERSION_SEPARATOR)
+                    val version = entry.substringAfter(PhoneRef.VERSION_SEPARATOR, "")
+                        .ifEmpty { stringResource(R.string.settings_audio_udp_version_unknown) }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RowDescription(
+                            stringResource(R.string.settings_audio_udp_item, key.take(6), version),
+                            Modifier.weight(1f),
+                            color = Palette.Text,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        ActionButton(
+                            stringResource(R.string.settings_audio_udp_reset),
+                            onClick = {
+                                prefs.forgetUdpPhone(key)
+                                udpPhones = prefs.udpPhones().sorted()
+                            },
+                        )
                     }
                 }
             }

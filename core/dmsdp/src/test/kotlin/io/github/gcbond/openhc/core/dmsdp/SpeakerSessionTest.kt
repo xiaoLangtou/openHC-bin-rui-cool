@@ -83,7 +83,7 @@ class SpeakerSessionTest {
         phoneVersion: String? = null,
     ): DmsdpSession = encryptedSession(config = Synthetic.config(speaker = speaker, phoneVersion = phoneVersion), audio = audio).first
 
-    /** 手机的数据会话触发：头部名是小写，正文是触发字段。[codec] 是 ParaAudio 里的 Codec（0 PCM、1 AAC）。 */
+    /** 手机的数据会话触发：头部名是小写，正文是触发字段。[codec] 是 ParaAudio 里的 Codec（0 AAC、1 PCM）。 */
     private fun trigger(
         method: String,
         sessionId: String = "77",
@@ -104,8 +104,12 @@ class SpeakerSessionTest {
     private fun text(send: DmsdpOutput): String = String(phone.openControlFrame(assertIs<DmsdpAction.Send>(send).bytes))
 
     /** 走到 SETUP 已发出（数据端口 40100），返回会话。手机先报设备信息、请求扬声器服务。 */
-    private fun toSetupSent(audio: AudioRecorder, speaker: DmsdpConfig.Speaker = DmsdpConfig.Speaker()): DmsdpSession {
-        val session = speakerSession(speaker, audio)
+    private fun toSetupSent(
+        audio: AudioRecorder,
+        speaker: DmsdpConfig.Speaker = DmsdpConfig.Speaker(),
+        phoneVersion: String? = null,
+    ): DmsdpSession {
+        val session = speakerSession(speaker, audio, phoneVersion)
         session.phoneDeviceInfo()
         session.speakerProfile()
         session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 1_000)
@@ -296,51 +300,84 @@ class SpeakerSessionTest {
     }
 
     /**
-     * 声明是 PCM、手机在 ParaAudio 里明确要 AAC（Codec=1）：SETUP 顺着手机给 AAC（华为 HiCar 15.2 有线实测
-     * 不应答 PCM 的 SETUP，反复拆会话直到拆掉整条投屏）。手机要 PCM 时照旧按声明走。
+     * HiCar 的编码编号两处相反：2102 codecs 与 ParaAudio 里 1=PCM、0=AAC，而 SETUP 头里 0=PCM、1=AAC。
+     * 声明 PCM 时手机发来 ParaAudio Codec=1 是在按 PCM 请求，SETUP 必须保持 Codec: 0（PCM），不能误改为 AAC。
      */
     @Test
-    fun setupHonorsAacRequestedInParaAudio() {
+    fun setupKeepsPcmWhenParaAudioHasCodec1() {
         val audio = AudioRecorder()
         val session = speakerSession(speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio = audio)
         session.phoneDeviceInfo()
         session.speakerProfile()
         session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", codec = 1), 1_000)
         val setup = text(session.audioListenersReady(40100, 1_050).single())
-        assertTrue("Codec: 1\r\n" in setup, setup)
-        assertEquals(AudioCodec.AAC, audio.only<AudioEvent.Requested>().stream.codec)
-        assertTrue(audio.events.any { it is AudioEvent.Note && "顺着手机给 AAC" in it.message }, "记一笔说明")
-
-        // 手机要 PCM（Codec=0）时不受影响：照旧 Codec: 0。
-        val pcm = AudioRecorder()
-        val pcmSession = speakerSession(speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio = pcm)
-        pcmSession.phoneDeviceInfo()
-        pcmSession.speakerProfile()
-        pcmSession.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 1_000)
-        assertTrue("Codec: 0\r\n" in text(pcmSession.audioListenersReady(40100, 1_050).single()))
+        assertTrue("Codec: 0\r\n" in setup, setup)
+        assertEquals(AudioCodec.PCM, audio.only<AudioEvent.Requested>().stream.codec)
     }
 
-    /** 手机要 AAC、不应答 PCM 的 SETUP 就拆会话：记 NO_ANSWER，这台手机下次连接从头声明 AAC。 */
+    /**
+     * HiCar 15+ 手机默认走 TCP：单次 TCP SETUP 未应答就被拆时保持 TCP（不得切 UDP 写入 udpPhones），
+     * 并报告 SETUP_UNANSWERED 交由 PcmFallbackBook 连续两次后退回 AAC。
+     */
     @Test
-    fun unansweredSetupForAacRequestIsRecordedAsNoAnswer() {
+    fun hiCar15UnansweredTcpSetupStaysOnTcpAndReportsPcmVerdict() {
         val audio = AudioRecorder()
-        val session = toSetupSent(audio, DmsdpConfig.Speaker(codec = AudioCodec.PCM))
-        // 手机换个会话号再触发，这次 ParaAudio 要 AAC（第一次的 PCM 会话被替换掉）。
-        session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "88", codec = 1), 2_000)
-        session.audioListenersReady(40200, 2_050)
-        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "88"), 9_000)
-        assertEquals(PcmVerdict.NO_ANSWER, audio.only<AudioEvent.CodecVerdict>().verdict)
+        val session = toSetupSent(audio, DmsdpConfig.Speaker(codec = AudioCodec.PCM), phoneVersion = "15.2.0.255")
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "6", codec = 1), 9_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback }, "HiCar 15+ 不得切 UDP")
+        assertEquals(PcmVerdict.SETUP_UNANSWERED, audio.only<AudioEvent.CodecVerdict>().verdict)
+        val next = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7", codec = 1), 9_100)
+        assertEquals(AudioTransport.TCP, next.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
 
-        // 手机应答了 SETUP（或没要 AAC）就不记：判定只属于「要 AAC 又不应答」这一种。
-        val answered = AudioRecorder()
-        val answeredSession = toSetupSent(answered, DmsdpConfig.Speaker(codec = AudioCodec.PCM))
-        answeredSession.feed(
-            DmsdpChannel.CONTROL,
-            phone.encryptedText("DMSDP/1.0 200 OK\r\nCSeq: 2\r\nServiceID: speaker1\r\nTransport: RTP/AVP/TCP;unicast;server_port=50000\r\n\r\n"),
-            1_100,
+    /**
+     * 手机已在 udpPhones 里（例如误记的 HiCar 15.2），第一次按名单发 UDP；一旦 UDP SETUP 无应答被拆，
+     * 立刻恢复 TCP 并发出 TransportRecovered（不再来回切回 UDP）。
+     */
+    @Test
+    fun udpPhoneOnHiCar15RecoversToTcpWhenUdpSetupUnanswered() {
+        val key = PhoneRef.keyOf(Synthetic.PEER_ID)
+        val audio = AudioRecorder()
+        val session = speakerSession(
+            speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM, udpPhones = setOf("$key@15.2.0.255")),
+            audio = audio,
+            phoneVersion = "15.2.0.255",
         )
-        answeredSession.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "7"), 9_000)
-        assertTrue(answered.events.none { it is AudioEvent.CodecVerdict })
+        session.phoneDeviceInfo()
+        session.speakerProfile()
+        val first = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "77", codec = 1), 1_000)
+        assertEquals(AudioTransport.UDP, first.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+        session.audioListenersReady(40100, 1_050)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "77", cseq = "6", codec = 1), 9_000)
+
+        val recovered = audio.only<AudioEvent.TransportRecovered>()
+        assertEquals(key, recovered.phone?.key)
+
+        // 恢复后下一轮走 TCP；即使 TCP 再未应答也不回弹 UDP。
+        val second = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7", codec = 1), 9_100)
+        assertEquals(AudioTransport.TCP, second.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+        session.audioListenersReady(40200, 9_150)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "78", cseq = "8", codec = 1), 17_000)
+        assertEquals(1, audio.events.count { it is AudioEvent.TransportRecovered })
+        assertTrue(audio.events.none { it is AudioEvent.TransportFallback })
+        val third = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "79", cseq = "9", codec = 1), 17_100)
+        assertEquals(AudioTransport.TCP, third.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+    }
+
+    /** HiCar 14 及更早的手机固定走 UDP，不因 UDP 未应答反切回 TCP。 */
+    @Test
+    fun hiCar14UnansweredUdpDoesNotSwitchBackToTcp() {
+        val audio = AudioRecorder()
+        val session = speakerSession(speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio = audio, phoneVersion = "14.2.0.300")
+        session.phoneDeviceInfo()
+        session.speakerProfile()
+        val first = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "77"), 1_000)
+        assertEquals(AudioTransport.UDP, first.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
+        session.audioListenersReady(40100, 1_050)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "77", cseq = "6"), 9_000)
+        assertTrue(audio.events.none { it is AudioEvent.TransportRecovered })
+        val second = session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "78", cseq = "7"), 9_100)
+        assertEquals(AudioTransport.UDP, second.filterIsInstance<DmsdpAction.OpenAudioListeners>().single().transport)
     }
 
     /**

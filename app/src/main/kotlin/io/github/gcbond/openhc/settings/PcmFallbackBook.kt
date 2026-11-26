@@ -38,9 +38,8 @@ class PcmPhoneRecord(
  *
  * 规则（宁可多退回 AAC，也不让一台本来能用的手机因为一次偶然变成没声音；AAC 是验证过的路）：
  * - 收到「能出声」：记下出过声，连续失败清零；
- * - 收到「不出声」：连续失败加一。没在 PCM 下出过声的手机，「想出声却一直没开数据会话」和「手机自己要 AAC
- *   却不应答 PCM 的 SETUP」一次就退回 AAC；「载荷不像声音」要连续两次（它靠我们自己对载荷的判断，
- *   判错过一次不该就此放弃 PCM）；出过声的手机不论哪种都要连续两次；
+ * - 收到「不出声」：连续失败加一。没在 PCM 下出过声的手机，「想出声却一直没开数据会话」一次就退回 AAC；
+ *   「载荷不像声音」和「手机不应答 PCM 的 SETUP」（单次可能是偶发超时）都要连续两次；出过声的手机不论哪种都要连续两次；
  * - 退回之后这台手机一直声明 AAC，直到用户在设置里恢复（不再自动试 PCM）；
  * - 最多记 [MAX_PHONES] 台，多了丢最久没动的。
  */
@@ -123,7 +122,7 @@ class PcmFallbackBook(records: Collection<PcmPhoneRecord> = emptyList()) {
         const val CAUTIOUS_FAILURES = 2
 
         private fun threshold(worked: Boolean, verdict: PcmVerdict): Int =
-            if (worked || verdict == PcmVerdict.UNPLAYABLE) CAUTIOUS_FAILURES else 1
+            if (worked || verdict == PcmVerdict.UNPLAYABLE || verdict == PcmVerdict.SETUP_UNANSWERED) CAUTIOUS_FAILURES else 1
 
         /** 读回 [encode] 的内容；内容坏了或不认识就当空的（最多是这些手机重新试一次 PCM）。 */
         fun decode(text: String?): PcmFallbackBook {
