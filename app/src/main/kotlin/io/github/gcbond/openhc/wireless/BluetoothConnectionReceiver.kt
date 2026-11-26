@@ -1,6 +1,7 @@
 package io.github.gcbond.openhc.wireless
 
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -11,8 +12,10 @@ import io.github.gcbond.openhc.OpenHcApp
 import io.github.gcbond.openhc.platform.log.Log
 
 /**
- * 「蓝牙连上自动连接」的入口：手机的经典蓝牙连上 / 断开车机时（系统广播 ACL_CONNECTED / ACL_DISCONNECTED），
- * 交给 [WirelessController.onPhoneBluetooth]。清单里静态登记，本应用没在运行时系统也会把它拉起来
+ * 「蓝牙连上自动连接」的入口：手机的经典蓝牙连上 / 断开车机时（系统广播 ACL_CONNECTED / ACL_DISCONNECTED），以及
+ * HFP/A2DP 等 Profile 连接状态变化（只有 [BluetoothProfile.STATE_CONNECTED] 才算「连上」，且带 profileReady = true，
+ * 让车机跳过建链防抖立即拨；Profile 断开不当作手机断开——投屏期间系统会切换音频链路），交给
+ * [WirelessController.onPhoneBluetooth]。清单里静态登记，本应用没在运行时系统也会把它拉起来
  * （车机系统要允许本应用在后台被拉起）。
  *
  * 清单里默认不启用，只在开关开着、且没开「只用数据线连接」时启用（[sync]），免得每连一个蓝牙设备都拉起本应用。
@@ -21,9 +24,17 @@ import io.github.gcbond.openhc.platform.log.Log
 class BluetoothConnectionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val connected = when (intent.action) {
-            BluetoothDevice.ACTION_ACL_CONNECTED -> true
-            BluetoothDevice.ACTION_ACL_DISCONNECTED -> false
+        val (connected, profileReady) = when (intent.action) {
+            BluetoothDevice.ACTION_ACL_CONNECTED -> true to false
+            BluetoothDevice.ACTION_ACL_DISCONNECTED -> false to false
+            // HFP/A2DP 等 Profile 的连接状态：只有连上（STATE_CONNECTED）才算，断开忽略。
+            in PROFILE_ACTIONS -> {
+                if (intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1) == BluetoothProfile.STATE_CONNECTED) {
+                    true to true
+                } else {
+                    return
+                }
+            }
             else -> return
         }
         val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
@@ -40,11 +51,19 @@ class BluetoothConnectionReceiver : BroadcastReceiver() {
             null
         } ?: return
         val app = context.applicationContext as? OpenHcApp ?: return
-        app.wireless.onPhoneBluetooth(connected, address)
+        app.wireless.onPhoneBluetooth(connected, address, profileReady)
     }
 
     companion object {
         private const val TAG = "OpenHC-Wireless"
+
+        /** HFP/A2DP 等 Profile 的连接状态广播（ACL 之外用来判断建链已稳定）。 */
+        private val PROFILE_ACTIONS = setOf(
+            "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED",
+            "android.bluetooth.a2dp-sink.profile.action.CONNECTION_STATE_CHANGED",
+            "android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED",
+            "android.bluetooth.headsetclient.profile.action.CONNECTION_STATE_CHANGED",
+        )
 
         /** 按设置启用或停用清单里的这个接收器。立即生效，不影响正在运行的进程。 */
         fun sync(context: Context, enabled: Boolean) {

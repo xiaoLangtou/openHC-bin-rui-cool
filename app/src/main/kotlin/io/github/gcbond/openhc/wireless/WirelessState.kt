@@ -131,6 +131,7 @@ sealed class WirelessSignal {
     /**
      * [addressMismatch]：用的是手填的蓝牙地址，和系统里读到的不同（见 [WirelessUiState.addressMismatch]）。
      * [autoReconnect]：这次是自动进入的「等已配对的手机回连」，不是用户点的开始。
+     * [reconnecting]：这次是车机主动回连（拨号 + 监听 + 广播三路并发）：界面不闪二维码，一直显示「正在连接」。
      */
     data class AttemptStarted(
         val attempt: Int,
@@ -138,6 +139,7 @@ sealed class WirelessSignal {
         val autoReconnect: Boolean = false,
         /** 这次手机加入的是车机建的 WiFi 直连组，不是热点（设置里「无线方式」选了直连）。 */
         val direct: Boolean = false,
+        val reconnecting: Boolean = false,
     ) : WirelessSignal()
 
     /** 开始不了（条件不满足），回到空闲。 */
@@ -196,6 +198,11 @@ data class WirelessUiState(
     val phoneConnected: Boolean = false,
     /** 这次连接手机加入的是车机建的 WiFi 直连组（不是热点）：WiFi 那几步的说法跟着变。只在连接进行中有意义。 */
     val direct: Boolean = false,
+    /**
+     * 这次连接是车机主动回连（三路并发：拨号、监听、广播）：控制监听开好会有 [WirelessEvent.PairingReady]，
+     * 但界面不切到扫码页、不显示二维码，一直显示「正在连接」。
+     */
+    val reconnecting: Boolean = false,
 ) {
     /** 回控已就绪且手机接受触摸。 */
     val inputReady: Boolean get() = projection.inputReady
@@ -210,7 +217,7 @@ data class WirelessUiState(
     override fun toString(): String =
         "WirelessUiState(phase=$phase, step=$step, attempt=$attempt, active=$active, notice=$notice, " +
             "二维码=${if (qrCode != null) "有" else "无"}, 连接码=${if (pinCode != null) "有" else "无"}, 投屏=${projection.phase}, " +
-            "自动回连=$autoReconnect, 直连=$direct, 广播=$beacon, 不等的原因=$autoHold)"
+            "自动回连=$autoReconnect, 主动回连=$reconnecting, 直连=$direct, 广播=$beacon, 不等的原因=$autoHold)"
 }
 
 /** 状态归并：纯函数。 */
@@ -230,6 +237,7 @@ object WirelessReducer {
             projection = ConnectionReducer.reduce(ConnectionUiState(), ConnectionSignal.AttemptStarted(signal.attempt)),
             autoReconnect = signal.autoReconnect,
             direct = signal.direct,
+            reconnecting = signal.reconnecting,
             // 自动回到等待时留着上一次的结束原因，看得出刚才为什么断了。
             notice = if (signal.autoReconnect) state.notice else null,
         )
@@ -272,7 +280,12 @@ object WirelessReducer {
         if (!live(state)) return state
         return when (event) {
             is WirelessEvent.PairingReady ->
-                state.copy(phase = WirelessPhase.WAITING_FOR_SCAN, step = null, qrCode = event.qrCode, pinCode = event.pinCode)
+                if (state.reconnecting) {
+                    // 主动回连借控制监听挂 BLE 广播唤醒手机，但界面不闪出二维码，直接显示正在连接。
+                    connecting(state, WirelessStep.BLUETOOTH_HANDSHAKE).copy(qrCode = null, pinCode = null)
+                } else {
+                    state.copy(phase = WirelessPhase.WAITING_FOR_SCAN, step = null, qrCode = event.qrCode, pinCode = event.pinCode)
+                }
             // 手机连上了，二维码没用了；连接码留着，手机万一要求手输时还看得到。
             is WirelessEvent.PhoneBluetoothConnected ->
                 connecting(state, WirelessStep.BLUETOOTH_HANDSHAKE).copy(qrCode = null, phoneConnected = true)

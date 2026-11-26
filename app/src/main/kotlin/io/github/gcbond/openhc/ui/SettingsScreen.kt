@@ -174,7 +174,7 @@ private fun CategoryContent(
         SettingsCategory.CONNECTION -> SettingsGroup(stringResource(R.string.settings_group_connection)) {
             WiredOnlySetting(wireless)
             WirelessModeSetting(wireless)
-            if (!wireless.wifiDirect) Hotspot5gSetting(wireless)
+            if (!wireless.wifiDirect && !wireless.carHotspot) Hotspot5gSetting(wireless)
             BluetoothAddressSection(settings, systemBluetoothAddress)
             LePairingSetting()
             UsbAutoConnectSettingsSection()

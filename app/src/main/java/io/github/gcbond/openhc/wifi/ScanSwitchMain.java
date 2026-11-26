@@ -29,6 +29,8 @@ public final class ScanSwitchMain {
     private static final long DEADLINE_MS = 10_000L;
     private static final int SHELL_UID = 2000;
     private static final int ROOT_UID = 0;
+    /** 系统签名进程（OpenHC 用平台密钥签名、sharedUserId=android.uid.system 时）：允许进程内直调。 */
+    private static final int SYSTEM_UID = 1000;
     private static final String SHELL_PACKAGE = "com.android.shell";
 
     private ScanSwitchMain() {
@@ -49,13 +51,22 @@ public final class ScanSwitchMain {
         deadline.setDaemon(true);
         deadline.start();
 
+        System.out.println(runCommand(args.length == 1 ? args[0] : ""));
+        System.exit(0);
+    }
+
+    /**
+     * 执行一条命令并返回输出行（{@code HEADER|结果|方法}）。进程内静态入口：系统签名进程（uid 1000）不走
+     * app_process + 网络 ADB 也能直接调用；不装超时看门狗、不调 System.exit，随便在哪调用都安全。
+     */
+    public static String runCommand(String arg) {
         String result;
         String method = "-";
         try {
             int uid = android.os.Process.myUid();
-            if (uid != SHELL_UID && uid != ROOT_UID) {
+            if (uid != SHELL_UID && uid != ROOT_UID && uid != SYSTEM_UID) {
                 result = "DENIED";
-            } else if (args.length != 1 || !(PAUSE.equals(args[0]) || RESTORE.equals(args[0]) || CHECK.equals(args[0]))) {
+            } else if (!(PAUSE.equals(arg) || RESTORE.equals(arg) || CHECK.equals(arg))) {
                 result = "FAILED";
             } else {
                 Object wifi = wifiService();
@@ -64,14 +75,13 @@ public final class ScanSwitchMain {
                     result = "UNSUPPORTED";
                 } else {
                     method = setter.getName();
-                    result = CHECK.equals(args[0]) ? "READY" : invoke(wifi, setter, RESTORE.equals(args[0]));
+                    result = CHECK.equals(arg) ? "READY" : invoke(wifi, setter, RESTORE.equals(arg));
                 }
             }
         } catch (Throwable t) {
             result = "FAILED";
         }
-        System.out.println(HEADER + "|" + result + "|" + method);
-        System.exit(0);
+        return HEADER + "|" + result + "|" + method;
     }
 
     private static Object wifiService() throws Exception {

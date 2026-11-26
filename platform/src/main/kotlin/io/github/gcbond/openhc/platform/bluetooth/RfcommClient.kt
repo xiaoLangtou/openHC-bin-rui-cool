@@ -18,6 +18,10 @@ import java.util.concurrent.LinkedBlockingQueue
  * 拿不到这个接口时退回按 [uuid] 查 SDP（手机给这个通道也登记了 SDP 记录）。走的是哪条路经 [Events.onNote] 报出来。
  * 连之前先停掉本机的蓝牙扫描（扫描会拖慢连接）。
  *
+ * 建链不是一次定生死：最多试 [CONNECT_RETRY_LIMIT] 轮，逐轮拉长间隔（[CONNECT_RETRY_DELAY_MS] × 轮数）、每轮重试前
+ * 再停一次扫描；给了通道号而第 1 轮直连失败时，后续轮次自动改按 SDP 查 [uuid] 连（手机蓝牙刚握手完那几百毫秒
+ * 经常连不上，也不一定肯认直连的通道号）。地址不对、没有权限这类硬错误照旧一次判死。
+ *
  * 线程：[start] 之后一个线程「取设备 → 建 socket → connect → onConnected → 读」；写在另一个线程上排队。回调按
  * `onConnected` → `onData`… → `onClosed` / `onConnectionError` 的顺序发生；连不上是 `onConnectFailed`。
  * 读写循环、排队写、关闭逻辑和 [RfcommServer] 一致。本机关掉之后不再回调。
@@ -119,38 +123,77 @@ class RfcommClient(
         } catch (e: SecurityException) {
             // 安卓 12 起停扫描要扫描权限；没有就不停，只是连得慢些。
         }
-        val client = try {
-            openByChannel(device) ?: device.createInsecureRfcommSocketToServiceRecord(uuid)
-        } catch (e: IOException) {
-            return failConnect("建 socket 失败：${describe(e)}")
-        } catch (e: SecurityException) {
-            return failConnect("没有蓝牙权限（安卓 12 起要「附近的设备」权限）：${describe(e)}")
+        // 第 1 轮先按通道号直连（给了通道号时）；直连建 socket 失败或 connect 抛 IOException 就降级按 SDP 查 UUID 重试，
+        // 再失败再退避重试（手机蓝牙刚握手完那几百毫秒经常连不上，单次失败直接判死会让自动回连大面积失败）。
+        var allowDirectChannel = channel != null
+        var lastFailure: String? = null
+        for (attempt in 1..CONNECT_RETRY_LIMIT) {
+            if (isClosed()) return
+            if (attempt > 1) {
+                sleepQuietly(CONNECT_RETRY_DELAY_MS * attempt)
+                if (isClosed()) return
+                try {
+                    adapter.cancelDiscovery()
+                } catch (e: SecurityException) {
+                    // 同上：没有扫描权限就不停，只是连得慢些。
+                }
+            }
+            val client = try {
+                val direct = if (allowDirectChannel) openByChannel(device) else null
+                if (direct != null) {
+                    direct
+                } else {
+                    if (allowDirectChannel) {
+                        allowDirectChannel = false
+                        note("按通道号 $channel 直连用不了，改按 SDP 查 $uuid")
+                    }
+                    newSdpSocket(device)
+                }
+            } catch (e: IOException) {
+                lastFailure = "建 socket 失败：${describe(e)}"
+                continue
+            } catch (e: SecurityException) {
+                return failConnect("没有蓝牙权限（安卓 12 起要「附近的设备」权限）：${describe(e)}")
+            } catch (e: IllegalArgumentException) {
+                return failConnect("连接参数不对：${describe(e)}")
+            }
+            val proceed = synchronized(lock) {
+                if (!closed) connecting = client
+                !closed
+            }
+            if (!proceed) return closeQuietly(client)
+            // 按 SDP 连时 connect 先查服务的通道号，再建链；对端没在听或查不到服务都在这里失败。
+            try {
+                client.connect()
+            } catch (e: IOException) {
+                closeQuietly(client)
+                synchronized(lock) { connecting = null }
+                lastFailure = "连接失败：${describe(e)}"
+                if (allowDirectChannel) {
+                    note("按通道号 $channel 直连失败（${describe(e)}），改按 SDP 查 $uuid 重试")
+                    allowDirectChannel = false
+                }
+                continue
+            } catch (e: SecurityException) {
+                closeQuietly(client)
+                return failConnect("没有蓝牙权限：${describe(e)}")
+            }
+            val keep = synchronized(lock) {
+                connecting = null
+                if (!closed) socket = client
+                !closed
+            }
+            if (!keep) return closeQuietly(client)
+            daemon("$threadName-write") { writeLoop(client) }
+            if (!isClosed()) events.onConnected()
+            readLoop(client)
+            return
         }
-        val proceed = synchronized(lock) {
-            if (!closed) connecting = client
-            !closed
-        }
-        if (!proceed) return closeQuietly(client)
-        // 按 SDP 连时 connect 先查服务的通道号，再建链；对端没在听或查不到服务都在这里失败。
-        try {
-            client.connect()
-        } catch (e: IOException) {
-            closeQuietly(client)
-            return failConnect("连接失败：${describe(e)}")
-        } catch (e: SecurityException) {
-            closeQuietly(client)
-            return failConnect("没有蓝牙权限：${describe(e)}")
-        }
-        val keep = synchronized(lock) {
-            connecting = null
-            if (!closed) socket = client
-            !closed
-        }
-        if (!keep) return closeQuietly(client)
-        daemon("$threadName-write") { writeLoop(client) }
-        if (!isClosed()) events.onConnected()
-        readLoop(client)
+        failConnect(lastFailure ?: "连接失败")
     }
+
+    /** 按 SDP 查服务记录的连接 socket。 */
+    private fun newSdpSocket(device: BluetoothDevice): BluetoothSocket = device.createInsecureRfcommSocketToServiceRecord(uuid)
 
     /** 按 [channel] 直连用的 socket；没给通道号或拿不到系统接口时返回 null（改按 SDP）。 */
     private fun openByChannel(device: BluetoothDevice): BluetoothSocket? {
@@ -221,6 +264,12 @@ class RfcommClient(
         const val LINGER_MS = 200L
         const val READ_BUFFER_BYTES = 4096
         const val PEER_CLOSED_TEXT = "read return: -1"
+
+        /** 建链最多试几次（手机蓝牙刚握手完那几百毫秒经常连不上，退避重试后再判死）。 */
+        const val CONNECT_RETRY_LIMIT = 3
+
+        /** 第 [attempt] 轮重试前等这么久（450 × attempt，逐次拉长），等系统把 SDP/Profile 那一轮忙完。 */
+        const val CONNECT_RETRY_DELAY_MS = 450L
 
         fun daemon(name: String, body: () -> Unit) {
             val t = Thread(body, name)

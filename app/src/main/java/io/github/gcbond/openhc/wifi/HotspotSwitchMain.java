@@ -40,6 +40,8 @@ public final class HotspotSwitchMain {
     private static final long POLL_MS = 200L;
     private static final int SHELL_UID = 2000;
     private static final int ROOT_UID = 0;
+    /** 系统签名进程（OpenHC 用平台密钥签名、sharedUserId=android.uid.system 时）：允许进程内直调。 */
+    private static final int SYSTEM_UID = 1000;
     private static final String SHELL_PACKAGE = "com.android.shell";
     private static final int TETHERING_WIFI = 0;
     /** 系统热点状态：10 正在关、11 关着、12 正在开、13 开着、14 出错。 */
@@ -66,13 +68,22 @@ public final class HotspotSwitchMain {
         deadline.setDaemon(true);
         deadline.start();
 
+        System.out.println(runCommand(args.length == 1 ? args[0] : ""));
+        System.exit(0);
+    }
+
+    /**
+     * 执行一条命令并返回输出行（{@code HEADER|结果|说明}）。进程内静态入口：系统签名进程（uid 1000）不走
+     * app_process + 网络 ADB 也能直接调用；不装超时看门狗、不调 System.exit，随便在哪调用都安全。
+     */
+    public static String runCommand(String arg) {
         String result;
         String detail = "-";
         try {
             int uid = android.os.Process.myUid();
-            if (uid != SHELL_UID && uid != ROOT_UID) {
+            if (uid != SHELL_UID && uid != ROOT_UID && uid != SYSTEM_UID) {
                 result = "DENIED";
-            } else if (args.length != 1 || !(START.equals(args[0]) || STOP.equals(args[0]) || CHECK.equals(args[0]))) {
+            } else if (!(START.equals(arg) || STOP.equals(arg) || CHECK.equals(arg))) {
                 result = "FAILED";
             } else {
                 Object wifi = service("wifi", "android.net.wifi.IWifiManager$Stub");
@@ -84,9 +95,9 @@ public final class HotspotSwitchMain {
                 Method stop = connectivity == null ? null : find(connectivity, "stopTethering", int.class, String.class);
                 if (state == null || tethered == null || start == null || stop == null) {
                     result = "UNSUPPORTED";
-                } else if (CHECK.equals(args[0])) {
+                } else if (CHECK.equals(arg)) {
                     result = "READY";
-                } else if (STOP.equals(args[0])) {
+                } else if (STOP.equals(arg)) {
                     stop.invoke(connectivity, TETHERING_WIFI, SHELL_PACKAGE);
                     result = "DONE";
                 } else {
@@ -100,8 +111,7 @@ public final class HotspotSwitchMain {
         } catch (Throwable t) {
             result = "FAILED";
         }
-        System.out.println(HEADER + "|" + result + "|" + detail);
-        System.exit(0);
+        return HEADER + "|" + result + "|" + detail;
     }
 
     /** 返回 {结果, 说明}。 */

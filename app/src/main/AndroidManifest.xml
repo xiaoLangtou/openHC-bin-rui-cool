@@ -165,9 +165,10 @@
             android:foregroundServiceType="connectedDevice" />
 
         <!--
-            蓝牙连上自动连接：手机的经典蓝牙连上 / 断开车机时，由系统广播叫醒本应用。默认不启用，设置里打开
-            「蓝牙连上自动连接」（且没开「只用数据线连接」）时才启用，免得连别的蓝牙设备也把本应用拉起来。
-            这两个广播只有系统能发，所以导出也无妨（不导出的话系统蓝牙进程发的广播收不到）。
+            蓝牙连上自动连接：手机的经典蓝牙连上 / 断开车机时（ACL_CONNECTED / ACL_DISCONNECTED），以及 HFP/A2DP 等
+            Profile 连接状态变化（Profile 连上说明建链已稳定，立即拨；Profile 断开不当作手机断开），由系统广播叫醒本应用。
+            默认不启用，设置里打开「蓝牙连上自动连接」（且没开「只用数据线连接」）时才启用，免得连别的蓝牙设备也把本应用拉起来。
+            这些广播只有系统能发，所以导出也无妨（不导出的话系统蓝牙进程发的广播收不到）。
         -->
         <receiver
             android:name=".wireless.BluetoothConnectionReceiver"
@@ -176,6 +177,10 @@
             <intent-filter>
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
                 <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
+                <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.a2dp-sink.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.headset.profile.action.CONNECTION_STATE_CHANGED" />
+                <action android:name="android.bluetooth.headsetclient.profile.action.CONNECTION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 

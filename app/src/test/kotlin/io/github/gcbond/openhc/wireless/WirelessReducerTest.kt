@@ -64,6 +64,23 @@ class WirelessReducerTest {
         assertEquals("135790", state.pinCode)
     }
 
+    /** 主动回连（三路并发）：控制监听开好（PairingReady）不出二维码，一直显示正在连接。 */
+    @Test
+    fun reconnectingKeepsConnectingAndHidesTheQrCode() {
+        var state = run(WirelessSignal.AttemptStarted(1, reconnecting = true))
+        assertEquals(WirelessPhase.PREPARING, state.phase)
+        assertTrue(state.reconnecting)
+        state = run(wireless(WirelessEvent.PairingReady(qr, "135790")), from = state)
+        assertEquals(WirelessPhase.CONNECTING, state.phase)
+        assertEquals(WirelessStep.BLUETOOTH_HANDSHAKE, state.step)
+        assertNull(state.qrCode)
+        assertNull(state.pinCode)
+        assertTrue(state.active)
+        // 手机连上以后照常往下走，不因为「没经过扫码页」而卡住。
+        state = run(wireless(WirelessEvent.PhoneBluetoothConnected("02:66:77:88:99:AA")), from = state)
+        assertEquals(WirelessPhase.CONNECTING, state.phase)
+    }
+
     @Test
     fun bluetoothStepsUntilThePhoneJoins() {
         var state = run(*untilScan, wireless(WirelessEvent.PhoneBluetoothConnected("02:66:77:88:99:AA")))

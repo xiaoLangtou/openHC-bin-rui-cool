@@ -107,7 +107,8 @@ class WirelessReceiverSessionTest {
         fun btClosed(channel: WirelessChannel) = record(session.onClosed(btId(channel), now))
         fun btError(channel: WirelessChannel) = record(session.onIoError(btId(channel), "测试错误", now))
         fun startReconnect(name: String = "Phone") = record(session.startReconnect(WirelessSynthetic.PHONE_BLUETOOTH, name, now))
-        fun startWithDial(name: String = "Phone") = record(session.startWithDial(WirelessSynthetic.PHONE_BLUETOOTH, name, now))
+        fun startWithDial(name: String = "Phone", keepListening: Boolean = true) =
+            record(session.startWithDial(WirelessSynthetic.PHONE_BLUETOOTH, name, now, keepListeningOnDialFailure = keepListening))
 
         /** 扫码监听接受的那条控制连接（[startWithDial] 时监听和拨号同在一个通道上，[btId] 指向拨号那条）。 */
         fun acceptedControlId(): Int = rfcomm.getValue(WirelessChannel.BLUETOOTH_CONTROL).acceptId
@@ -1047,11 +1048,51 @@ class WirelessReceiverSessionTest {
         d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
         assertEquals(listOf("rfcomm-close BLUETOOTH_CONTROL", "diag"), d.btConnectError(WirelessChannel.BLUETOOTH_CONTROL))
         assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+        assertNull(d.session.nextTickAtMillis, "手动顺带拨失败不设反连窗口，继续无限期等扫码")
         // 之后扫码连上来照常走。
         assertEquals(
             listOf("event PhoneBluetoothConnected(地址不显示)", "rfcomm-write BLUETOOTH_CONTROL bt-connect-id"),
             d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
         )
+    }
+
+    /** 回连借道扫码（keepListeningOnDialFailure = false）：拨号失败后留 6 秒反连窗口，窗口内手机反连无缝继续。 */
+    @Test
+    fun reconnectDialFailureKeepsAWindowForThePhoneToConnectBack() {
+        val d = Driver()
+        d.startWithDial(keepListening = false)
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        // 拨号失败：不结束，也不无限期等——进入 6 秒反连窗口（BLE 广播唤醒手机需要时间）。
+        assertEquals(listOf("rfcomm-close BLUETOOTH_CONTROL", "diag"), d.btConnectError(WirelessChannel.BLUETOOTH_CONTROL))
+        assertFalse(d.session.isEnded)
+        assertEquals(d.now + WirelessReceiverSession.DIAL_FALLBACK_LISTEN_MILLIS, d.session.nextTickAtMillis)
+        // 窗口内手机被广播唤醒、反连控制监听：照常接上，窗口撤掉，按手机连上来的流程走。
+        assertEquals(
+            listOf(
+                "event PhoneBluetoothConnected(地址不显示)",
+                "rfcomm-write BLUETOOTH_CONTROL bt-connect-id",
+            ),
+            d.btAccepted(WirelessChannel.BLUETOOTH_CONTROL),
+        )
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+        assertNull(d.session.nextTickAtMillis, "反连窗口已撤掉")
+        // 之后和扫码连上来时相同：车机是应答方，开认证子通道监听。
+        assertEquals(
+            listOf("event BluetoothHandshakeCompleted(加密=true)", "rfcomm-listen BLUETOOTH_AUTH $subchannelUuid"),
+            d.dataOnAccepted("hello"),
+        )
+    }
+
+    /** 回连借道扫码：窗口内手机反连不上（车机拨的也连不通），超时按回连失败结束，交给调用方的自动重试。 */
+    @Test
+    fun reconnectDialFallbackWindowExpiresAndFails() {
+        val d = Driver()
+        d.startWithDial(keepListening = false)
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        assertEquals(listOf("rfcomm-close BLUETOOTH_CONTROL", "diag"), d.btConnectError(WirelessChannel.BLUETOOTH_CONTROL))
+        assertTrue(d.tick(d.now + WirelessReceiverSession.DIAL_FALLBACK_LISTEN_MILLIS - 1).isEmpty())
+        d.tick(d.now + WirelessReceiverSession.DIAL_FALLBACK_LISTEN_MILLIS)
+        assertEquals("连不上手机：测试错误", assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).detail)
     }
 
     @Test

@@ -50,6 +50,7 @@ internal fun pendingSettingsSnapshot(context: Context, settings: AppSettings): M
             PendingSetting.CAR_HOTSPOT_BAND -> wireless.carHotspotFiveGhz.toString()
             PendingSetting.CAR_HOTSPOT_AUTO -> CarHotspotAutoPreferences(context).enabled.toString()
             PendingSetting.SCAN_PAUSE -> ScanPausePreferences(context).enabled.toString()
+            PendingSetting.HOTSPOT_5G -> wireless.hotspot5g.toString()
         }
     }
 }
@@ -72,6 +73,7 @@ private fun PendingSetting.label(): Int = when (this) {
     PendingSetting.CAR_HOTSPOT_BAND -> R.string.settings_car_hotspot_band
     PendingSetting.CAR_HOTSPOT_AUTO -> R.string.settings_car_hotspot_auto
     PendingSetting.SCAN_PAUSE -> R.string.settings_scan_pause
+    PendingSetting.HOTSPOT_5G -> R.string.settings_wireless_hotspot_5g
 }
 
 /** 从设置页回到首页时：改了的这几项，正在进行的连接用不上，要重新连接。[projecting] 为真时说「断开后重连」，否则说「停止再开始」。 */

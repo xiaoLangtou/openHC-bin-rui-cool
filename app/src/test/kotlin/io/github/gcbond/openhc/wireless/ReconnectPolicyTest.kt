@@ -114,10 +114,15 @@ class ReconnectPolicyTest {
         // 原来要等满 60 秒冷却，车主只能干等）。手机蓝牙再连上（700_000 处那步）同样立即拨。
         t.onSessionEnded(phone, projected = true, stoppedByUser = false)
         assertEquals(Decision.Dial(phone), t.onUiShown(phone, known, 30_000))
-        // 拨号没投屏就失败：不重新计次，冷却照旧（防连环误拨）。
+        // 拨号没投屏就失败：从「这次蓝牙连接里拨过」里释放（2026-11-26：自动重试打满后，车主切回界面就能立刻再拨，
+        // 不用等手机的蓝牙真的断开重连）；lastDialAt 照旧保留，40 秒处（30_000 拨的、12~60 秒冷却内）仍挡广播回声。
         t.dialNow(t.onUiShown(phone, known, 30_000), 30_000)
         t.onSessionEnded(phone, projected = false, stoppedByUser = false)
-        assertIs<Decision.Skip>(t.onUiShown(phone, known, 200_000), "冷却还在（30_000 拨的，60 秒冷却内）")
+        assertEquals(Decision.Dial(phone), t.onUiShown(phone, known, 200_000), "没投屏的失败也释放这次蓝牙连接的拨号名额")
+        t.dialNow(t.onUiShown(phone, known, 200_000), 200_000)
+        t.onSessionEnded(phone, projected = false, stoppedByUser = false)
+        assertIs<Decision.Skip>(t.onUiShown(phone, known, 240_000), "lastDialAt 还在（200_000 拨的，60 秒冷却内挡回声）")
+        assertIs<Decision.Dial>(t.onUiShown(phone, known, 300_000))
     }
 
     @Test

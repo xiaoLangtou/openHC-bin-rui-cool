@@ -32,6 +32,9 @@ internal class LocalAdbRunner(context: Context, private val helper: AdbHelper, p
     private val app = context.applicationContext
 
     override fun run(command: String, ask: Boolean): AdbSwitchResult {
+        // 系统签名进程（uid 1000）有系统权限：直接在进程内调小程序的静态入口，0 毫秒、不开网络 ADB、不弹授权框。
+        // 结果是 DENIED/FAILED/UNSUPPORTED 时（没这个接口、系统不认）回退网络 ADB 再试一次，行为和普通应用一致。
+        inProcess(command)?.let { return it }
         val keys = try {
             loadKeys(app)
         } catch (e: GeneralSecurityException) {
@@ -62,6 +65,27 @@ internal class LocalAdbRunner(context: Context, private val helper: AdbHelper, p
             return AdbSwitchResult.NOT_APPROVED
         } finally {
             prompt.close()
+        }
+    }
+
+    /**
+     * 进程内直调小程序（[AdbHelper.mainClass] 的静态 [runCommand]）：只在系统签名进程（uid 1000）里走；
+     * 返回 null 表示这条路走不通（不是系统身份、类不在、调不了，或结果是 DENIED/FAILED/UNSUPPORTED 这类
+     * 要交给网络 ADB 再核实的），调用方回退网络 ADB。
+     */
+    private fun inProcess(command: String): AdbSwitchResult? {
+        if (android.os.Process.myUid() != android.os.Process.SYSTEM_UID) return null
+        val answer = try {
+            val method = Class.forName(helper.mainClass).getMethod("runCommand", String::class.java)
+            method.invoke(null, command) as String
+        } catch (e: Throwable) {
+            Log.w(tag, "进程内直调 ${helper.mainClass} 失败（${e.javaClass.simpleName}），回退网络 ADB")
+            return null
+        }
+        Log.i(tag, "系统身份进程内直调（$command）：$answer")
+        return when (val parsed = helper.parse(answer)) {
+            AdbSwitchResult.DENIED, AdbSwitchResult.FAILED, AdbSwitchResult.UNSUPPORTED -> null
+            else -> parsed
         }
     }
 

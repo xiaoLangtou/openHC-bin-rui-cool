@@ -120,6 +120,18 @@ class WirelessReceiverSession internal constructor(
     private var pendingDial: ReconnectTarget? = null
     private var dialEndpoint: Endpoint? = null
 
+    /**
+     * [startWithDial] 拨不通时还等不等：true 接着无限期等扫码（用户点「开始」顺带拨）；
+     * false 只留 [DIAL_FALLBACK_LISTEN_MILLIS] 的反连窗口，窗口一过按回连失败结束（车机主动回连）。
+     */
+    private var keepListeningOnDialFail = true
+
+    /** 回连借道扫码时拨号失败的原因：留给反连窗口超时时的结束说明。 */
+    private var dialFailureMessage: String? = null
+
+    /** 回连借道扫码时拨号失败后的反连窗口截止时间；拨通、有人连上或结束时撤掉。 */
+    private var dialFallbackDeadline: Long? = null
+
     /** 主动回连：等手机应答（或等手机上的确认）的截止时间。 */
     private var reconnectDeadline: Long? = null
 
@@ -162,7 +174,8 @@ class WirelessReceiverSession internal constructor(
             if (ended) return null
             val handshake = nearby?.takeIf { control?.state == State.OPEN }?.nextTickAtMillis
             return listOfNotNull(
-                handshake, reconnectDeadline, authAcceptDeadline, authDeadline, networkDeadline, joinDeadline, wired?.nextTickAtMillis,
+                handshake, reconnectDeadline, authAcceptDeadline, authDeadline, networkDeadline, joinDeadline, dialFallbackDeadline,
+                wired?.nextTickAtMillis,
             ).minOrNull()
         }
 
@@ -203,14 +216,25 @@ class WirelessReceiverSession internal constructor(
     /**
      * 扫码等待，同时车机去拨手机 [phoneAddress]：开蓝牙控制监听、出二维码（同 [start]），同时连这台手机的蓝牙控制服务
      * （同 [startReconnect]）。谁先连上就走谁：车机拨通了就关掉监听，之后和 [startReconnect] 完全相同（二维码作废）；
-     * 手机先连上来（扫码或手机自己回连）就关掉拨号，之后和 [start] 完全相同。拨不通只记一笔，接着等扫码。
+     * 手机先连上来（扫码或手机自己回连）就关掉拨号，之后和 [start] 完全相同。
+     * [keepListeningOnDialFailure]：拨不通时怎么办。
+     * - true（默认，用户点「开始」顺带拨）：只记一笔，接着无限期等扫码。
+     * - false（车机主动回连借这条三路并发）：留 [DIAL_FALLBACK_LISTEN_MILLIS] 的反连窗口——BLE 广播唤醒的手机
+     *   连上控制监听照样接（[onAccepted]），窗口一到还没有人就以 [WirelessEndReason.ReconnectFailed] 结束，
+     *   交给调用方的自动重试；拨通或有人连上时立刻撤掉窗口。
      * 只能调用一次（和 [start]、[startReconnect] 三选一），参数要求同 [startReconnect]。
      */
-    fun startWithDial(phoneAddress: String, phoneName: String, nowMillis: Long): List<WirelessOutput> {
+    fun startWithDial(
+        phoneAddress: String,
+        phoneName: String,
+        nowMillis: Long,
+        keepListeningOnDialFailure: Boolean = true,
+    ): List<WirelessOutput> {
         check(!started) { "start 只能调用一次" }
         require(phoneName.isNotBlank()) { "手机名不能为空" }
         val address = BluetoothAddress.format(BluetoothAddress.parse(phoneAddress))
         started = true
+        keepListeningOnDialFail = keepListeningOnDialFailure
         pendingDial = ReconnectTarget(address, phoneName.toByteArray(Charsets.UTF_8))
         return session(nowMillis) { out ->
             val listener = listenRfcomm(WirelessChannel.BLUETOOTH_CONTROL, NearbySession.BLUETOOTH_SERVICE_UUID, false, out)
@@ -258,6 +282,8 @@ class WirelessReceiverSession internal constructor(
                 }
                 dialEndpoint = null
                 pendingDial = null
+                dialFallbackDeadline = null
+                dialFailureMessage = null
                 out.add(WirelessEvent.PhoneBluetoothConnected(remote))
                 // 控制通道的监听先不关：它一关，它占的 RFCOMM 通道号就空出来，接着开的认证子通道监听会分到同一个号。
                 // 手机和车机之间控制通道正占着这个号的连接，同一对设备同一个通道号不能再开第二条，手机连认证子通道必失败。
@@ -384,7 +410,22 @@ class WirelessReceiverSession internal constructor(
                 close(ep, out)
                 dialEndpoint = null
                 pendingDial = null
-                diag(SessionLayer.SESSION, "车机拨手机没拨通，接着等扫码（$message）", out)
+                when {
+                    // 用户点「开始」顺带拨的：接着无限期等扫码。
+                    keepListeningOnDialFail ->
+                        diag(SessionLayer.SESSION, "车机拨手机没拨通，接着等扫码（$message）", out)
+                    // 车机主动回连借这条三路并发：BLE 广播可能正在唤醒手机，留一个反连窗口，
+                    // 手机连上监听照样接；窗口一过按回连失败结束，交给调用方自动重试。
+                    else -> {
+                        dialFailureMessage = message
+                        dialFallbackDeadline = nowMillis + DIAL_FALLBACK_LISTEN_MILLIS
+                        diag(
+                            SessionLayer.SESSION,
+                            "车机拨手机没拨通（$message），留 ${DIAL_FALLBACK_LISTEN_MILLIS / 1000} 秒反连窗口等被唤醒的手机",
+                            out,
+                        )
+                    }
+                }
             }
             // 手机关蓝牙连接时，系统常报成读出错而不是读到结尾：用完了的连接出错当作被关闭。
             settled -> {
@@ -433,6 +474,12 @@ class WirelessReceiverSession internal constructor(
         }
         if (due(reconnectDeadline, nowMillis)) {
             finish(WirelessEndReason.ReconnectFailed(if (awaitingPhone) "手机上一直没确认" else "手机一直没回应"), nowMillis, out)
+        }
+        if (due(dialFallbackDeadline, nowMillis)) {
+            dialFallbackDeadline = null
+            val message = dialFailureMessage ?: "未知原因"
+            dialFailureMessage = null
+            finish(WirelessEndReason.ReconnectFailed("连不上手机：$message"), nowMillis, out)
         }
         if (due(authAcceptDeadline, nowMillis)) {
             val detail = if (authListener == null) {
@@ -585,6 +632,8 @@ class WirelessReceiverSession internal constructor(
         val target = checkNotNull(pendingDial)
         dialEndpoint = null
         pendingDial = null
+        dialFallbackDeadline = null
+        dialFailureMessage = null
         if (ep.state != State.OPENING) return
         close(control, out)
         close(controlListener, out)
@@ -866,6 +915,8 @@ class WirelessReceiverSession internal constructor(
         authDeadline = null
         networkDeadline = null
         joinDeadline = null
+        dialFallbackDeadline = null
+        dialFailureMessage = null
         out.add(WirelessEvent.Ended(reason))
     }
 
@@ -941,6 +992,12 @@ class WirelessReceiverSession internal constructor(
          * 不认这辆车时不到 1 秒（实车 2026-11）。
          */
         const val QUICK_DECLINE_MILLIS = 3_000L
+
+        /**
+         * 车机主动回连借道扫码（[startWithDial] 的 keepListeningOnDialFailure = false）拨不通后，给 BLE 广播唤醒的手机
+         * 留的反连窗口：窗口内手机连上控制监听照样接，窗口一过按回连失败结束（交给调用方自动重试）。
+         */
+        const val DIAL_FALLBACK_LISTEN_MILLIS = 6_000L
 
         fun describe(e: Throwable): String = e.javaClass.simpleName + (e.message?.let { "：$it" } ?: "")
     }
