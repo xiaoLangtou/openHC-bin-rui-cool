@@ -1,6 +1,7 @@
 package io.github.gcbond.openhc
 
 import android.Manifest
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -16,9 +17,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
 import io.github.gcbond.openhc.audio.MicPermission
 import io.github.gcbond.openhc.connection.CarHome
@@ -40,6 +44,7 @@ import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.net.VpnConsent
 import io.github.gcbond.openhc.platform.usb.PhoneUsbMode
 import io.github.gcbond.openhc.platform.usb.UsbDescriber
+import io.github.gcbond.openhc.projection.SystemBars
 import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.AudioPreferences
 import io.github.gcbond.openhc.settings.PendingSetting
@@ -48,6 +53,8 @@ import io.github.gcbond.openhc.startup.BootStart
 import io.github.gcbond.openhc.startup.BootStartPolicy
 import io.github.gcbond.openhc.ui.HomeActions
 import io.github.gcbond.openhc.ui.HomeScreen
+import io.github.gcbond.openhc.ui.HiCarSplashOverlay
+import io.github.gcbond.openhc.ui.LaunchSplashPolicy
 import io.github.gcbond.openhc.ui.OpenHcTheme
 import io.github.gcbond.openhc.ui.Palette
 import io.github.gcbond.openhc.ui.ProjectionScreen
@@ -384,6 +391,10 @@ private fun AppRoot(
     var settingsOnEntry by remember { mutableStateOf<Map<PendingSetting, String>?>(null) }
     var reconnectReminder by remember { mutableStateOf<List<PendingSetting>>(emptyList()) }
     var reminderWhileProjecting by remember { mutableStateOf(false) }
+    // 「HiCar 启动动画」开关（设置里即时改，回首页时同步）；收起动画时的连接次数，同一次连接不再弹。
+    var launchAnimationEnabled by remember { mutableStateOf(settings.launchAnimation) }
+    var dismissedWirelessAttempt by remember { mutableIntStateOf(0) }
+    var dismissedWiredAttempt by remember { mutableIntStateOf(0) }
     val openSettings = {
         settingsOnEntry = pendingSettingsSnapshot(context, settings)
         screen = Screen.SETTINGS
@@ -421,52 +432,91 @@ private fun AppRoot(
             )
             reminderWhileProjecting = state.phase == Phase.PROJECTING || wirelessProjecting
         }
+        launchAnimationEnabled = settings.launchAnimation
         wireless.onSettingsClosed()
         screen = Screen.HOME
     }
-    // 返回键：设置页、投屏页都回首页；投屏时连接保持，可以再回到投屏画面。
-    BackHandler(enabled = screen != Screen.HOME) {
+    // HiCar 启动动画显隐（纯决策，单测覆盖各分支）与逃生出口：双击/返回键收起后，同一次连接不再弹。
+    val showSplash = LaunchSplashPolicy.shouldShow(
+        enabled = launchAnimationEnabled,
+        inSettings = screen == Screen.SETTINGS,
+        inProjection = screen == Screen.PROJECTION,
+        projectionWireless = projectionWireless,
+        wired = state,
+        wireless = wState,
+        dismissedWirelessAttempt = dismissedWirelessAttempt,
+        dismissedWiredAttempt = dismissedWiredAttempt,
+    )
+    val dismissSplash = {
+        if (screen == Screen.PROJECTION && !projectionWireless) {
+            dismissedWiredAttempt = state.attempt
+        } else {
+            dismissedWirelessAttempt = wState.attempt
+        }
+    }
+    // 返回键：动画显示时先收起动画；否则设置页、投屏页都回首页（投屏时连接保持，可以再回到投屏画面）。
+    BackHandler(enabled = showSplash) { dismissSplash() }
+    BackHandler(enabled = !showSplash && screen != Screen.HOME) {
         if (screen == Screen.SETTINGS) closeSettings() else screen = Screen.HOME
     }
+    // 沉浸衔接：动画在首页/设置页盖着时先藏系统栏（投屏页的 SystemBars 由 ProjectionSurface 自己管），
+    // 动画收起后还停在首页（没切进投屏页）时恢复，防止 HOME → PROJECTION 切换瞬间状态栏闪烁跳动。
+    val view = LocalView.current
+    val window = remember { (context as? Activity)?.window }
+    DisposableEffect(showSplash, screen) {
+        val splashCoveredScreen = showSplash && screen != Screen.PROJECTION
+        if (splashCoveredScreen) {
+            window?.let { SystemBars.hide(it, view, settings.fullScreen) }
+        }
+        onDispose {
+            if (splashCoveredScreen && screen == Screen.HOME && !showSplash) {
+                window?.let { SystemBars.show(it, view) }
+            }
+        }
+    }
 
-    when (screen) {
-        Screen.HOME -> HomeScreen(
-            wired = state,
-            wireless = wState,
-            identity = identity,
-            actions = actions,
-            wirelessActions = WirelessActions(
-                onStart = wirelessStart::start,
-                onStop = wireless::stop,
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (screen) {
+            Screen.HOME -> HomeScreen(
+                wired = state,
+                wireless = wState,
+                identity = identity,
+                actions = actions,
+                wirelessActions = WirelessActions(
+                    onStart = wirelessStart::start,
+                    onStop = wireless::stop,
+                    onShowProjection = {
+                        if (wirelessProjecting) {
+                            projectionWireless = true
+                            screen = Screen.PROJECTION
+                        }
+                    },
+                    onOpenSettings = openSettings,
+                    onOpenAppSettings = wirelessStart::openAppSettings,
+                    onEnableBluetooth = wirelessStart::requestEnableBluetooth,
+                    onResetTrustStore = wireless::resetTrustStoreAndStart,
+                ),
                 onShowProjection = {
-                    if (wirelessProjecting) {
-                        projectionWireless = true
+                    if (state.phase == Phase.PROJECTING) {
+                        projectionWireless = false
                         screen = Screen.PROJECTION
                     }
                 },
                 onOpenSettings = openSettings,
-                onOpenAppSettings = wirelessStart::openAppSettings,
-                onEnableBluetooth = wirelessStart::requestEnableBluetooth,
-                onResetTrustStore = wireless::resetTrustStoreAndStart,
-            ),
-            onShowProjection = {
-                if (state.phase == Phase.PROJECTING) {
-                    projectionWireless = false
-                    screen = Screen.PROJECTION
-                }
-            },
-            onOpenSettings = openSettings,
-        )
-        Screen.SETTINGS -> {
-            val screenSpec = remember { io.github.gcbond.openhc.connection.DisplayArea.screenFor(context, settings.fullScreen) }
-            val systemBluetooth = remember { DeviceInfo.systemBluetoothAddress() }
-            SettingsScreen(settings, screenSpec, systemBluetooth, onBack = closeSettings)
+            )
+            Screen.SETTINGS -> {
+                val screenSpec = remember { io.github.gcbond.openhc.connection.DisplayArea.screenFor(context, settings.fullScreen) }
+                val systemBluetooth = remember { DeviceInfo.systemBluetoothAddress() }
+                SettingsScreen(settings, screenSpec, systemBluetooth, onBack = closeSettings)
+            }
+            Screen.PROJECTION -> if (projectionWireless) {
+                ProjectionScreen(wState.projection, wDecoder, wTouchResets, onInput = wireless::sendInput, showWaitingText = !showSplash)
+            } else {
+                ProjectionScreen(state, decoder, touchResets, onInput = controller::sendInput, showWaitingText = !showSplash)
+            }
         }
-        Screen.PROJECTION -> if (projectionWireless) {
-            ProjectionScreen(wState.projection, wDecoder, wTouchResets, onInput = wireless::sendInput)
-        } else {
-            ProjectionScreen(state, decoder, touchResets, onInput = controller::sendInput)
-        }
+        // 中层：HiCar 启动动画（淡出结束自动退出组合树，触摸交还底层）。
+        HiCarSplashOverlay(visible = showSplash, onDismiss = dismissSplash)
     }
     if (reconnectReminder.isNotEmpty() && screen == Screen.HOME) {
         ReconnectReminderDialog(reconnectReminder, reminderWhileProjecting) { reconnectReminder = emptyList() }

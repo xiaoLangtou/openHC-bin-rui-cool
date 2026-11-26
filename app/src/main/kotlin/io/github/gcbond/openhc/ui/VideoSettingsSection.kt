@@ -24,6 +24,7 @@ internal fun PictureSettingsSection(settings: AppSettings, screen: ScreenSpec) {
         UiScaleSetting(settings)
         ClaritySettingsSection()
         FullScreenSetting(settings)
+        LaunchAnimationSetting(settings)
     }
 }
 
@@ -78,5 +79,23 @@ internal fun FullScreenSetting(settings: AppSettings) {
     ) {
         on = it
         settings.fullScreen = it
+    }
+}
+
+/**
+ * 「HiCar 启动动画」开关（即时生效，不进重连提醒）：无线自动回连和投屏等待首帧时显示全屏黑底
+ * 原生风格启动动画，首帧到达后淡出；关闭后首页能照常看到详细连接步骤，用于排障。
+ */
+@Composable
+internal fun LaunchAnimationSetting(settings: AppSettings) {
+    var on by remember { mutableStateOf(settings.launchAnimation) }
+    SwitchRow(
+        title = stringResource(R.string.settings_launch_animation),
+        summary = stringResource(R.string.settings_launch_animation_summary),
+        checked = on,
+        description = stringResource(R.string.settings_launch_animation_hint),
+    ) {
+        on = it
+        settings.launchAnimation = it
     }
 }

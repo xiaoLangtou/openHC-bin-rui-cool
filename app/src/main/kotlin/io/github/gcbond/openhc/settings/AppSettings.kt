@@ -36,13 +36,20 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_USB_ATTACH_ACCEPTED, false)
         set(value) = prefs.edit { putBoolean(KEY_USB_ATTACH_ACCEPTED, value) }
 
-    /**
-     * 「全屏显示」：开（默认）时投屏藏起状态栏和底部导航栏、铺满整屏；关时保留底部导航栏，画面让出它的位置，
-     * 声明给手机的尺寸也随之变小。下次连接生效。
+    /** 「全屏显示」：开（默认）时投屏藏起状态栏和底部导航栏、铺满整屏；关时保留底部导航栏，画面让出它的位置，
+     *  声明给手机的尺寸也随之变小。下次连接生效。
      */
     var fullScreen: Boolean
         get() = prefs.getBoolean(KEY_FULL_SCREEN, true)
         set(value) = prefs.edit { putBoolean(KEY_FULL_SCREEN, value) }
+
+    /**
+     * 「HiCar 启动动画」：开（默认）时无线自动回连和投屏等待首帧的阶段显示全屏黑底原生风格启动动画，
+     * 首帧到达后淡出。即时生效（不改「下次连接才生效」的任何项），关闭后可看到详细连接步骤用于排障。
+     */
+    var launchAnimation: Boolean
+        get() = prefs.getBoolean(KEY_LAUNCH_ANIMATION, true)
+        set(value) = prefs.edit { putBoolean(KEY_LAUNCH_ANIMATION, value) }
 
     /** 界面用深色（默认）还是浅色：页面顶上的太阳 / 月亮切换。 */
     var darkTheme: Boolean
@@ -75,6 +82,7 @@ class AppSettings(context: Context) {
         const val KEY_USB_ATTACH_ACCEPTED = "usb_attach_accepted"
         const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
         const val KEY_FULL_SCREEN = "full_screen"
+        const val KEY_LAUNCH_ANIMATION = "launch_animation"
         const val KEY_LOG_SERVER_URL = "log_server_url"
         const val KEY_LOG_SERVER_TOKEN = "log_server_token"
         const val DEFAULT_LOG_SERVER_URL = "http://121.36.29.74:3800"

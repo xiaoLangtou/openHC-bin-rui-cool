@@ -20,6 +20,9 @@ import io.github.gcbond.openhc.projection.ProjectionSurface
 /**
  * 全屏投屏页：手机画面铺满屏幕（藏起状态栏和导航栏），触摸交给 [onInput]。
  * 返回键回首页、连接保持（由调用方处理），首页可以再点「回到投屏画面」。
+ *
+ * [showWaitingText]：等首帧的白字「正在等待手机画面…」显不显示。开着 HiCar 启动动画时调用方传 false，
+ * 免得动画淡出时底下透出一行白字；解码器问题提示不受影响，一直显示。
  */
 @Composable
 internal fun ProjectionScreen(
@@ -27,6 +30,7 @@ internal fun ProjectionScreen(
     decoder: VideoDecoder?,
     touchResets: Int,
     onInput: (HiSightInput) -> Unit,
+    showWaitingText: Boolean = true,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         ProjectionSurface(
@@ -38,7 +42,7 @@ internal fun ProjectionScreen(
             fullScreen = io.github.gcbond.openhc.connection.DisplayArea.activeFullScreen,
             touchResetKey = touchResets,
         )
-        if (!state.firstFrame) {
+        if (!state.firstFrame && showWaitingText) {
             Text(stringResource(R.string.projection_waiting_frame), color = Color.White, modifier = Modifier.align(Alignment.Center))
         }
         state.decoderProblem?.let {
