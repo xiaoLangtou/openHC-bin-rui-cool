@@ -17,6 +17,7 @@ internal fun UsbAutoConnectSettingsSection() {
     var enabled by remember(context) { mutableStateOf(UsbAutoConnect.isEnabled(context)) }
     SwitchRow(
         title = stringResource(R.string.settings_usb_auto),
+        summary = stringResource(R.string.settings_usb_auto_summary),
         checked = enabled,
         description = stringResource(if (enabled) R.string.settings_usb_auto_hint_on else R.string.settings_usb_auto_hint_off),
     ) {

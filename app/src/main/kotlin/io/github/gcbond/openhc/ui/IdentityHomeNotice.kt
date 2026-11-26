@@ -24,16 +24,13 @@ internal fun IdentityHomeNotice(identity: IdentityLoader.Result, modifier: Modif
         IdentityLoader.Result.Missing -> stringResource(R.string.home_identity_missing)
         is IdentityLoader.Result.Invalid -> stringResource(R.string.home_identity_invalid, identity.reason)
     }
-    CardBox(modifier.fillMaxWidth(), color = Palette.Warn.copy(alpha = PROMPT_TINT)) {
+    CardBox(modifier.fillMaxWidth(), color = Palette.WarnBackground, border = Palette.WarnBorder) {
         Column {
             Text(stringResource(R.string.home_identity_title), style = UiType.status, color = Palette.Warn)
             Text(text, style = UiType.hint, color = Palette.Text, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
-
-/** 提示卡片的底色：提醒色叠一层淡的。 */
-private const val PROMPT_TINT = 0.16f
 
 /**
  * 身份参数的状态由 [IdentityHomeNotice] 按当前结果显示，状态卡里不再重复。

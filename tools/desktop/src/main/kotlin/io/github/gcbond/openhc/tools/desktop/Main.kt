@@ -291,6 +291,17 @@ internal class DesktopApp(private val options: DesktopOptions, private val out: 
                 firstFrameAt = System.nanoTime()
                 log("收到首帧" + (if (phoneAt != 0L) "（距手机连上 ${seconds(firstFrameAt - phoneAt)}）" else ""))
             }
+            // ── 以下 5 个是本地 v37 对齐新增的事件：桌面工具只记日志，不参与处理 ──
+            is SessionEvent.MediaMetadataUpdated ->
+                log("媒体元数据更新（515）：${event.metadata}")
+            is SessionEvent.ForegroundLaunchRequested ->
+                log("手机请求回前台（action=${event.action}）")
+            is SessionEvent.NaviFocusRequested ->
+                log("导航焦点请求（503）：${event.detail}")
+            is SessionEvent.PhoneCallStateChanged ->
+                log("手机通话状态（504）：${event.state}")
+            is SessionEvent.PhoneVoiceStateChanged ->
+                log("手机语音拾音状态（505）：${event.state}")
             is SessionEvent.Diagnostic -> {
                 log("诊断（${event.layer}）：${event.message}")
                 // 焦点授予：手机要媒体焦点（module 4 type 1~4，数据=用途号）时，车机按 CarAudioFocus 协议

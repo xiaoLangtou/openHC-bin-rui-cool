@@ -53,6 +53,7 @@ internal fun LePairingSetting() {
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { open = true }
     ValueRow(
         title = stringResource(R.string.settings_le_pair),
+        summary = stringResource(R.string.settings_le_pair_summary),
         value = stringResource(R.string.settings_le_pair_value),
         description = stringResource(R.string.settings_le_pair_hint),
     ) {

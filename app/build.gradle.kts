@@ -45,8 +45,8 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         // versionCode = 主版本 × 10000 + 次版本 × 100 + 补丁号。
-        versionCode = 207
-        versionName = "0.2.7"
+        versionCode = 300
+        versionName = "0.3.0"
     }
 
     sourceSets {

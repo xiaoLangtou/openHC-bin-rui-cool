@@ -12,14 +12,27 @@ class CarHotspotSettings(val networkName: String, val passphrase: String, val ba
 }
 
 /**
+ * 替车主打开、关掉车机自带热点（可选，应用层经车机本机的 ADB 实现）。在 [CarHotspot] 的工作线程上调用。
+ */
+interface CarHotspotSwitch {
+    /** 热点没开着就打开，等它开好（阻塞几秒）。开好了或本来就开着返回 null，否则返回没打开的原因（一句话，给车主看）。 */
+    fun open(): String?
+
+    /** 关掉 [open] 打开的热点；不是这次打开的什么都不做。不阻塞。 */
+    fun close()
+}
+
+/**
  * 用车机自带的热点（车主在车机设置里打开、在 OpenHC 里填名称和密码）给手机加入，不开本地热点。用法同 [LocalHotspotHandle]。
  *
  * 普通应用开不了、也读不到系统的热点配置，所以：
- * - 热点要车主自己先开着。[start] 后在 [FIND_WAIT_MS] 内找开着的热点网卡（[LocalHotspotRules.pickInterface]），找不到就明说；
+ * - 热点要车主自己先开着，或者给了 [switch]（设置里打开了「自动打开车机热点」）由它先打开。[start] 后在 [FIND_WAIT_MS]
+ *   内找开着的热点网卡（[LocalHotspotRules.pickInterface]，优先认打开前后新出现的地址），找不到就明说；
  * - 名称、密码用车主填的；BSSID 读热点网卡的硬件地址，读不到（安卓 11 起）由它的 IPv6 链路本地地址反推
  *   （[LocalHotspotRules.pickBssid]）；手机按 BSSID 找网，地址不对不加入；
  * - 频率按车主选的频段报常用信道（[LocalHotspotRules.estimateFrequency]）：同一频段内信道报错了手机还能自己找到（2026-11 实车）。
- * - 热点是车主的，[stop] 不关它；开着期间每 [WATCH_MS] 看一次网卡上的地址还在不在，没了报 [LocalHotspotEvents.onLost]。
+ * - 车主自己开的热点 [stop] 不关；[switch] 打开的由它在 [stop] 时关掉。开着期间每 [WATCH_MS] 看一次网卡上的地址还在不在，
+ *   没了报 [LocalHotspotEvents.onLost]。
  *
  * 车机自带热点能开在 5 GHz（本地热点在不少车机上只能 2.4 GHz），开着时系统不扫描 WiFi，投屏不容易被打断。
  * 线程：自己的工作线程；[LocalHotspotEvents] 在这条线程上回调。
@@ -28,6 +41,7 @@ class CarHotspot(
     context: Context,
     private val settings: CarHotspotSettings,
     private val events: LocalHotspotEvents,
+    private val switch: CarHotspotSwitch? = null,
     private val log: (String) -> Unit,
 ) : LocalHotspotHandle {
     private val app: Context = context.applicationContext ?: context
@@ -38,36 +52,52 @@ class CarHotspot(
     private var stopped = false
     private var deadline = 0L
     private var ready: LocalHotspot? = null
+
+    /** 自动打开前的网卡快照：打开后新出现的地址最像热点。 */
+    private var before: Map<String, Set<String>> = emptyMap()
+
+    /** 自动打开没成功的原因（车主也可能自己开着，所以先照样找）。 */
+    private var switchFailure: String? = null
     private val find = Runnable { find() }
     private val watch = Runnable { watch() }
 
     override fun start() {
         handler.post {
+            log("用车机自带热点（$settings）：${if (switch != null) "没开着就自动打开，再" else ""}找开着的热点网卡")
+            switch?.let { open(it) }
+            if (stopped) return@post
             deadline = now() + FIND_WAIT_MS
-            log("用车机自带热点（$settings）：找开着的热点网卡")
             find()
         }
     }
 
-    /** 停止并退出工作线程。没找到热点、热点丢了时自己已经置了 [stopped]，这里照样要退线程。 */
+    /** 停止并退出工作线程；自动打开的热点关掉。没找到热点、热点丢了时自己已经置了 [stopped]，这里照样要退线程。 */
     override fun stop() {
         handler.post {
             stopped = true
             handler.removeCallbacksAndMessages(null)
+            switch?.close()
             thread.quitSafely()
         }
     }
 
+    private fun open(switch: CarHotspotSwitch) {
+        before = InterfaceAddresses.ipv4Snapshot()
+        switchFailure = switch.open()
+        switchFailure?.let { log("没能自动打开车机热点：$it；车主也可能自己开着，照样找") }
+    }
+
     private fun find() {
         if (stopped || ready != null) return
-        val picked = LocalHotspotRules.pickInterface(emptyMap(), InterfaceAddresses.ipv4Snapshot(), stationIpv4())
+        val picked = LocalHotspotRules.pickInterface(before, InterfaceAddresses.ipv4Snapshot(), stationIpv4())
         if (picked == null) {
             if (now() < deadline) {
                 handler.postDelayed(find, POLL_MS)
                 return
             }
             stopped = true
-            events.onFailed("没找到车机自带热点：请先在车机设置里打开热点，再连接（等了 ${FIND_WAIT_MS / 1000} 秒）")
+            val why = switchFailure?.let { "自动打开没成功（$it），" } ?: ""
+            events.onFailed("没找到车机自带热点：${why}请先在车机设置里打开热点，再连接（等了 ${FIND_WAIT_MS / 1000} 秒）")
             return
         }
         val (iface, ip) = picked

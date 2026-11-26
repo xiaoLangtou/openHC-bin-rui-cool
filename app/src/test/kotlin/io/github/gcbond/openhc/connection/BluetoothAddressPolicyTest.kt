@@ -34,6 +34,17 @@ class BluetoothAddressPolicyTest {
     }
 
     @Test
+    fun theFirstUsablePropertyWins() {
+        // 第一个属性读到了就用它；空的、占位值就看下一个。
+        assertEquals("00:11:22:33:44:55", BluetoothAddressPolicy.firstValid(listOf("00:11:22:33:44:55", "00:66:77:88:99:AA")))
+        assertEquals("00:66:77:88:99:AA", BluetoothAddressPolicy.firstValid(listOf("", "00:66:77:88:99:aa")))
+        assertEquals("00:66:77:88:99:AA", BluetoothAddressPolicy.firstValid(listOf("02:00:00:00:00:00", "00:66:77:88:99:AA")))
+        assertEquals("00:66:77:88:99:AA", BluetoothAddressPolicy.firstValid(listOf(null, "00:66:77:88:99:AA")))
+        assertEquals(null, BluetoothAddressPolicy.firstValid(listOf(null, "00:00:00:00:00:00")))
+        assertEquals(listOf("persist.sys.bt_addr", "persist.vehicle.bt.mac_addr"), BluetoothAddressPolicy.SYSTEM_PROPERTY_KEYS)
+    }
+
+    @Test
     fun locallyAdministeredBitIsDetected() {
         assertEquals(true, BluetoothAddressPolicy.isLocallyAdministered("02:12:34:56:78:9A"))
         assertEquals(true, BluetoothAddressPolicy.isLocallyAdministered("06:11:22:33:44:55"))

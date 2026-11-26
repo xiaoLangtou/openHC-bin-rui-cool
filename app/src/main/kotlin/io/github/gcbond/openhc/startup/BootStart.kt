@@ -68,8 +68,14 @@ internal object BootStart {
             .setAction(BootStartPolicy.ACTION_SHOW_PROJECTION)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
-    /** 设置「开机静默连接」（默认关，与开机自动打开分开存）。 */
-    fun isSilent(context: Context): Boolean = prefs(context).getBoolean(KEY_SILENT, false)
+    /**
+     * 「开机静默连接」这项功能放不放出来。还没在车上验证过，暂时收起：设置页不显示，以前打开过的也按关处理
+     * （存的值不动，以后放出来时照旧）。
+     */
+    const val SILENT_AVAILABLE = false
+
+    /** 设置「开机静默连接」（默认关，与开机自动打开分开存）。功能收起时一律为关（见 [SILENT_AVAILABLE]）。 */
+    fun isSilent(context: Context): Boolean = SILENT_AVAILABLE && prefs(context).getBoolean(KEY_SILENT, false)
 
     fun setSilent(context: Context, silent: Boolean) {
         prefs(context).edit { putBoolean(KEY_SILENT, silent) }

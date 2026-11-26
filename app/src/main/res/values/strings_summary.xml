@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 设置页每一项名称下面一直显示的一句话：说清这项是干什么的、什么时候动它。更长的说明收在「?」里。 -->
+    <string name="settings_fps_summary">画面一跳一跳时换一档</string>
+    <string name="settings_ui_scale_summary">手机的图标、文字显得太大时调小</string>
+    <string name="settings_clarity_summary">越高越清楚，手机越容易发烫</string>
+    <string name="settings_full_screen_summary">画面底部被车机的悬浮栏挡住时关掉</string>
+    <string name="settings_media_keys_summary">用方向盘切歌、暂停手机音乐</string>
+
+    <string name="settings_wireless_wired_only_summary">关掉无线，只能插线用</string>
+    <string name="settings_wireless_mode_summary">连不上或画面卡，就换一种试试</string>
+    <string name="settings_wireless_mode_hotspot_text">默认，不用设置；车机原来的 WiFi 会断</string>
+    <string name="settings_wireless_mode_direct_text">车机原来的 WiFi 不断</string>
+    <string name="settings_wireless_mode_car_text">最流畅，要填车机热点名和密码</string>
+    <string name="settings_car_hotspot_auto_summary">连接时自动打开，断开后关掉</string>
+    <string name="settings_scan_pause_summary">画面、音乐卡顿时可以打开</string>
+    <string name="settings_car_hotspot_band_summary">按车机热点设置里选的填</string>
+    <string name="settings_bt_summary">一般不用改</string>
+    <string name="settings_le_pair_summary">能扫码连、上车却不自动连时用</string>
+    <string name="settings_usb_auto_summary">插上手机直接连，不用每次点「确定」</string>
+    <string name="settings_wireless_restore_summary">连接结束后把车机 WiFi 打开</string>
+
+    <string name="settings_boot_summary">车机开机或点火时打开 OpenHC</string>
+    <string name="settings_wireless_connect_on_bt_summary">上车后自动连上用过的手机</string>
+    <string name="settings_boot_silent_summary">开机不显示首页，连上手机才出画面</string>
+
+    <string name="settings_audio_enabled_summary">手机的音乐、导航用车机放</string>
+    <string name="settings_audio_delay_summary">声音比画面早时往上调</string>
+    <string name="settings_audio_navigation_stream_summary">导航和音乐音量连在一起时改</string>
+    <string name="settings_audio_media_stream_summary">一般留「自动」</string>
+
+    <string name="settings_diag_export_summary">遇到问题时导出，反馈时附上</string>
+</resources>

@@ -23,6 +23,7 @@ internal fun ClaritySettingsSection() {
     val options = VideoClarity.entries
     ChoiceRow(
         title = stringResource(R.string.settings_clarity),
+        summary = stringResource(R.string.settings_clarity_summary),
         options = options.map { stringResource(shortLabel(it)) },
         selected = options.indexOf(clarity),
         description = clarityLabel(clarity) + "。" + stringResource(R.string.settings_clarity_hint),

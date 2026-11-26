@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- 首页：左栏无线、右栏有线、左下页脚 -->
-    <string name="home_wireless_header">无线连接 · %1$s</string>
-    <string name="home_wireless_off_title">已关闭（只用数据线连接）</string>
-    <string name="home_wireless_off_note">无线已关闭（只用数据线连接）\n请插数据线连接。\n要用无线，在右上角「设置」里关掉「只用数据线连接」。</string>
-    <string name="home_wired_title">有线连接</string>
+    <string name="home_connect_title">连接手机</string>
+    <string name="home_connect_status_idle">未连接</string>
+    <string name="home_connect_status_wired">有线 · %1$s</string>
+    <string name="home_connect_status_wireless">无线 · %1$s</string>
+    <string name="home_connect_start">开始连接</string>
+    <string name="home_connect_plugged">连接插着的手机</string>
+    <string name="home_banner_open_settings">去设置</string>
+    <string name="home_connect_or_cable">也可以直接插数据线，插上就走有线。</string>
+    <string name="home_connect_wired_only_note">设置里开着「只用数据线连接」，不用扫码。</string>
+    <string name="home_way_scan_title">扫码连接</string>
+    <string name="home_way_scan_text">点「开始连接」，用华为手机扫屏幕上的二维码</string>
+    <string name="home_way_cable_title">插线连接</string>
+    <string name="home_way_cable_text">数据线插到车机的 USB 口就连，优先走有线</string>
+    <string name="home_way_cable_text_only">用数据线把华为手机插到车机的 USB 口，插上就会连接</string>
     <string name="home_pin_description">连接码 %1$s</string>
     <string name="home_mode">当前模式：%1$s</string>
     <string name="home_mode_both">无线 + 有线</string>

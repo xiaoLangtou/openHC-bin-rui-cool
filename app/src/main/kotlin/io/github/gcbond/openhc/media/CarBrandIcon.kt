@@ -18,7 +18,7 @@ internal object CarBrandIcon {
         cached?.let { return it }
         val app = context.applicationContext ?: context
         return runCatching {
-            app.resources.openRawResource(R.drawable.icon_geely).use { it.readBytes() }
+            app.resources.openRawResource(R.raw.icon_geely).use { it.readBytes() }
         }.getOrNull()?.also { cached = it }
     }
 }

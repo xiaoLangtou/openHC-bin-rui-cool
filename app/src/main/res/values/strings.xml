@@ -34,7 +34,7 @@
     <string name="phase_replug">请拔线后重插</string>
 
     <!-- 阶段说明 -->
-    <string name="hint_idle">点「开始」，然后用数据线把华为手机插到车机的 USB 口。</string>
+    <string name="hint_idle">用数据线把华为手机插到车机的 USB 口就会连接。</string>
     <string name="hint_preparing">正在读取配置、准备监听…</string>
     <string name="hint_waiting_for_phone">用数据线把华为手机插到车机的 USB 口。手机保持解锁，并关闭 USB 调试。</string>
     <string name="hint_usb_debugging">手机开着 USB 调试时不响应车机。请在手机的「开发人员选项」里关闭「USB 调试」，关闭后会自动继续。</string>
@@ -109,14 +109,20 @@
 
     <!-- 设置 -->
     <string name="settings_title">设置</string>
-    <string name="settings_apply_hint">修改在下次连接时生效。</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="settings_apply_hint">大部分改动下次连接时生效</string>
+    <string name="reconnect_reminder_title">需要重新连接</string>
+    <string name="reconnect_reminder_projecting">「%1$s」已保存，正在投屏的这次不会变。断开后重新连接，就会用上新设置。</string>
+    <string name="reconnect_reminder_waiting">「%1$s」已保存，这次等待用的还是旧设置。点「停止」，再重新开始连接，就会用上新设置。</string>
+    <string name="reconnect_reminder_ok">知道了</string>
     <string name="settings_fps">画面流畅度（帧率）</string>
     <string name="settings_fps_auto">自动：按屏幕刷新率（%1$d fps）</string>
     <string name="settings_fps_fixed">%1$d 帧</string>
-    <string name="settings_fps_hint">帧率高于屏幕刷新率时，画面会隔几秒跳一下。</string>
+    <string name="settings_fps_hint">帧率比车机屏幕的刷新率高时，画面会隔几秒跳一下，一般选「自动」。</string>
     <string name="settings_ui_scale">界面大小</string>
     <string name="settings_ui_scale_default">标准</string>
-    <string name="settings_ui_scale_hint">手机界面在车机屏上显得太大（图标、文字偏大，一屏放不下多少内容）时调小。只影响投屏画面，不改车机自己的界面，清晰度和流畅度不变。75% 和 65% 还没在车上试过，排版不对就调回来。下次连接生效。</string>
+    <string name="settings_ui_scale_hint">只改投屏画面里手机界面的大小，清晰度、流畅度不变。75% 和 65% 还没在车上试过，排版乱了就调回来。下次连接生效。</string>
     <string name="settings_bt">车机蓝牙地址</string>
     <string name="settings_bt_current_property">当前使用：%1$s（读自车机系统）</string>
     <string name="settings_bt_current_adapter">当前使用：%1$s（读自本机蓝牙）</string>

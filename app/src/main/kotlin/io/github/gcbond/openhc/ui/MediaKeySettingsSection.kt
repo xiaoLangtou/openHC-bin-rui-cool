@@ -19,6 +19,7 @@ internal fun MediaKeySettingsSection() {
     SettingsGroup(stringResource(R.string.settings_media_keys)) {
         SwitchRow(
             title = stringResource(R.string.settings_media_keys_enabled),
+            summary = stringResource(R.string.settings_media_keys_summary),
             checked = enabled,
             description = stringResource(R.string.settings_media_keys_hint),
         ) {

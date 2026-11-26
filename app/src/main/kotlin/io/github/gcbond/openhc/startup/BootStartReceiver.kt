@@ -24,6 +24,9 @@ class BootStartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!BootStartPolicy.isBootBroadcast(intent.action)) return
         val app = context.applicationContext
+        // 熄火不一定结束进程：点火时也补一次「暂停车机 WiFi 扫描」的恢复、自动打开的车机热点的关闭。
+        (app as? OpenHcApp)?.scanPause?.recover("开机或点火")
+        (app as? OpenHcApp)?.carHotspotAuto?.recover("开机或点火")
         if (app is OpenHcApp && BootStart.isSilent(app)) {
             SilentBootWatch(app, goAsync()).start()
         } else {

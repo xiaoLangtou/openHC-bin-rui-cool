@@ -50,6 +50,7 @@ import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.media.VideoDecoder
 import io.github.gcbond.openhc.platform.wifi.CarHotspot
 import io.github.gcbond.openhc.platform.wifi.CarHotspotSettings
+import io.github.gcbond.openhc.platform.wifi.CarHotspotSwitch
 import io.github.gcbond.openhc.platform.wifi.LocalHotspotOwner
 import io.github.gcbond.openhc.platform.wifi.MacText
 import io.github.gcbond.openhc.platform.wifi.WifiDirectGroupOwner
@@ -65,6 +66,10 @@ import io.github.gcbond.openhc.startup.BootStart
 import io.github.gcbond.openhc.startup.BootStartPolicy
 import io.github.gcbond.openhc.trust.FileTrustStore
 import io.github.gcbond.openhc.trust.TrustStoreCorruptException
+import io.github.gcbond.openhc.wifi.CarHotspotAuto
+import io.github.gcbond.openhc.wifi.CarHotspotAutoPreferences
+import io.github.gcbond.openhc.wifi.ScanPause
+import io.github.gcbond.openhc.wifi.hotspotOpenFailure
 import java.io.File
 import java.io.IOException
 import java.security.SecureRandom
@@ -134,6 +139,10 @@ class WirelessController(
     }
 
     private val app: Context = context.applicationContext ?: context
+
+    /** 「连接时暂停车机 WiFi 扫描」；单元测试里没有应用对象时为 null。 */
+    private val scanPause: ScanPause? get() = (app as? OpenHcApp)?.scanPause
+    private val carHotspotAuto: CarHotspotAuto? get() = (app as? OpenHcApp)?.carHotspotAuto
     private val settings = AppSettings(app)
     private val worker = HandlerThread("OpenHC-Wireless").also { it.start() }
     private val handler = Handler(worker.looper)
@@ -187,6 +196,9 @@ class WirelessController(
 
     /** 有线要不要因为无线而不开始：扫码等待里手机还没连上时不挡（有线来了就让出）。 */
     val blocksWired: Boolean get() = ReconnectPolicy.blocksWired(state.value)
+
+    /** 手机已经经蓝牙连上无线（正在连、投屏中）：这时插线不算数（多半是在充电），无线照常用。 */
+    val phoneOnWireless: Boolean get() = ReconnectPolicy.phoneOnWireless(state.value)
 
     /** 自动回连排着下一次等待（两次等待之间）：前台服务的通知据此显示「正在等已配对的手机回连」。 */
     @Volatile
@@ -336,10 +348,14 @@ class WirelessController(
         }
     }
 
-    /** 有线马上要开始：手机还没连上的等待先让出；有线没真的开始（例如没给授权）时过一会儿回到等待。 */
-    fun yieldToWired() = post {
-        yieldWaiting("有线要开始")
+    /**
+     * 有线马上要开始：手机还没连上的等待先让出。[plugged]（真插上了手机，插线优先）时扫码等待、车机在拨也让出；
+     * 否则（点「开始」、开机等插线）只让出自动进入的等回连。
+     */
+    fun yieldToWired(plugged: Boolean = false) = post {
+        yieldWaiting(if (plugged) "插上了手机" else "有线要开始", anyKind = plugged)
     }
+
 
     /** 从设置页回来：设置可能改了（例如刚打开「自动连接手机」），照界面回到前台一样看要不要拨。 */
     fun onSettingsClosed() = post {
@@ -495,6 +511,9 @@ class WirelessController(
     ) {
         if (attempt != null) return
         userStopped = false
+        // 熄火不一定结束进程：之前暂停的车机 WiFi 扫描没恢复成的，每次开始无线连接时补一次。
+        scanPause?.recover("开始无线连接")
+        carHotspotAuto?.recover("开始无线连接")
         if (wirelessPrefs.wiredOnly) return blocked(kind, WirelessNotice.WiredOnly, AutoHold.WIRED_ONLY)
         if (wiredActive()) return blocked(kind, WirelessNotice.WiredActive, AutoHold.WIRED_ACTIVE)
         // 本地热点安卓 8.0 起才有，更早的车机用不了无线。不要求车机 WiFi 开着：开热点时单射频车机自己的 WiFi 本来就会断。
@@ -594,9 +613,11 @@ class WirelessController(
         }
         cancelAutoRetry()
         val directGroup = carHotspot == null && wirelessPrefs.usesWifiDirect
+        // 和其他「下次连接生效」的设置一样，开始时读定。
+        val carHotspotAutoOpen = carHotspot != null && CarHotspotAutoPreferences(app).enabled
         val current = Attempt(
             ++attemptCounter, kind, config, adapter, identity.host, beacon, bluetoothTrigger, reconnect, resumeWiredAfter, directGroup,
-            carHotspot, dial,
+            carHotspot, carHotspotAutoOpen, dial,
         )
         attempt = current
         // 点「开始」顺带拨的也记进拨号规则：自动拨号不再叠着拨这台手机。
@@ -607,7 +628,7 @@ class WirelessController(
             "第 ${current.id} 次无线连接（${when (kind) { Kind.AUTO -> "等已配对的手机回连"; Kind.RECONNECT -> "车机主动回连"; Kind.MANUAL -> "用户开始" }}）：" +
                 "蓝牙地址来源 ${bluetooth.source}，deviceId ${config.deviceId.take(4)}…，" +
                 "画布 ${display.width}x${display.height}@${display.fps} dpi ${display.dpi}（界面大小 ${settings.uiScalePercent}%），系统 ${Build.VERSION.SDK_INT}，$wifi，" +
-                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${when { carHotspot != null -> "车机自带热点（试验，$carHotspot）"; directGroup -> "WiFi 直连组（试验）"; else -> "本地热点" }}，" +
+                "已配对手机 ${trustStore.peerCount} 台，声音 ${audio ?: "关"}，手机加入的网络 ${when { carHotspot != null -> "车机自带热点（$carHotspot${if (carHotspotAutoOpen) "，自动打开" else ""}）"; directGroup -> "WiFi 直连组"; else -> "本地热点" }}，" +
                 "广播 ${beacon?.let { "开（重新发布 ${it.republishMillis / 1000} 秒，GATT ${if (it.gatt) "开" else "关"}${if (it.declareRandomAddress) "，声明随机地址" else ""}）" } ?: "不发"}" +
                 (dial?.let { "，同时车机拨手机（${MacText.mask(it.address)}）" } ?: ""),
         )
@@ -616,6 +637,15 @@ class WirelessController(
         apply(WirelessSignal.AttemptStarted(current.id, addressMismatch, autoReconnect = kind == Kind.AUTO, direct = directGroup))
         current.runner.start()
         watchTermination(current)
+    }
+
+    /** 第 [id] 次连接用的「自动打开车机热点」：只关这次连接自己打开的。 */
+    private fun hotspotSwitch(id: Int): CarHotspotSwitch? {
+        val auto = carHotspotAuto ?: return null
+        return object : CarHotspotSwitch {
+            override fun open(): String? = auto.open(id).hotspotOpenFailure()
+            override fun close() = auto.close(id)
+        }
     }
 
     private fun granted(permission: String) =
@@ -637,11 +667,12 @@ class WirelessController(
     }
 
     /**
-     * 这次连接发不发广播、怎么发：只有被动等手机回连（已不再自动进入）才发；扫码连接不用（手机按二维码直接连车机），
-     * 车机主动回连也不用。还要有广播权限、车机支持。不发返回 null。
+     * 这次连接发不发广播、怎么发：等扫码（用户点开始）和被动等手机回连（已不再自动进入）时发：没配对过、或者删了这辆车的
+     * 手机靠广播弹「发现车机」，点连接、输入屏幕上的连接码就能连，不一定要扫码；配对过的手机也能靠它自己连上来。
+     * 车机主动回连不发。还要有广播权限、车机支持；用户点开始时发不了只是少一条路，照样能扫码。不发返回 null。
      */
     private fun beaconPlan(kind: Kind, adapter: BluetoothAdapter): ReconnectBeacon.Options? {
-        if (kind != Kind.AUTO) return null
+        if (kind == Kind.RECONNECT) return null
         val missing = WirelessPermissions.advertise(Build.VERSION.SDK_INT).filterNot { granted(it) }
         if (missing.isNotEmpty()) {
             Log.i(TAG, "没有蓝牙广播权限，这次不发广播（${if (kind == Kind.AUTO) "不进入等待" else "只能扫码"}）")
@@ -898,11 +929,12 @@ class WirelessController(
     /** 这次连接还在等手机经蓝牙连上（没在收尾）。 */
     private fun isWaiting(current: Attempt): Boolean = !current.phoneSeen && !current.tearingDown
 
-    /** 让出还在等手机的自动等待；让了返回 true。 */
-    private fun yieldWaiting(why: String): Boolean {
+    /** 让出还在等手机的无线连接：默认只让自动进入的等回连，[anyKind] 时扫码等待、车机在拨也让；让了返回 true。 */
+    private fun yieldWaiting(why: String, anyKind: Boolean = false): Boolean {
         val current = attempt ?: return false
-        if (current.kind != Kind.AUTO || !isWaiting(current)) return false
-        Log.i(TAG, "$why，停止等已配对的手机回连，让给有线")
+        if (!anyKind && current.kind != Kind.AUTO) return false
+        if (!isWaiting(current)) return false
+        Log.i(TAG, "$why，停止第 ${current.id} 次无线连接（${current.kind}，手机还没连上），让给有线")
         current.stopReason = StopReason.YIELD
         current.causes.onUserStop()
         apply(WirelessSignal.StopRequested)
@@ -970,6 +1002,8 @@ class WirelessController(
         val directGroup: Boolean = false,
         /** 这次不开本地热点，用车主已经打开的车机自带热点（设置里「无线方式」选了车机自带热点）。 */
         val carHotspot: CarHotspotSettings? = null,
+        /** 车机自带热点没开着时经车机本机 ADB 自动打开、结束时关掉（设置里「自动打开车机热点」）。 */
+        val carHotspotAutoOpen: Boolean = false,
         /** 扫码等待时同时由车机去拨的手机（[Kind.MANUAL] 点「开始」时），其他为 null。 */
         val dial: ReconnectTarget? = null,
     ) {
@@ -1011,7 +1045,9 @@ class WirelessController(
                 val car = carHotspot
                 if (car != null) {
                     // 车机自带热点是车主开的：不开本地热点，也不排「恢复车机 WiFi」。
-                    CarHotspot(app, car, events) { Log.i(TAG, "[$id] 车机热点：$it") }
+                    CarHotspot(app, car, events, if (carHotspotAutoOpen) hotspotSwitch(id) else null) {
+                        Log.i(TAG, "[$id] 车机热点：$it")
+                    }
                 } else {
                     // 收尾已经开始（停止之前排着的认证通过才走到这里）：别把收尾马上要排的复查取消掉。
                     if (!tearingDown) wifiRestore.onHotspotRequested()
@@ -1140,6 +1176,13 @@ class WirelessController(
             is SessionEvent.VideoStarted -> {
                 current.projected = true
                 autoRetryCount = 0
+                // 直连投屏期间车机 WiFi 没连网络、系统会定时扫描；用车机自带热点时，有的车机自己的 WiFi 还开着、没连网络，
+                // 也会一边开热点一边搜（多数车机开热点时 WiFi 是关的，就不用管）。设置打开时暂停（见 [ScanPause]）。
+                val searchingBesideHotspot = current.carHotspot != null && WifiStatus.clientSearching(app)
+                if (current.carHotspot != null) {
+                    Log.i(TAG, "[${current.id}] 投屏开始：车机自己的 WiFi${if (searchingBesideHotspot) "开着、没连网络（会一直搜）" else "没在搜"}")
+                }
+                if (current.directGroup || searchingBesideHotspot) scanPause?.sessionStarted(current.id)
                 current.phoneAddress?.let { address ->
                     if (wirelessPrefs.rememberPhone(address)) Log.i(TAG, "记下连成功的手机（${MacText.mask(address)}），之后会自动连它")
                 }
@@ -1279,6 +1322,7 @@ class WirelessController(
     private fun maybeFinish(current: Attempt) {
         if (current.finished || !current.tearingDown || !current.runner.isTerminated) return
         current.finished = true
+        scanPause?.sessionEnded(current.id)
         // 兜底：广播、GATT、定时一样不留。
         current.beacon?.stop("兜底")
         if (current.beacon?.isClean == false) Log.e(TAG, "[${current.id}] 广播资源没有收干净")

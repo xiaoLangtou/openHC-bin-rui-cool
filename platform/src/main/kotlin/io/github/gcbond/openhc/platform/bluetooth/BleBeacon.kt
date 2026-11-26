@@ -8,6 +8,7 @@ import android.bluetooth.le.AdvertisingSetCallback
 import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.BluetoothLeAdvertiser
+import android.os.Build
 import android.os.ParcelUuid
 import java.util.UUID
 
@@ -30,7 +31,11 @@ import java.util.UUID
  * 还在启动中时先记下，等系统回了「已开始」再真正停掉（启动没完成就停，部分系统版本会漏停）。
  *
  * 权限：安卓 12 起要「附近的设备」里的广播权限（BLUETOOTH_ADVERTISE），更早是清单里的普通蓝牙权限；没有时报 onFailed。
+ *
+ * **本类整体只用安卓 8.0（API 26）起才存在的广播集接口**：构造前必须先过 [support]——它查了 SDK_INT >= 26，
+ * 调用链上（beaconPlan → ReconnectBeacon.startAdvertising）没有别的构造点，所以这里对 lint 整类压制 NewApi。
  */
+@SuppressLint("NewApi")
 class BleBeacon(
     private val adapter: BluetoothAdapter,
     private val serviceDataUuid: UUID,
@@ -183,6 +188,10 @@ class BleBeacon(
          * 这里不再拿它当硬门槛：蓝牙开着就认为可以，真发不了时 [start] 的运行时失败会兜底降级。
          */
         fun support(adapter: BluetoothAdapter?): Support {
+            // 广播集接口（AdvertisingSetCallback / startAdvertisingSet）安卓 8.0 才有；更早的系统直接判不支持。
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                return Support.Unavailable("要安卓 8.0（API 26）起的广播集接口，本系统 ${Build.VERSION.SDK_INT}")
+            }
             if (adapter == null) return Support.Unavailable("没有蓝牙")
             val on = try {
                 adapter.isEnabled

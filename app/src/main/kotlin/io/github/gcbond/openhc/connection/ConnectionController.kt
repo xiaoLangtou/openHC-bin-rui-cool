@@ -130,6 +130,9 @@ class ConnectionController(context: Context) {
 
     /** 用户要求连接（从开始到停止，含等拔线重插）。 */
     private var connectionWanted = false
+
+    /** 用户在手机插着时点了「停止」：界面回到前台时不再自动开始（见 [startIfPlugged]）。只在 [handler] 线程上读写。 */
+    private var stoppedWhilePlugged = false
     private var attempt: Attempt? = null
     private var attemptCounter = 0
     private val gate = ReplugGate(REPLUG_ABSENT_MS)
@@ -142,10 +145,43 @@ class ConnectionController(context: Context) {
     // ---------------------------------------------------------------- 对外操作（任意线程）
 
     /** 首页「开始」。 */
-    fun start() = post { onStartRequest(StartTrigger.BUTTON) }
+    fun start() = post {
+        stoppedWhilePlugged = false
+        onStartRequest(StartTrigger.BUTTON)
+    }
 
     /** 应用被「设备接入」拉起（插线）。手机重新枚举也会走到这里，按 [StartPolicy] 忽略。 */
-    fun onUsbAttached() = post { onStartRequest(StartTrigger.USB_ATTACH) }
+    fun onUsbAttached() = post {
+        // 闸门关着时的「接入」多半是手机切换模式的重新枚举（例如用户点了停止之后手机退回普通状态），不算重新插线。
+        if (gateOpen()) stoppedWhilePlugged = false
+        onStartRequest(StartTrigger.USB_ATTACH)
+    }
+
+    /**
+     * 这次「设备接入」算不算真的插上了手机：没在连接，闸门开着（这次插入没用过，或手机拔下够久）。手机切换模式时的
+     * 重新枚举闸门关着，不算。结果在主线程回调。
+     */
+    fun checkPlug(result: (Boolean) -> Unit) = post {
+        val real = attempt == null && !connectionWanted && gateOpen()
+        mainHandler.post { result(real) }
+    }
+
+    /**
+     * 界面回到前台时：手机插着、没在连接、闸门开着、用户也没在这次插入上点过「停止」，就在主线程上调 [start]（当作刚插上）。
+     */
+    fun startIfPlugged(start: () -> Unit) = post {
+        if (!phonePresent()) {
+            stoppedWhilePlugged = false
+            return@post
+        }
+        if (attempt == null && !connectionWanted && !stoppedWhilePlugged && gateOpen()) {
+            Log.i(TAG, "界面回到前台时手机插着：当作刚插上")
+            mainHandler.post(start)
+        }
+    }
+
+    /** 车机上插着华为 / 荣耀手机（首页据此给出「连接插着的手机」）。任意线程可调。 */
+    fun phonePlugged(): Boolean = phonePresent()
 
     /** 等拔线重插时，用户坚持马上再试（例如手机其实已经换过）。 */
     fun retryNow() = post {
@@ -158,6 +194,8 @@ class ConnectionController(context: Context) {
     /** 首页「停止」：本次连接按顺序收尾，不再自动重连。 */
     fun stop() = post {
         connectionWanted = false
+        // 手机还插着时用户点了停止：这次插入不再自动开始，拔下重插（或点开始）再说。
+        stoppedWhilePlugged = phonePresent()
         val current = attempt
         apply(ConnectionSignal.StopRequested)
         if (current == null) {

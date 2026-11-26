@@ -61,6 +61,7 @@ internal fun AudioSettingsSection() {
     SettingsGroup(stringResource(R.string.settings_audio)) {
         SwitchRow(
             title = stringResource(R.string.settings_audio_enabled),
+            summary = stringResource(R.string.settings_audio_enabled_summary),
             checked = enabled,
             description = stringResource(R.string.settings_audio_hint),
         ) {
@@ -70,6 +71,7 @@ internal fun AudioSettingsSection() {
         val delays = AudioPreferences.DELAY_CHOICES
         ChoiceRow(
             title = stringResource(R.string.settings_audio_delay),
+            summary = stringResource(R.string.settings_audio_delay_summary),
             options = delays.map {
                 if (it == 0) stringResource(R.string.settings_audio_delay_min) else stringResource(R.string.settings_audio_delay_plus, it)
             },
@@ -81,6 +83,7 @@ internal fun AudioSettingsSection() {
         }
         StreamRow(
             title = stringResource(R.string.settings_audio_navigation_stream),
+            summary = stringResource(R.string.settings_audio_navigation_stream_summary),
             description = stringResource(R.string.settings_audio_navigation_stream_hint),
             usage = AudioUsage.NAVIGATION,
             selected = navigationStream,
@@ -91,6 +94,7 @@ internal fun AudioSettingsSection() {
         }
         StreamRow(
             title = stringResource(R.string.settings_audio_media_stream),
+            summary = stringResource(R.string.settings_audio_media_stream_summary),
             description = stringResource(R.string.settings_audio_media_stream_hint),
             usage = AudioUsage.MEDIA,
             selected = mediaStream,
@@ -146,6 +150,7 @@ private class PreviewNote(val text: String, val warn: Boolean)
 @Composable
 private fun StreamRow(
     title: String,
+    summary: String,
     description: String,
     usage: AudioUsage,
     selected: Int,
@@ -159,7 +164,7 @@ private fun StreamRow(
     GroupRow(spacing = if (LocalCompact.current) 8.dp else 10.dp) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                RowHeader(title, description)
+                RowHeader(title, description, summary = summary)
                 note?.let { RowNote(it.text, warn = it.warn) }
             }
             Spacer(Modifier.width(12.dp))
@@ -208,7 +213,7 @@ private fun StreamChips(selected: Int, onSelect: (Int) -> Unit) {
         state = state,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Palette.SegmentBackground)
             .padding(3.dp)
             .selectableGroup(),
@@ -228,7 +233,7 @@ private fun StreamChips(selected: Int, onSelect: (Int) -> Unit) {
                 Text(
                     if (value == AudioStreamChoice.AUTO) auto else value.toString(),
                     style = UiType.option(compact).copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Normal),
-                    color = if (on) Palette.Text else Palette.Muted,
+                    color = if (on) Palette.OnAccent else Palette.Text2,
                     maxLines = 1,
                 )
             }

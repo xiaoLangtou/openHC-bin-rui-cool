@@ -1,6 +1,10 @@
 package io.github.gcbond.openhc.ui
 
 import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
@@ -106,6 +110,7 @@ internal fun rememberWirelessSettingsState(): WirelessSettingsState {
 internal fun WiredOnlySetting(state: WirelessSettingsState) {
     SwitchRow(
         title = stringResource(R.string.settings_wireless_wired_only),
+        summary = stringResource(R.string.settings_wireless_wired_only_summary),
         checked = state.wiredOnly,
         description = stringResource(R.string.settings_wireless_wired_only_hint),
         note = if (state.wiredOnly) stringResource(R.string.settings_wireless_wired_only_note) else null,
@@ -118,6 +123,7 @@ internal fun WiredOnlySetting(state: WirelessSettingsState) {
 internal fun ConnectOnBluetoothSetting(state: WirelessSettingsState) {
     SwitchRow(
         title = stringResource(R.string.settings_wireless_connect_on_bt),
+        summary = stringResource(R.string.settings_wireless_connect_on_bt_summary),
         checked = state.connectOnBluetooth,
         description = stringResource(R.string.settings_wireless_connect_on_bt_hint),
         onCheckedChange = state::changeConnectOnBluetooth,
@@ -128,12 +134,13 @@ internal fun ConnectOnBluetoothSetting(state: WirelessSettingsState) {
 @Composable
 internal fun WirelessModeSetting(state: WirelessSettingsState) {
     if (!WirelessPreferences.wifiDirectSupported) return
-    ChoiceRow(
+    CardChoiceRow(
         title = stringResource(R.string.settings_wireless_mode),
+        summary = stringResource(R.string.settings_wireless_mode_summary),
         options = listOf(
-            stringResource(R.string.settings_wireless_mode_hotspot),
-            stringResource(R.string.settings_wireless_mode_direct),
-            stringResource(R.string.settings_wireless_mode_car),
+            CardOption(stringResource(R.string.settings_wireless_mode_hotspot), stringResource(R.string.settings_wireless_mode_hotspot_text)),
+            CardOption(stringResource(R.string.settings_wireless_mode_direct), stringResource(R.string.settings_wireless_mode_direct_text)),
+            CardOption(stringResource(R.string.settings_wireless_mode_car), stringResource(R.string.settings_wireless_mode_car_text)),
         ),
         selected = when {
             state.carHotspot -> 2
@@ -141,43 +148,74 @@ internal fun WirelessModeSetting(state: WirelessSettingsState) {
             else -> 0
         },
         description = stringResource(R.string.settings_wireless_mode_hint),
-        note = when {
-            state.carHotspot -> stringResource(R.string.settings_wireless_mode_car_note)
-            state.wifiDirect -> stringResource(R.string.settings_wireless_mode_direct_note)
-            else -> null
+        // 选中的方式自己的设置放在卡片下面的面板里（见 CardChoiceRow）。
+        detail = { mode ->
+            when (mode) {
+                1 -> {
+                    {
+                        DetailNote(stringResource(R.string.settings_wireless_mode_direct_note), warn = true)
+                        ScanPauseSetting()
+                    }
+                }
+                2 -> {
+                    {
+                        DetailNote(stringResource(R.string.settings_wireless_mode_car_note))
+                        CarHotspotFields(state)
+                        CarHotspotAutoSetting()
+                        ScanPauseSetting()
+                    }
+                }
+                else -> null
+            }
         },
     ) { state.changeWirelessMode(it) }
-    if (state.carHotspot) CarHotspotFields(state)
 }
 
-/** 车机自带热点的名称、密码（输入即保存，密码显示成圆点）和频段。 */
+
+/** 车机自带热点的名称、密码（输入即保存，密码显示成圆点；宽屏时并排）和频段。 */
 @Composable
 private fun CarHotspotFields(state: WirelessSettingsState) {
     GroupRow(spacing = 8.dp) {
-        OutlinedTextField(
-            value = state.carHotspotName,
-            onValueChange = { state.changeCarHotspotName(it) },
-            label = { Text(stringResource(R.string.settings_car_hotspot_name)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.carHotspotPassword,
-            onValueChange = { state.changeCarHotspotPassword(it) },
-            label = { Text(stringResource(R.string.settings_car_hotspot_password)) },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            supportingText = if (state.carHotspotName.isEmpty() || state.carHotspotPassword.isEmpty()) {
-                { Text(stringResource(R.string.settings_car_hotspot_missing)) }
+        val name: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(
+                value = state.carHotspotName,
+                onValueChange = { state.changeCarHotspotName(it) },
+                label = { Text(stringResource(R.string.settings_car_hotspot_name)) },
+                singleLine = true,
+                modifier = modifier,
+            )
+        }
+        val password: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(
+                value = state.carHotspotPassword,
+                onValueChange = { state.changeCarHotspotPassword(it) },
+                label = { Text(stringResource(R.string.settings_car_hotspot_password)) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = modifier,
+            )
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= FIELDS_ACROSS_MIN) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    name(Modifier.weight(1f))
+                    password(Modifier.weight(1f))
+                }
             } else {
-                null
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    name(Modifier.fillMaxWidth())
+                    password(Modifier.fillMaxWidth())
+                }
+            }
+        }
+        if (state.carHotspotName.isEmpty() || state.carHotspotPassword.isEmpty()) {
+            RowNote(stringResource(R.string.settings_car_hotspot_missing))
+        }
     }
     ChoiceRow(
         title = stringResource(R.string.settings_car_hotspot_band),
+        summary = stringResource(R.string.settings_car_hotspot_band_summary),
         options = listOf("2.4 GHz", "5 GHz"),
         selected = if (state.carHotspotFiveGhz) 1 else 0,
         description = stringResource(R.string.settings_car_hotspot_band_hint),
@@ -195,3 +233,6 @@ internal fun Hotspot5gSetting(state: WirelessSettingsState) {
         onCheckedChange = state::changeHotspot5g,
     )
 }
+
+/** 热点名和密码并排放的最小宽度。 */
+private val FIELDS_ACROSS_MIN = 560.dp

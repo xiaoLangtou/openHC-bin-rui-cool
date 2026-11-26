@@ -2,6 +2,6 @@
 <resources>
     <!-- 设置页：方向盘、媒体键切歌 -->
     <string name="settings_media_keys">方向盘按键</string>
-    <string name="settings_media_keys_enabled">方向盘、媒体键控制手机音乐（默认开）</string>
-    <string name="settings_media_keys_hint">开：车机方向盘或媒体按键的播放、暂停、上一首、下一首转给手机。投屏页开着时直接转；回到车机桌面时，正在放手机的音乐才转，切到车机收音机等以后交还车机。手机不支持也不影响投屏。关：不向手机声明按键，这些键照车机原来的方式处理。按了没反应或一次跳两首时，看日志 OpenHC-Keys。下次连接生效。</string>
+    <string name="settings_media_keys_enabled">方向盘、媒体键控制手机音乐</string>
+    <string name="settings_media_keys_hint">开：方向盘或媒体键的播放、暂停、上一首、下一首交给手机。回到车机桌面时，只有手机正在放歌才交给手机；切到车机收音机等以后还给车机。关：这些键照车机原来的方式用。下次连接生效。</string>
 </resources>

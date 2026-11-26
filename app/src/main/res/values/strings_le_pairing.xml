@@ -2,7 +2,7 @@
 <resources>
     <!-- 设置页「连接方式」：补全手机蓝牙配对 -->
     <string name="settings_le_pair">补全手机蓝牙配对</string>
-    <string name="settings_le_pair_hint">扫码能连、手机发现车机却连不上时使用。手机蓝牙设置中配对一次，之后再试免扫码连接。</string>
+    <string name="settings_le_pair_hint">能扫码连上、但上车后手机不自动连时试试：按提示在手机的蓝牙设置里配对一次，之后就能免扫码连接。</string>
     <string name="settings_le_pair_value">打开</string>
 
     <!-- 补配对对话框 -->
@@ -23,7 +23,7 @@
     <string name="le_pair_failed_rename">车机系统不让改蓝牙名称，这次不开配对入口。</string>
     <string name="le_pair_failed_gatt">车机开不了配对用的蓝牙服务（%1$s）。点「完成」后再试一次。</string>
     <string name="le_pair_failed_unsupported">这台车机不支持 BLE 广播，用不了这个办法。</string>
-    <string name="le_pair_failed_busy">车机同时能发的蓝牙广播不够用（OpenHC 等手机回连时也在发）。可以先在首页停掉无线等待，再来补配对。</string>
+    <string name="le_pair_failed_busy">车机同时能发的蓝牙广播不够用（OpenHC 等手机回连时也在发）。可以先在首页点「停止」，再来补配对。</string>
     <string name="le_pair_failed_advertising">车机没能发出配对广播（%1$s）。点「完成」后再试一次。</string>
     <string name="le_pair_reason_unknown">原因不明</string>
 </resources>

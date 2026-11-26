@@ -6,9 +6,11 @@
     <!-- 和手机之间的 TCP/UDP（经 USB 网卡）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 手填蓝牙地址备份进系统全局设置表（signature 权限，系统签名自动授予；普通签名版写不进，备份静默跳过）。 -->
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- 读车机本机蓝牙真地址（DeviceInfo.localBluetoothAddress；普通应用拿到的多半是掩码地址，系统签名才给真值）。 -->
+    <uses-permission android:name="android.permission.LOCAL_MAC_ADDRESS" tools:ignore="ProtectedPermissions" />
     <!-- 读取车机蓝牙 AVRCP MediaSession 元数据兜底（手机部分鸿蒙/三方播放器不发 515 时，从 com.android.bluetooth 会话补齐歌名歌手）。 -->
-    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
+    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" tools:ignore="ProtectedPermissions" />
     <!-- 车机无 CarMedia 时，直连 ECARX MediaCenterAPI 主动向仪表屏与桌面推送 Link EAS 媒体卡片。 -->
     <uses-permission android:name="ecarx.oem.permission.OPENAPI_MEDIACENTER_PERMISSION" />
     <!-- 连接期间留在前台，切到后台不断（安卓 9 起要声明）。 -->
@@ -86,7 +88,7 @@
         没有该权限的三方应用请求被静默丢弃（无日志、无回调）。本应用用 platform 密钥签名并共享
         android.uid.system（与官方 CarLink 同款打包方式），此 signature 级权限即可自动授予，广播放行。
     -->
-    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
+    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" tools:ignore="ProtectedPermissions" />
     <!-- 比亚迪车机「选择禁止后台启动项」对话框：安卓 11 起要声明，才查得到车机上有没有它（设置 → 启动）。 -->
     <!-- <queries> 仅 API 30+ 有意义（BYD 应用启动管理），Android 9 的 PackageParser 不认识该元素、
          会导致整包 INSTALL_FAILED_INVALID_APK，车机（API 28）上所有包本来可见，直接去掉。 -->

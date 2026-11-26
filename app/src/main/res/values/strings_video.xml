@@ -2,7 +2,7 @@
 <resources>
     <!-- 设置页：画面调试开关 -->
     <string name="settings_full_screen">全屏显示</string>
-    <string name="settings_full_screen_hint">开：投屏时藏起状态栏和底部导航栏，画面铺满整屏。关：保留底部导航栏，画面让出它的位置——车机装了常驻悬浮底栏、全屏时画面底部被挡住时关掉。下次连接生效。</string>
+    <string name="settings_full_screen_hint">开：画面铺满整屏。关：给车机底部的导航栏留出位置，画面不被挡住。下次连接生效。</string>
     <string name="settings_video_frame_pacing">按屏幕刷新节拍上屏（调试，默认开）</string>
     <string name="settings_video_frame_pacing_hint">开：同一次屏幕刷新最多放一帧新画面，挤在一起到的帧顺延到下一次刷新，画面更匀；每帧最多晚一个刷新周期（60Hz 屏约 17 毫秒）。关：解码出来立即上屏，延迟最低，但帧率接近刷新率时，常有帧被系统挤掉，看起来一跳一跳。对比时看日志 OpenHC-Video：每 5 秒两行，第一行的「解码」和「上屏」，第二行的「两帧同刷新」和「节拍多等」。下次连接生效。</string>
 </resources>

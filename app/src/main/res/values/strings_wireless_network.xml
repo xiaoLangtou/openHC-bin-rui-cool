@@ -3,22 +3,22 @@
     <!-- 无线连接里 WiFi 那一段：车机开热点；退出后恢复车机 WiFi -->
 
     <!-- 设置页 -->
-    <string name="settings_wireless_restore">退出后恢复车机 WiFi（默认关）</string>
-    <string name="settings_wireless_restore_hint">无线连接结束、热点关掉以后，如果车机 WiFi 是因为开热点才断开的，就把它打开。安卓 10 起应用不能自己打开 WiFi：车机 WiFi 没有自己恢复时，首页顶上会提示你去系统里打开。</string>
+    <string name="settings_wireless_restore">退出后恢复车机 WiFi</string>
+    <string name="settings_wireless_restore_hint">「车机开热点」会断开车机原来连的 WiFi。打开这项，连接结束后帮你把 WiFi 打开；安卓 10 起应用打不开 WiFi，会在首页提示你去打开。改完立即生效。</string>
 
     <!-- 设置页：无线方式 -->
     <string name="settings_wireless_mode">无线方式</string>
     <string name="settings_wireless_mode_hotspot">车机开热点</string>
-    <string name="settings_wireless_mode_direct">5 GHz 直连（试验）</string>
-    <string name="settings_wireless_mode_car">车机自带热点（试验）</string>
-    <string name="settings_wireless_mode_car_note">试验功能。先在车机设置里打开车机自带的热点（能选 5 GHz 就选 5 GHz），再把热点名、密码和频段填在下面。热点开着时车机自己连不了别的 WiFi，系统也不再扫描 WiFi，投屏不容易卡。用完热点要自己在车机设置里关。</string>
+    <string name="settings_wireless_mode_direct">5 GHz 直连</string>
+    <string name="settings_wireless_mode_car">车机自带热点</string>
+    <string name="settings_wireless_mode_car_note">填车机热点设置里的名称、密码和频段。热点要开着，或者打开下面的「自动打开车机热点」。</string>
     <string name="settings_car_hotspot_name">车机热点名</string>
     <string name="settings_car_hotspot_password">车机热点密码</string>
     <string name="settings_car_hotspot_band">车机热点频段</string>
-    <string name="settings_car_hotspot_band_hint">按车机设置里热点选的频段填；不知道就选 5 GHz 试试，连不上再换 2.4 GHz。</string>
-    <string name="settings_car_hotspot_missing">热点名和密码都要填，没填齐时无线连接会提示。</string>
-    <string name="settings_wireless_mode_hint">车机开热点：手机连车机开的热点，最稳；车机原来连着的 WiFi 会断开。5 GHz 直连：车机建一个 WiFi 直连组让手机加入，优先用 5 GHz，避开和蓝牙挤在 2.4 GHz 上（手机蓝牙忙的时候画面容易卡）；不开热点，车机原来连着的 WiFi 不用断开。下一次无线连接生效。</string>
-    <string name="settings_wireless_mode_direct_note">试验功能。要先打开车机 WiFi（不用连任何网络）。车机 WiFi 连在某些 5 GHz 信道上、或者建不了 5 GHz 时，会退到 2.4 GHz。安卓 9 及更早的车机要靠系统的一个内部设置指定信道，有的车机不支持。连不上或者画面卡，就改回「车机开热点」，报告问题时附上诊断日志。</string>
+    <string name="settings_car_hotspot_band_hint">按车机热点设置里选的频段填。不知道就先选 5 GHz，连不上再换 2.4 GHz。</string>
+    <string name="settings_car_hotspot_missing">热点名和密码都要填。</string>
+    <string name="settings_wireless_mode_hint">车机开热点：手机连车机开的热点，车机原来连的 WiFi 会断开。5 GHz 直连：车机和手机直接连，车机原来的 WiFi 不用断开。车机自带热点：用车机系统设置里开的热点。下次无线连接生效。</string>
+    <string name="settings_wireless_mode_direct_note">车机 WiFi 要开着，连不连网络都行。连不上就换回「车机开热点」。</string>
 
     <!-- 设置页：热点频段 -->
     <string name="settings_wireless_hotspot_5g">热点开在 5 GHz（信道 36）</string>
@@ -26,8 +26,10 @@
     <string name="settings_wireless_hotspot_5g_note">已强制 5 GHz 信道 36。注意：车机设置里的个人热点频段也会被改到 5 GHz；关掉本开关后下一次开热点恢复系统默认（2.4 GHz）。</string>
 
     <!-- 首页无线卡片 -->
-    <string name="wireless_network_line">无线方式：车机开热点。手机连上来时，车机原来连着的 WiFi 会断开。</string>
-    <string name="wireless_network_line_direct">无线方式：WiFi 直连（试验，优先 5 GHz）。车机 WiFi 要开着，原来连着的网络不用断开。</string>
+    <string name="wireless_network_line">方式：车机开热点（车机原来连的 WiFi 会断开）</string>
+    <string name="wireless_network_line_car">方式：车机自带热点（车机热点要开着）</string>
+    <string name="wireless_network_line_car_auto">方式：车机自带热点（连接时自动打开）</string>
+    <string name="wireless_network_line_direct">方式：5 GHz 直连（车机 WiFi 要开着）</string>
     <string name="wireless_hint_negotiating_hotspot">认证成功，车机正在开热点，和手机商量 WiFi…</string>
     <string name="wireless_hint_sending_hotspot">车机热点已打开，正在把热点信息发给手机…</string>
     <string name="wireless_hint_waiting_join_hotspot">等手机连上车机热点…（手机开着热点的话会被关掉）</string>
@@ -46,4 +48,30 @@
     <string name="wireless_restore_open_settings">WiFi 设置</string>
     <string name="wireless_restore_dismiss">知道了</string>
     <string name="wireless_restore_unavailable">这台车机打不开系统的 WiFi 页面，请在车机设置里手动打开 WiFi。</string>
+    <!-- 连接时暂停车机 WiFi 扫描（经车机本机的网络 ADB，可选、默认关） -->
+    <string name="settings_scan_pause">投屏时暂停车机搜 WiFi</string>
+    <string name="settings_scan_pause_hint">车机隔一阵会搜一下附近的 WiFi，搜的那一下画面和声音可能顿一下。打开后，投屏时车机先不搜，断开后恢复：5 GHz 直连时都会暂停；车机自带热点时，只在车机自己的 WiFi 还开着、又没连网络时才暂停（多数车机开热点时 WiFi 是关的，本来就不搜）。需要车机打开网络 ADB，打开开关时会说明风险。语音助手、定位自己发起的搜索管不了，效果还在验证。</string>
+    <string name="settings_scan_pause_confirm_text">打开后，投屏时 OpenHC 通过车机本机的网络 ADB 让车机暂停搜 WiFi，投屏结束、出错或下次打开应用时恢复。「5 GHz 直连」时都会暂停；「车机自带热点」时只在车机自己的 WiFi 还开着、又没连网络时才暂停。车机搜 WiFi 的那一下画面和声音可能顿一下，这个开关就是为了减少这种情况；语音助手、定位自己发起的搜索管不了，效果还在验证。\n\n要你先做：在车机的开发者选项里打开网络 ADB（OpenHC 不会替你打开）。打开开关后车机会弹框，请勾选「一律允许」再点「允许」（不勾的话以后每次都用不了）。\n\n风险：网络 ADB 开着时，同一网络里的设备经你在车机上点允许后也能连上车机。不用这个功能时，在车机上关掉网络 ADB。</string>
+    <string name="settings_adb_cancel">取消</string>
+    <string name="settings_adb_confirm">打开</string>
+    <string name="settings_adb_checking">正在连车机的网络 ADB……车机弹出「允许调试吗」时，请勾选「一律允许」再点「允许」。</string>
+    <string name="settings_scan_pause_paused">投屏中，已暂停车机搜 WiFi。</string>
+    <string name="settings_scan_pause_restoring">正在恢复车机搜 WiFi……</string>
+    <string name="settings_scan_pause_ready">检查通过：下次投屏时会暂停车机搜 WiFi。</string>
+    <string name="settings_adb_adb_off">连不上车机的网络 ADB：请先在车机的开发者选项里打开网络 ADB（端口 5555），再关掉、打开这个开关重新检查。</string>
+    <string name="settings_adb_not_approved">车机没有授权：关掉、再打开这个开关，在车机弹出的框里勾选「一律允许」再点「允许」。</string>
+    <string name="settings_adb_tls_only">这台车机只支持加密的「无线调试」，这个功能用不了。</string>
+    <string name="settings_scan_pause_unsupported">这台车机的系统不支持，这个功能用不了。</string>
+    <string name="settings_scan_pause_denied">车机系统不让改，这个功能用不了。</string>
+    <!-- 自动打开车机热点（经车机本机的网络 ADB，可选、默认关） -->
+    <string name="settings_car_hotspot_auto">自动打开车机热点</string>
+    <string name="settings_car_hotspot_auto_hint">手机连上来时，OpenHC 替你打开车机热点，这次连接结束后关掉；你自己打开的热点不会关。热点用车机设置里保存的名称和密码，上面要填得一样。要先在车机的开发者选项里打开网络 ADB，打开开关时会说明风险。从下一次连接起生效。</string>
+    <string name="settings_car_hotspot_auto_confirm_text">打开后，手机连上来要加入车机热点时，热点要是没开着，OpenHC 通过车机本机的网络 ADB 把它打开（用车机设置里保存的名称、密码和频段，不改热点设置），这次连接结束、出错或下次打开应用时关掉。你自己打开的热点不会关。\n\n热点开着时，车机自己连着的 WiFi 会断开，热点关掉后自动连回。手机连着车机热点时可能会用车机的流量上网，和你自己打开热点时一样。\n\n要先在车机的开发者选项里打开网络 ADB（OpenHC 不会替你打开）。打开这个开关时，车机会弹框请求授权，请勾选「一律允许」再点「允许」（不勾的话以后每次都用不了）。\n\n风险：网络 ADB 开着时，同一网络里的设备经车机上点允许后也能连上车机。不用这个功能时，请在车机上关掉网络 ADB。</string>
+    <string name="settings_car_hotspot_auto_ready">检查通过：连接时会自动打开车机热点。</string>
+    <string name="settings_car_hotspot_auto_opening">正在打开车机热点……</string>
+    <string name="settings_car_hotspot_auto_open">车机热点是 OpenHC 打开的，这次连接结束后关掉。</string>
+    <string name="settings_car_hotspot_auto_closing">正在关掉车机热点……</string>
+    <string name="settings_car_hotspot_auto_unsupported">这台车机的系统不支持自动打开热点，请在车机设置里自己打开。</string>
+    <string name="settings_car_hotspot_auto_denied">车机系统不让 OpenHC 打开热点，请在车机设置里自己打开。</string>
+    <string name="settings_adb_failed">没有成功（超时或出错）。请导出诊断日志反馈。</string>
 </resources>

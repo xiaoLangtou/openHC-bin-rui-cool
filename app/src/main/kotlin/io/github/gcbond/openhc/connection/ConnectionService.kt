@@ -81,10 +81,12 @@ class ConnectionService : Service() {
         super.onDestroy()
     }
 
-    /** 动态注册熄屏广播（ECARX 系统广播，manifest 里不声明，避免安卓 9 PackageParser 兼容问题）。 */
+    /** 动态注册熄屏广播（ECARX 系统广播，manifest 里不声明，避免安卓 9 PackageParser 兼容问题）。
+     *  广播来自系统/其他应用，必须 RECEIVER_EXPORTED 才收得到；安卓 13 以下 ContextCompat 自动忽略该 flag。 */
     private fun registerDisplayOffReceiver() {
         runCatching {
-            registerReceiver(displayOffReceiver, IntentFilter(DISPLAY_OFF_ACTION))
+            ContextCompat.registerReceiver(this, displayOffReceiver, IntentFilter(DISPLAY_OFF_ACTION),
+                ContextCompat.RECEIVER_EXPORTED)
         }.onFailure { Log.w(TAG, "注册熄屏广播失败（${it.javaClass.simpleName}），熄屏不自动断连") }
     }
 

@@ -4,7 +4,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * 无线卡片中间那块的尺寸，单位 dp。[pinBox] 为 0 表示放不下、不显示连接码。
+ * 首页等扫码时二维码那块的尺寸，单位 dp。[pinBox] 为 0 表示放不下、不显示连接码。
  *
  * @property qr 二维码边长。
  * @property pinBox 连接码每个方框的边长。

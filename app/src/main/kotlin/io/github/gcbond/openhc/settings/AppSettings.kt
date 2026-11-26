@@ -5,7 +5,7 @@ import androidx.core.content.edit
 import io.github.gcbond.openhc.connection.DisplayPlan
 
 /**
- * 应用设置（SharedPreferences）。改动在下一次连接时生效。任意线程可读写。
+ * 应用设置（SharedPreferences）。连接相关的几项在下一次连接开始时读。任意线程可读写。
  */
 class AppSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -44,6 +44,11 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean(KEY_FULL_SCREEN, true)
         set(value) = prefs.edit { putBoolean(KEY_FULL_SCREEN, value) }
 
+    /** 界面用深色（默认）还是浅色：页面顶上的太阳 / 月亮切换。 */
+    var darkTheme: Boolean
+        get() = prefs.getBoolean(KEY_DARK_THEME, true)
+        set(value) = prefs.edit { putBoolean(KEY_DARK_THEME, value) }
+
     /** 安卓 13 起的通知权限问过一次了（拒绝了也不再追问）。 */
     var notificationPermissionAsked: Boolean
         get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
@@ -74,5 +79,6 @@ class AppSettings(context: Context) {
         const val KEY_LOG_SERVER_TOKEN = "log_server_token"
         const val DEFAULT_LOG_SERVER_URL = "http://121.36.29.74:3800"
         const val DEFAULT_LOG_SERVER_TOKEN = "a7b140f74313db0fbf09001528b48c65"
+        const val KEY_DARK_THEME = "dark_theme"
     }
 }

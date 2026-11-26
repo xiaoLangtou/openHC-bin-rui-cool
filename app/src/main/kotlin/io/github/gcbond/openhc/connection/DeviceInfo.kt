@@ -15,14 +15,14 @@ import io.github.gcbond.openhc.platform.media.DisplayRefreshRate
 internal object DeviceInfo {
 
     /**
-     * 读系统属性 [BluetoothAddressPolicy.SYSTEM_PROPERTY_KEY]，读不到返回 null。
+     * 按顺序读系统属性 [BluetoothAddressPolicy.SYSTEM_PROPERTY_KEYS]，取第一个有效的地址，都读不到返回 null。
      * 系统属性的读取接口没有公开，只能反射。安卓 9 起非公开接口受限，这个接口属于允许调用、系统只记一行警告的那一类；
      * 将来的系统要是拦了，这里返回 null，退回手填地址。
      */
     @SuppressLint("PrivateApi")
     fun systemBluetoothAddress(): String? = try {
         val get = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-        (get.invoke(null, BluetoothAddressPolicy.SYSTEM_PROPERTY_KEY) as? String)?.takeIf { it.isNotBlank() }
+        BluetoothAddressPolicy.firstValid(BluetoothAddressPolicy.SYSTEM_PROPERTY_KEYS.map { get.invoke(null, it) as? String })
     } catch (e: ReflectiveOperationException) {
         null
     } catch (e: RuntimeException) {

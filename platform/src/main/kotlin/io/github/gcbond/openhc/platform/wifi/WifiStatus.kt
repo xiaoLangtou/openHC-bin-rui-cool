@@ -54,6 +54,24 @@ object WifiStatus {
         0
     }
 
+    /**
+     * 车机自己的 WiFi（作为终端）开着、却没连上也没在连任何网络：这种状态下系统会不停地搜网络。多数车机开着自带热点时
+     * 终端是关的，有的车机两个同时开着，就会一边开热点一边搜。读不到时按「没在搜」算。
+     */
+    @Suppress("DEPRECATION")
+    fun clientSearching(context: Context): Boolean = try {
+        val wifi = wifiManager(context)
+        searching(wifi?.isWifiEnabled == true, wifi?.connectionInfo?.supplicantState?.name)
+    } catch (e: RuntimeException) {
+        false
+    }
+
+    /** [clientSearching] 的判定：[supplicantState] 是系统 WiFi 终端状态的名字。正在连、已连上的不算；状态不认识的也不算。 */
+    internal fun searching(enabled: Boolean, supplicantState: String?): Boolean =
+        enabled && supplicantState in SEARCHING_STATES
+
+    private val SEARCHING_STATES = setOf("DISCONNECTED", "INACTIVE", "SCANNING", "DORMANT")
+
     private fun locationEnabled(context: Context): Boolean? = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             (context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager)?.isLocationEnabled

@@ -95,9 +95,16 @@ internal object ReconnectPolicy {
     }
 
     /**
-     * 无线挡不挡有线：在进行的无线连接要挡；扫码等待里手机还没连上时（[WirelessUiState.waitingForReconnect]），有线来了就让给有线。
+     * 无线挡不挡有线（点「开始」、开机等插线这类有线开始）：在进行的无线连接要挡；扫码等待里手机还没连上时
+     * （[WirelessUiState.waitingForReconnect]），有线来了就让给有线。
      */
     fun blocksWired(state: WirelessUiState): Boolean = state.active && !state.waitingForReconnect
+
+    /**
+     * 真插上了手机时：无线这边手机已经经蓝牙连上（正在连、投屏中）就不管插线（多半是在充电）；
+     * 还在等手机（扫码、等回连、车机在拨）就让给有线（插线优先）。
+     */
+    fun phoneOnWireless(state: WirelessUiState): Boolean = state.active && state.phoneConnected
 }
 
 /**

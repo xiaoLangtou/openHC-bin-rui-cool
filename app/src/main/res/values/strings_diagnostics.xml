@@ -3,7 +3,7 @@
     <!-- 设置 → 诊断 -->
     <string name="settings_group_diagnostics">诊断</string>
     <string name="settings_diag_export">导出诊断日志</string>
-    <string name="settings_diag_export_hint">把 OpenHC 最近的运行记录存成一个文本文件（安卓 10 起在「下载/OpenHC」文件夹），报告问题时附上。只有 OpenHC 自己的日志：不含连接密钥和 WiFi 密码，手机、车机的地址只留首尾几位。</string>
+    <string name="settings_diag_export_hint">把 OpenHC 最近的运行记录存成一个文件（安卓 10 起在「下载/OpenHC」文件夹），反馈问题时附上。不含密码和密钥，手机、车机的地址只留首尾几位。</string>
     <string name="settings_diag_export_button">导出</string>
     <string name="settings_diag_exporting">正在导出…</string>
     <string name="settings_diag_saved">已保存：%1$s。报告问题时把这个文件附上（可以用车机的文件管理拷到 U 盘再上传）。</string>

@@ -34,6 +34,7 @@ internal fun FpsSetting(settings: AppSettings, screen: ScreenSpec) {
     val values = listOf(0) + DisplayPlan.FPS_CHOICES
     ChoiceRow(
         title = stringResource(R.string.settings_fps),
+        summary = stringResource(R.string.settings_fps_summary),
         options = values.map {
             if (it == 0) stringResource(R.string.settings_choice_auto) else stringResource(R.string.settings_fps_fixed, it)
         },
@@ -53,6 +54,7 @@ internal fun UiScaleSetting(settings: AppSettings) {
     val values = DisplayPlan.UI_SCALE_CHOICES
     ChoiceRow(
         title = stringResource(R.string.settings_ui_scale),
+        summary = stringResource(R.string.settings_ui_scale_summary),
         options = values.map {
             if (it == DisplayPlan.DEFAULT_UI_SCALE) stringResource(R.string.settings_ui_scale_default) else "$it%"
         },
@@ -70,6 +72,7 @@ internal fun FullScreenSetting(settings: AppSettings) {
     var on by remember { mutableStateOf(settings.fullScreen) }
     SwitchRow(
         title = stringResource(R.string.settings_full_screen),
+        summary = stringResource(R.string.settings_full_screen_summary),
         checked = on,
         description = stringResource(R.string.settings_full_screen_hint),
     ) {

@@ -4,23 +4,39 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,20 +45,17 @@ import io.github.gcbond.openhc.R
 import io.github.gcbond.openhc.connection.ScreenSpec
 import io.github.gcbond.openhc.settings.AppSettings
 
-/** 内容宽到这个值才排两列：两列各约 370dp 起，分段选择那排才放得下。 */
-private val TWO_COLUMN_MIN = 760.dp
-
-/** 一列最宽多少：大屏上不拉成一整条。 */
-private val COLUMN_MAX = 640.dp
-private val COLUMN_GAP = 16.dp
+/** 内容宽到这个值才在左边排分类目录。 */
+private val RAIL_MIN = 700.dp
 
 /**
- * 设置页：左上「设置」、右上「返回」（和首页的「设置」同一个位置）。宽屏排两列：左列「画面」「方向盘按键」，
- * 右列「连接方式」「启动」「声音」；版本行在底下横跨两列。
- * 窄屏排一列，先左列后右列。改动在下次连接时生效。
+ * 设置页：顶栏左边「返回」和「设置」，正中深浅色切换，右边一句生效说明。宽屏左边是分类目录（画面、连接方式、启动、
+ * 声音、方向盘按键、诊断），右边只显示选中的那一类；窄屏不排目录，各组从上到下排一列。版本行在最下面。
+ * 大部分设置下次连接时生效，个别项（自动连接、开机启动等）在各自说明里写了；回首页时有连接正用着旧设置会弹框提醒
+ * （见 [io.github.gcbond.openhc.settings.ReconnectReminder]）。
  *
  * 每个小节是独立的 composable，画一个分组（[SettingsGroup]）或分组里的一行；新加的行放进对应的分组里，
- * 新的分组放进 [SettingsLeftColumn] 或 [SettingsRightColumn]。
+ * 新的分组放进 [SettingsCategory] 和 [CategoryContent]。
  */
 @Composable
 internal fun SettingsScreen(
@@ -60,55 +73,67 @@ internal fun SettingsScreen(
     ) {
         val compact = maxHeight < Dimens.CompactHeight
         val side = if (maxWidth >= Dimens.WIDE_PAGE_MIN) Dimens.PageSide else Dimens.PageSideNarrow
-        val twoColumn = maxWidth - side * 2 >= TWO_COLUMN_MIN
-        val sectionGap = if (compact) 12.dp else 20.dp
+        val rail = maxWidth - side * 2 >= RAIL_MIN
+        val content: @Composable ColumnScope.(SettingsCategory) -> Unit = { category ->
+            CategoryContent(category, settings, screen, systemBluetoothAddress, wireless)
+        }
         CompositionLocalProvider(LocalCompact provides compact) {
             Column(
                 Modifier
                     .fillMaxSize()
                     .padding(horizontal = side),
             ) {
-                SettingsTopBar(onBack)
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(top = if (compact) 8.dp else 16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Column(
+                SettingsTopBar(onBack, showHint = rail, Modifier.padding(top = if (compact) 10.dp else 18.dp))
+                if (rail) {
+                    var selected by rememberSaveable { mutableStateOf(SettingsCategory.PICTURE) }
+                    Row(
                         Modifier
-                            .widthIn(max = if (twoColumn) COLUMN_MAX * 2 + COLUMN_GAP else COLUMN_MAX)
+                            .weight(1f)
                             .fillMaxWidth()
-                            .padding(bottom = 16.dp),
+                            .padding(top = if (compact) 12.dp else 20.dp),
                     ) {
-                        if (twoColumn) {
-                            Row(Modifier.fillMaxWidth()) {
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(sectionGap)) {
-                                    SettingsLeftColumn(settings, screen)
-                                }
-                                Spacer(Modifier.width(COLUMN_GAP))
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(sectionGap)) {
-                                    SettingsRightColumn(settings, systemBluetoothAddress, wireless)
-                                }
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(sectionGap)) {
-                                SettingsLeftColumn(settings, screen)
-                                SettingsRightColumn(settings, systemBluetoothAddress, wireless)
+                        Column(
+                            Modifier
+                                .width(if (compact) 180.dp else 220.dp)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .selectableGroup(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            for (category in SettingsCategory.values()) {
+                                NavItem(category, category == selected) { selected = category }
                             }
                         }
-                        Text(
-                            stringResource(R.string.home_version, BuildConfig.VERSION_NAME) + "\n" +
-                                stringResource(R.string.home_tagline),
-                            style = UiType.footer(compact),
-                            color = Palette.Muted,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 12.dp),
-                        )
+                        Spacer(Modifier.width(if (compact) 16.dp else 24.dp))
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .padding(bottom = 16.dp),
+                        ) {
+                            CompositionLocalProvider(LocalGroupTitles provides false) { content(selected) }
+                            VersionFooter()
+                        }
+                    }
+                } else {
+                    Text(
+                        stringResource(R.string.settings_apply_hint),
+                        style = UiType.footer(compact),
+                        color = Palette.Muted,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 20.dp),
+                    ) {
+                        for (category in SettingsCategory.values()) content(category)
+                        VersionFooter()
                     }
                 }
             }
@@ -116,54 +141,122 @@ internal fun SettingsScreen(
     }
 }
 
-/** 左列：画面、方向盘按键。 */
-@Composable
-private fun SettingsLeftColumn(settings: AppSettings, screen: ScreenSpec) {
-    PictureSettingsSection(settings, screen)
-    MediaKeySettingsSection()
+/** 设置的分类：左边目录的一项，对应一个分组。 */
+private enum class SettingsCategory(val label: Int) {
+    PICTURE(R.string.settings_group_picture),
+    CONNECTION(R.string.settings_group_connection),
+    STARTUP(R.string.settings_boot_title),
+    AUDIO(R.string.settings_audio),
+    KEYS(R.string.settings_media_keys),
+    DIAGNOSTICS(R.string.settings_group_diagnostics),
 }
 
-/** 右列：连接方式、启动、声音、诊断。 */
+private fun SettingsCategory.glyph(): ImageVector = when (this) {
+    SettingsCategory.PICTURE -> Glyphs.Monitor
+    SettingsCategory.CONNECTION -> Glyphs.Wifi
+    SettingsCategory.STARTUP -> Glyphs.Power
+    SettingsCategory.AUDIO -> Glyphs.Speaker
+    SettingsCategory.KEYS -> Glyphs.Wheel
+    SettingsCategory.DIAGNOSTICS -> Glyphs.Document
+}
+
+/** 一类设置的内容。 */
 @Composable
-private fun SettingsRightColumn(
+private fun CategoryContent(
+    category: SettingsCategory,
     settings: AppSettings,
+    screen: ScreenSpec,
     systemBluetoothAddress: String?,
     wireless: WirelessSettingsState,
 ) {
-    SettingsGroup(stringResource(R.string.settings_group_connection)) {
-        WiredOnlySetting(wireless)
-        WirelessModeSetting(wireless)
-        if (!wireless.wifiDirect) Hotspot5gSetting(wireless)
-        BluetoothAddressSection(settings, systemBluetoothAddress)
-        LePairingSetting()
-        UsbAutoConnectSettingsSection()
-        RestoreWifiSetting()
+    when (category) {
+        SettingsCategory.PICTURE -> PictureSettingsSection(settings, screen)
+        SettingsCategory.CONNECTION -> SettingsGroup(stringResource(R.string.settings_group_connection)) {
+            WiredOnlySetting(wireless)
+            WirelessModeSetting(wireless)
+            if (!wireless.wifiDirect) Hotspot5gSetting(wireless)
+            BluetoothAddressSection(settings, systemBluetoothAddress)
+            LePairingSetting()
+            UsbAutoConnectSettingsSection()
+            RestoreWifiSetting()
+        }
+        SettingsCategory.STARTUP ->
+            BootStartSettingsSection(autoConnect = wireless.connectOnBluetooth && !wireless.wiredOnly) {
+                ConnectOnBluetoothSetting(wireless)
+            }
+        SettingsCategory.AUDIO -> AudioSettingsSection()
+        SettingsCategory.KEYS -> MediaKeySettingsSection()
+        SettingsCategory.DIAGNOSTICS -> DiagnosticsSettingsSection()
     }
-    BootStartSettingsSection(autoConnect = wireless.connectOnBluetooth && !wireless.wiredOnly) { ConnectOnBluetoothSetting(wireless) }
-    AudioSettingsSection()
-    DiagnosticsSettingsSection()
 }
 
-/** 顶栏：「设置」、一句生效说明、右上「返回」。 */
+/** 左边目录的一项：图标和名称，选中的那项底色高亮。 */
 @Composable
-private fun SettingsTopBar(onBack: () -> Unit) {
+private fun NavItem(category: SettingsCategory, selected: Boolean, onClick: () -> Unit) {
+    val compact = LocalCompact.current
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp, end = 16.dp),
+            .heightIn(min = if (compact) 46.dp else 54.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) Palette.NavSelected else Color.Transparent)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PageTitle(stringResource(R.string.settings_title))
-        Text(
-            stringResource(R.string.settings_apply_hint),
-            style = UiType.cardHeader(LocalCompact.current),
-            color = Palette.Muted,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 16.dp),
+        Icon(
+            category.glyph(),
+            contentDescription = null,
+            tint = if (selected) Palette.Accent else Palette.Muted,
+            modifier = Modifier.size(22.dp),
         )
-        TopBarButton(stringResource(R.string.action_back), onBack)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            stringResource(category.label),
+            style = UiType.nav(compact).copy(fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal),
+            color = if (selected) Palette.NavSelectedText else Palette.Text2,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
+}
+
+/** 顶栏：左边「返回」和「设置」，正中深浅色切换，右边一句生效说明（窄屏放到顶栏下面）。 */
+@Composable
+private fun SettingsTopBar(onBack: () -> Unit, showHint: Boolean, modifier: Modifier = Modifier) {
+    TopBar(
+        start = {
+            TopBarButton(stringResource(R.string.action_back), onBack, glyph = Glyphs.Back)
+            Spacer(Modifier.width(16.dp))
+            PageTitle(stringResource(R.string.settings_title))
+        },
+        end = {
+            if (showHint) {
+                Text(
+                    stringResource(R.string.settings_apply_hint),
+                    style = UiType.footer(LocalCompact.current),
+                    color = Palette.Muted,
+                    textAlign = TextAlign.End,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 240.dp),
+                )
+            }
+        },
+        modifier = modifier,
+    )
+}
+
+/** 最下面的版本行。 */
+@Composable
+private fun VersionFooter() {
+    Text(
+        stringResource(R.string.home_version, BuildConfig.VERSION_NAME) + "\n" + stringResource(R.string.home_tagline),
+        style = UiType.footer(LocalCompact.current),
+        color = Palette.Muted,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 20.dp),
+    )
 }

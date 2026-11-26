@@ -166,9 +166,24 @@ class ReconnectPolicyTest {
         assertFalse(ReconnectPolicy.blocksWired(waiting))
         val connected = WirelessReducer.reduce(waiting, WirelessSignal.Wireless(WirelessEvent.PhoneBluetoothConnected("02:00:00:00:00:01")))
         assertTrue(ReconnectPolicy.blocksWired(connected))
-        // 车机主动回连（不是在等手机）：在拨就挡。
+        // 车机主动回连（不是在等手机）：在拨就挡（点开始、开机等插线不能打断它）。
         assertTrue(ReconnectPolicy.blocksWired(run(WirelessSignal.AttemptStarted(2))))
         // 用户点开始的扫码连接照旧挡。
         assertTrue(ReconnectPolicy.blocksWired(run(WirelessSignal.AttemptStarted(3), WirelessSignal.Wireless(WirelessEvent.PairingReady(qr, "135790")))))
+    }
+
+    @Test
+    fun aPluggedPhoneIsIgnoredOnlyOnceAPhoneIsOnWireless() {
+        val qr = "x"
+        fun run(vararg signals: WirelessSignal) = signals.fold(WirelessUiState()) { s, sig -> WirelessReducer.reduce(s, sig) }
+
+        assertFalse(ReconnectPolicy.phoneOnWireless(WirelessUiState()))
+        // 扫码等待、车机在拨：手机还没连上，插线优先。
+        val scanning = run(WirelessSignal.AttemptStarted(3), WirelessSignal.Wireless(WirelessEvent.PairingReady(qr, "135790")))
+        assertFalse(ReconnectPolicy.phoneOnWireless(scanning))
+        assertFalse(ReconnectPolicy.phoneOnWireless(run(WirelessSignal.AttemptStarted(2))))
+        // 手机经蓝牙连上以后：插线不管（多半是在充电）。
+        val scanned = WirelessReducer.reduce(scanning, WirelessSignal.Wireless(WirelessEvent.PhoneBluetoothConnected("02:00:00:00:00:02")))
+        assertTrue(ReconnectPolicy.phoneOnWireless(scanned))
     }
 }

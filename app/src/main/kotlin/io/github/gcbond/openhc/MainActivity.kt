@@ -2,8 +2,12 @@ package io.github.gcbond.openhc
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -34,8 +38,12 @@ import io.github.gcbond.openhc.connection.Notice
 import io.github.gcbond.openhc.connection.Phase
 import io.github.gcbond.openhc.platform.log.Log
 import io.github.gcbond.openhc.platform.net.VpnConsent
+import io.github.gcbond.openhc.platform.usb.PhoneUsbMode
+import io.github.gcbond.openhc.platform.usb.UsbDescriber
 import io.github.gcbond.openhc.settings.AppSettings
 import io.github.gcbond.openhc.settings.AudioPreferences
+import io.github.gcbond.openhc.settings.PendingSetting
+import io.github.gcbond.openhc.settings.ReconnectReminder
 import io.github.gcbond.openhc.startup.BootStart
 import io.github.gcbond.openhc.startup.BootStartPolicy
 import io.github.gcbond.openhc.ui.HomeActions
@@ -43,8 +51,10 @@ import io.github.gcbond.openhc.ui.HomeScreen
 import io.github.gcbond.openhc.ui.OpenHcTheme
 import io.github.gcbond.openhc.ui.Palette
 import io.github.gcbond.openhc.ui.ProjectionScreen
+import io.github.gcbond.openhc.ui.ReconnectReminderDialog
 import io.github.gcbond.openhc.ui.SettingsScreen
 import io.github.gcbond.openhc.ui.WirelessActions
+import io.github.gcbond.openhc.ui.pendingSettingsSnapshot
 import io.github.gcbond.openhc.wireless.WirelessController
 import io.github.gcbond.openhc.wireless.WirelessPhase
 import io.github.gcbond.openhc.wireless.WirelessStartFlow
@@ -64,13 +74,19 @@ import io.github.gcbond.openhc.wireless.WirelessStartFlow
  * 开始之前要的授权按顺序拿：通知权限（安卓 13 起，只问一次，拒绝了也照常连接）→ 录音权限（开着车机麦克风时，
  * 只自动问一次，拒绝了照常连接、不声明麦克风）→ VPN 授权（有线连接必需）。
  *
- * 首页左栏是无线连接、右栏是有线连接（[HomeScreen]）；无线开始前的运行时权限由 [WirelessStartFlow] 申请。
- * 两种连接同时只能有一种：无线在进行时不开始有线（包括插线拉起）；只是在等已配对的手机回连、手机还没连上时，
- * 有线优先，无线让出。界面回到前台时看看要不要进入等回连（[WirelessController.onAppForeground]）。
+ * 首页只有一张「连接手机」卡片（[HomeScreen]）：点「开始连接」走无线扫码，插线走有线；无线开始前的运行时权限由
+ * [WirelessStartFlow] 申请。两种连接同时只能有一种。插线优先：真插上了华为 / 荣耀手机（界面开着时的设备接入、或回到前台时
+ * 手机插着，都要闸门开着——手机切换模式的重新枚举不算）就开始有线，无线还在等手机（扫码、等回连、车机在拨）时让出；
+ * 手机已经连上无线时不管插线（多半是在充电）。用户在手机插着时点了「停止」，这次插入不再自动开始。
+ * 界面回到前台时还看看要不要自动连接无线（[WirelessController.onAppForeground]）。
  */
 class MainActivity : ComponentActivity() {
 
-    private enum class StartKind { START, USB_ATTACHED, BOOT }
+    /**
+     * 开始有线的来由。START：点了按钮；BOOT：开机等插线；USB_ATTACHED：系统按「设备接入」拉起（闸门关着的重新枚举也会来）；
+     * PLUGGED：确认真插上了手机（界面开着时的设备接入、或回到前台时手机插着），插线优先。
+     */
+    private enum class StartKind { START, USB_ATTACHED, BOOT, PLUGGED }
 
     private lateinit var settings: AppSettings
     private var pendingStart: StartKind? = null
@@ -160,6 +176,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = AppSettings(this)
+        Palette.dark = settings.darkTheme
         // 投屏结束回车机：参照官方 CarLink 的 backToHome——不拉起某个具体桌面，只把自己退到后台，
         // 露出底下原来的任务（从哪个桌面进来的就回哪个）。监听在 onCreate 注册，随界面生死，投屏时界面在前台。
         wireless.addHostListener(onControllerChanged)
@@ -171,6 +188,7 @@ class MainActivity : ComponentActivity() {
             onRetryNow = { controller.retryNow() },
             onGrantVpn = { requestStart(StartKind.START) },
             onResetTrustStore = { controller.resetTrustStoreAndStart() },
+            phonePlugged = { controller.phonePlugged() },
         )
         setContent {
             OpenHcTheme {
@@ -184,13 +202,41 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        ContextCompat.registerReceiver(this, usbAttached, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // 回到前台时手机插着：当作刚插上。还没同意过 VPN 授权时不自动弹授权框（拒绝后回到前台会一直弹），等用户点首页的按钮。
+        controller.startIfPlugged { if (VpnConsent.isGranted(this)) requestStart(StartKind.PLUGGED) }
         wireless.onAppForeground()
+    }
+
+    override fun onStop() {
+        unregisterReceiver(usbAttached)
+        super.onStop()
     }
 
     override fun onDestroy() {
         wireless.removeHostListener(onControllerChanged)
         controller.removeHostListener(wiredListener)
         super.onDestroy()
+    }
+
+    /**
+     * 界面开着时插上华为 / 荣耀手机：确认是真插线（不是手机切换模式的重新枚举）就开始有线（「插线时不再弹窗」关着时
+     * 系统不拉起本应用，靠这里）。
+     */
+    private val usbAttached = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            @Suppress("DEPRECATION")
+            val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
+            if (UsbDescriber.phoneMode(device) == PhoneUsbMode.NOT_A_PHONE) return
+            controller.checkPlug { real ->
+                if (real) {
+                    Log.i(TAG, "界面开着时插上了手机（${UsbDescriber.summary(device)}）")
+                    requestStart(StartKind.PLUGGED)
+                } else {
+                    Log.i(TAG, "设备接入（${UsbDescriber.summary(device)}）：在连接中或手机没拔够时间，多半是切换模式，不算插线")
+                }
+            }
+        }
     }
 
     /**
@@ -235,12 +281,19 @@ class MainActivity : ComponentActivity() {
         // 被「设备接入」拉起，说明用户在系统框里同意过用本应用打开手机：之后有线会话先等系统自动授权。
         settings.usbAttachAccepted = true
         Log.i(TAG, "插线拉起")
-        requestStart(StartKind.USB_ATTACHED)
+        // 真插线（闸门开着）按插线优先办；重新枚举照旧交给调度忽略。
+        controller.checkPlug { real -> requestStart(if (real) StartKind.PLUGGED else StartKind.USB_ATTACHED) }
     }
 
     private fun requestStart(kind: StartKind) {
-        if (wireless.blocksWired) {
-            // 两种连接同时只能有一种：插线拉起时只记一笔，用户点开始时给出原因。
+        if (kind == StartKind.PLUGGED) {
+            // 插线优先，但手机已经连着无线（正在连、投屏中）时不管插线：多半是在充电。
+            if (wireless.phoneOnWireless) {
+                Log.i(TAG, "手机已经连着无线，插线不开始有线")
+                return
+            }
+        } else if (wireless.blocksWired) {
+            // 两种连接同时只能有一种：用户点开始时给出原因。
             Log.i(TAG, "无线连接正在进行，不开始有线连接（$kind）")
             if (kind == StartKind.START) controller.reportBlocked(Notice.StartFailed(getString(R.string.wireless_notice_wireless_active)))
             return
@@ -289,11 +342,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun dispatch(kind: StartKind) {
-        // 无线在被动等已配对的手机回连（已不再自动进入）的话先让出。
-        wireless.yieldToWired()
+        // 无线还在等手机的话先让出：真插线时扫码等待、车机在拨也让；点开始、开机等插线时只让自动进入的等回连。
+        wireless.yieldToWired(plugged = kind == StartKind.PLUGGED)
         when (kind) {
             StartKind.START, StartKind.BOOT -> controller.start()
-            StartKind.USB_ATTACHED -> controller.onUsbAttached()
+            StartKind.USB_ATTACHED, StartKind.PLUGGED -> controller.onUsbAttached()
         }
     }
 
@@ -326,6 +379,15 @@ private fun AppRoot(
     // 已经自动切到投屏页的那次连接：用户按返回回到首页后，同一次连接不再强拉回去。
     var autoShownAttempt by remember { mutableIntStateOf(0) }
     var autoShownWireless by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    // 进设置页时「下次连接才生效」各项的值；回首页时对比，正在进行的连接用不上的改动弹框提醒。
+    var settingsOnEntry by remember { mutableStateOf<Map<PendingSetting, String>?>(null) }
+    var reconnectReminder by remember { mutableStateOf<List<PendingSetting>>(emptyList()) }
+    var reminderWhileProjecting by remember { mutableStateOf(false) }
+    val openSettings = {
+        settingsOnEntry = pendingSettingsSnapshot(context, settings)
+        screen = Screen.SETTINGS
+    }
 
     LaunchedEffect(state.phase, state.attempt, wState.phase, wState.attempt) {
         when {
@@ -346,8 +408,19 @@ private fun AppRoot(
             state.phase == Phase.PAIRING && screen == Screen.SETTINGS -> screen = Screen.HOME
         }
     }
-    // 设置可能改了：还没连上手机的等待按新设置重开。
+    // 设置可能改了：空闲时照回到前台一样看要不要自动连接；正在进行的连接（含还在等手机的）不重开，改动要重新连接才生效，提醒一下。
     val closeSettings = {
+        val before = settingsOnEntry
+        settingsOnEntry = null
+        if (before != null) {
+            reconnectReminder = ReconnectReminder.changed(
+                before,
+                pendingSettingsSnapshot(context, settings),
+                wiredActive = ReconnectReminder.wiredUsesOldSettings(state.phase),
+                wirelessActive = ReconnectReminder.wirelessUsesOldSettings(wState.phase),
+            )
+            reminderWhileProjecting = state.phase == Phase.PROJECTING || wirelessProjecting
+        }
         wireless.onSettingsClosed()
         screen = Screen.HOME
     }
@@ -371,7 +444,7 @@ private fun AppRoot(
                         screen = Screen.PROJECTION
                     }
                 },
-                onOpenSettings = { screen = Screen.SETTINGS },
+                onOpenSettings = openSettings,
                 onOpenAppSettings = wirelessStart::openAppSettings,
                 onEnableBluetooth = wirelessStart::requestEnableBluetooth,
                 onResetTrustStore = wireless::resetTrustStoreAndStart,
@@ -382,10 +455,9 @@ private fun AppRoot(
                     screen = Screen.PROJECTION
                 }
             },
-            onOpenSettings = { screen = Screen.SETTINGS },
+            onOpenSettings = openSettings,
         )
         Screen.SETTINGS -> {
-            val context = LocalContext.current
             val screenSpec = remember { io.github.gcbond.openhc.connection.DisplayArea.screenFor(context, settings.fullScreen) }
             val systemBluetooth = remember { DeviceInfo.systemBluetoothAddress() }
             SettingsScreen(settings, screenSpec, systemBluetooth, onBack = closeSettings)
@@ -395,5 +467,8 @@ private fun AppRoot(
         } else {
             ProjectionScreen(state, decoder, touchResets, onInput = controller::sendInput)
         }
+    }
+    if (reconnectReminder.isNotEmpty() && screen == Screen.HOME) {
+        ReconnectReminderDialog(reconnectReminder, reminderWhileProjecting) { reconnectReminder = emptyList() }
     }
 }

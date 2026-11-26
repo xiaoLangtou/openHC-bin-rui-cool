@@ -24,14 +24,19 @@ data class BluetoothChoice(val address: String?, val source: BluetoothSource)
  * 车机蓝牙地址怎么定。纯逻辑。
  *
  * 安卓 6.0 起普通应用读不到本机蓝牙地址（系统只给 `02:00:00:00:00:00`）。有的车机系统把它放在一个普通应用可读的
- * 系统属性里（部分车机把它写在 `persist.sys.bt_addr`）。用户在设置里手填了有效地址时优先用手填的
+ * 系统属性里（[SYSTEM_PROPERTY_KEYS]：部分车机写在 `persist.sys.bt_addr`，德赛西威一类车机写在
+ * `persist.vehicle.bt.mac_addr`），按顺序取第一个有效的。用户在设置里手填了有效地址时优先用手填的
  * （车主可以借此覆盖系统的值，例如让本应用和车机上另一个投屏应用用不同的身份）；没填就用系统属性；都没有按取不到处理。
  *
  * 地址参与 carInfo、控制通道握手、认证身份和设备信息里的本机标识：**地址变了，手机会把车机当成另一台车**，
  * 之前的配对记录对不上，要重新输入连接码。
  */
 object BluetoothAddressPolicy {
-    const val SYSTEM_PROPERTY_KEY = "persist.sys.bt_addr"
+    /** 存车机蓝牙地址的系统属性，按顺序读，取第一个有效的。 */
+    val SYSTEM_PROPERTY_KEYS = listOf("persist.sys.bt_addr", "persist.vehicle.bt.mac_addr")
+
+    /** 几个系统属性读到的值（按 [SYSTEM_PROPERTY_KEYS] 的顺序）里第一个有效的地址；都无效返回 null。 */
+    fun firstValid(values: List<String?>): String? = values.firstNotNullOfOrNull { normalize(it) }
 
     /** 全 0、全 F：属性没初始化或读错了。 */
     private val INVALID = setOf("00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF", BluetoothAddress.UNAVAILABLE)

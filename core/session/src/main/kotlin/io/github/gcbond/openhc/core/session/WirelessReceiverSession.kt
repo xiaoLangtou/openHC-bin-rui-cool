@@ -126,6 +126,9 @@ class WirelessReceiverSession internal constructor(
     /** 主动回连：手机暂时拒绝过、正在等手机上的确认。 */
     private var awaitingPhone = false
 
+    /** 主动回连：最近一次请手机开认证子通道的时间。 */
+    private var authRequestedAt = 0L
+
     /** 等认证子通道监听开好的请求。 */
     private val pendingAuthRequests = ArrayList<BluetoothOutput.SocketRequest>()
 
@@ -600,6 +603,7 @@ class WirelessReceiverSession internal constructor(
         val target = checkNotNull(reconnect)
         val layer = checkNotNull(nearby)
         reconnectDeadline = nowMillis + config.timeouts.reconnectAnswerMillis
+        authRequestedAt = nowMillis
         handleBluetooth(call(WirelessStep.BLUETOOTH) { layer.requestAuthChannel(target.tag) }, nowMillis, out)
     }
 
@@ -628,10 +632,18 @@ class WirelessReceiverSession internal constructor(
      * 用户点了取消才关；原厂车机拨通后也是留着连接等 120 秒。所以这里不结束：控制通道留着等手机上的确认，
      * 手机自己再来请求开认证子通道时照常接受（[onSocketRequest]），手机关掉连接或到时没等到就结束。
      * 用户在手机上点了连接之后手机具体怎么走（自己发请求，还是等车机再请求），待实车验证。
+     *
+     * 例外：手机在 [QUICK_DECLINE_MILLIS] 内就拒绝了，说明手机没弹框、直接不认这辆车（实车 2026-11：手机上删了这辆车后，
+     * 约 0.2 秒就回拒绝，什么都不弹）。等确认等不来，马上以 [WirelessEndReason.ReconnectFailed]（needsPairing）结束：
+     * [startWithDial] 开始的由调用方重新出二维码，单纯的主动回连由调用方提示重新配对。
      */
     private fun onReconnectDeclined(status: Int, nowMillis: Long, out: Out) {
         if (reconnect == null || authConn != null) {
             diag(SessionLayer.SESSION, "认证子通道已经有了，不理手机的拒绝（状态 $status）", out)
+            return
+        }
+        if (nowMillis - authRequestedAt < QUICK_DECLINE_MILLIS) {
+            finish(WirelessEndReason.ReconnectFailed("手机当场拒绝了（状态 $status，多半是手机上删了这辆车）", needsPairing = true), nowMillis, out)
             return
         }
         awaitingPhone = true
@@ -923,7 +935,13 @@ class WirelessReceiverSession internal constructor(
     override fun toString() =
         "WirelessReceiverSession(已结束=$ended, 认证=$authSucceeded, 频率=$negotiatedFrequency, WiFi 已接上=$phoneOnWifi)"
 
-    private companion object {
+    internal companion object {
+        /**
+         * 手机在这么短的时间里就拒绝开认证子通道，算「当场拒绝」（没弹框）。手机开着热点、弹框问用户时约 10 秒后才回拒绝；
+         * 不认这辆车时不到 1 秒（实车 2026-11）。
+         */
+        const val QUICK_DECLINE_MILLIS = 3_000L
+
         fun describe(e: Throwable): String = e.javaClass.simpleName + (e.message?.let { "：$it" } ?: "")
     }
 }

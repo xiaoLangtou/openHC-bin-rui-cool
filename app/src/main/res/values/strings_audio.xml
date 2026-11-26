@@ -3,15 +3,15 @@
     <!-- 设置页：声音（实验） -->
     <string name="settings_audio">声音（实验）</string>
     <string name="settings_audio_enabled">把手机的声音放到车机上</string>
-    <string name="settings_audio_hint">打开后手机会把音乐、导航播报等声音交给车机，导航播报和音乐分开放（各走哪个声道见下面）；车机别的应用要出声时，手机这边会暂停或压低。这一版还在实验：车机放不出来时手机那边也不会响，关掉就回到手机自己出声。改动在下次连接时生效。</string>
+    <string name="settings_audio_hint">手机的音乐、导航播报用车机放，导航和音乐分开走两个声道；车机别的应用出声时，手机这边会暂停或压低。试验功能：车机放不出声时手机也不响，关掉就回到手机自己出声。下次连接生效。</string>
     <string name="settings_audio_delay">声音延后</string>
     <string name="settings_audio_delay_min">最低</string>
     <string name="settings_audio_delay_plus">+%1$d ms</string>
-    <string name="settings_audio_delay_hint">默认按最低缓冲放。声音比画面早时往上调：每档在最低缓冲之上多攒这么多，声音整体往后挪。下次连接生效。</string>
+    <string name="settings_audio_delay_hint">声音比画面早（口型对不上）时往上调，声音整体往后挪。下次连接生效。</string>
     <string name="settings_audio_navigation_stream">导航声道</string>
-    <string name="settings_audio_navigation_stream_hint">默认「自动」。导航和音乐音量连在一起时，选车机的导航声道号（编号同 DiPlay），点「试听」确认。</string>
+    <string name="settings_audio_navigation_stream_hint">一般留「自动」。导航和音乐的音量连在一起时，换一个号试试，点「试听」确认。</string>
     <string name="settings_audio_media_stream">音乐声道</string>
-    <string name="settings_audio_media_stream_hint">一般留「自动」；指定声道号后音乐不走低延迟输出。</string>
+    <string name="settings_audio_media_stream_hint">一般留「自动」。指定了号，音乐的延迟会大一点。</string>
     <string name="settings_audio_stream_auto">自动</string>
     <string name="settings_audio_preview">试听</string>
     <string name="settings_audio_preview_playing">试听中</string>
@@ -26,7 +26,7 @@
     <string name="settings_audio_codec_aac">AAC（压缩：所有手机都用 AAC）</string>
     <string name="settings_audio_fallback_title">已自动改用 AAC 的手机</string>
     <string name="settings_audio_fallback_none">没有</string>
-    <string name="settings_audio_fallback_help">手机在 PCM 下不出声（想放声音却一直没开声音通道，或者发来的声音不对）时会记在这里，下次连接对它改用 AAC。之前在 PCM 下正常出过声的手机，要连续两次不出声才会记进来。点「恢复 PCM」后下次连接再试 PCM。</string>
+    <string name="settings_audio_fallback_help">有的手机用 PCM 格式时车机放不出声，会记在这里，下次连接对它改用 AAC。点「恢复 PCM」后，下次连接再试 PCM。</string>
     <string name="settings_audio_fallback_item">%1$s（编号 %2$s）：%3$s，%4$s 记下</string>
     <string name="settings_audio_fallback_unnamed">没报名字的手机</string>
     <string name="settings_audio_fallback_reset">恢复 PCM</string>

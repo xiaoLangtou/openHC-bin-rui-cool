@@ -31,7 +31,11 @@ internal fun DiagnosticsSettingsSection() {
     var note by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     SettingsGroup(stringResource(R.string.settings_group_diagnostics)) {
         GroupRow(spacing = 8.dp) {
-            RowHeader(stringResource(R.string.settings_diag_export), stringResource(R.string.settings_diag_export_hint))
+            RowHeader(
+                stringResource(R.string.settings_diag_export),
+                stringResource(R.string.settings_diag_export_hint),
+                summary = stringResource(R.string.settings_diag_export_summary),
+            )
             ActionButton(
                 text = stringResource(if (busy) R.string.settings_diag_exporting else R.string.settings_diag_export_button),
                 enabled = !busy,

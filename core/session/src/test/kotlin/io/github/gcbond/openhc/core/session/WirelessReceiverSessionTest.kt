@@ -809,7 +809,8 @@ class WirelessReceiverSessionTest {
         d.startReconnect()
         d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
         d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
-        // 手机暂时拒绝（例如在问用户要不要关热点）：不结束，控制通道留着。
+        // 手机暂时拒绝（例如在问用户要不要关热点，过一阵才回拒绝）：不结束，控制通道留着。
+        d.now += WirelessReceiverSession.QUICK_DECLINE_MILLIS
         assertEquals(listOf("event ReconnectAwaitingPhone(状态=1)"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no"))
         assertTrue(d.tick(d.now + d.config.timeouts.reconnectConfirmMillis - 1).isEmpty())
         // 手机自己来请求开认证子通道：照手机连上来时的做法开监听、回通道号。
@@ -833,6 +834,7 @@ class WirelessReceiverSessionTest {
         d.startReconnect()
         d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
         d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.now += WirelessReceiverSession.QUICK_DECLINE_MILLIS
         d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
         d.tick(d.now + d.config.timeouts.reconnectConfirmMillis)
         val reason = assertIs<WirelessEndReason.ReconnectFailed>(d.ended())
@@ -847,6 +849,7 @@ class WirelessReceiverSessionTest {
         d.startReconnect()
         d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
         d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        d.now += WirelessReceiverSession.QUICK_DECLINE_MILLIS
         d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
         d.btClosed(WirelessChannel.BLUETOOTH_CONTROL)
         assertEquals("手机上没确认（关了连接）", assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).detail)
@@ -967,6 +970,46 @@ class WirelessReceiverSessionTest {
         assertEquals(listOf("rfcomm-connect BLUETOOTH_AUTH $subchannelUuid 通道 8"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-ok"))
         // 监听已经关了：这时才到的「接受」不算数。
         assertTrue(d.record(d.session.onAccepted(d.acceptedControlId(), WirelessSynthetic.PHONE_BLUETOOTH, d.now)).isEmpty())
+        assertTrue(d.outputs.none { it is WirelessEvent.Ended })
+    }
+
+    @Test
+    fun reconnectDeclinedAtOnceEndsAsNeedsPairing() {
+        val d = Driver()
+        d.startReconnect()
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        // 手机删了这辆车：当场拒绝、什么都不弹。不留着控制通道干等。
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
+        assertTrue(assertIs<WirelessEndReason.ReconnectFailed>(d.ended()).needsPairing)
+        assertTrue(d.outputs.none { it is WirelessEvent.ReconnectAwaitingPhone })
+    }
+
+    @Test
+    fun dialDeclinedAtOnceEndsSoTheCodeCanBeScannedAgain() {
+        val d = Driver()
+        d.startWithDial()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        // 手机不认这辆车：马上拒绝、什么都不弹。不等确认，结束后由调用方重新出二维码。
+        d.now += WirelessReceiverSession.QUICK_DECLINE_MILLIS - 1
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no")
+        val reason = assertIs<WirelessEndReason.ReconnectFailed>(d.ended())
+        assertTrue(reason.needsPairing)
+        assertTrue(d.outputs.none { it is WirelessEvent.ReconnectAwaitingPhone })
+    }
+
+    @Test
+    fun dialDeclinedLaterStillWaitsForTheConfirmOnThePhone() {
+        val d = Driver()
+        d.startWithDial()
+        d.btListening(WirelessChannel.BLUETOOTH_CONTROL, 0)
+        d.btConnected(WirelessChannel.BLUETOOTH_CONTROL)
+        d.btData(WirelessChannel.BLUETOOTH_CONTROL, "hs")
+        // 手机弹框问用户（例如要不要关热点）时过一阵才回拒绝：照旧留着控制通道等确认。
+        d.now += WirelessReceiverSession.QUICK_DECLINE_MILLIS
+        assertEquals(listOf("event ReconnectAwaitingPhone(状态=1)"), d.btData(WirelessChannel.BLUETOOTH_CONTROL, "cmd4-no"))
         assertTrue(d.outputs.none { it is WirelessEvent.Ended })
     }
 
