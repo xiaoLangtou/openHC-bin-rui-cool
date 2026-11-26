@@ -24,6 +24,22 @@ class PcmFallbackBookTest {
     }
 
     @Test
+    fun noAnswerVerdictFallsBackAfterOneFailure() {
+        // 手机自己在 ParaAudio 里要 AAC（华为 HiCar 15.2 有线实测）、不应答 PCM 的 SETUP 就拆会话：
+        // 它根本不要 PCM，跟「没开数据会话」一样一次就退回。
+        val book = PcmFallbackBook()
+        val record = book.record(phoneA, "华为手机", PcmVerdict.NO_ANSWER, 1_000)
+        assertTrue(record.useAac)
+        assertEquals(1, record.failures)
+        assertEquals(PcmVerdict.NO_ANSWER.label, record.lastFailure)
+        assertEquals(setOf(phoneA), book.aacPhones())
+        // 出过声的手机照旧要连续两次（退回过的不自动撤销，见 aPhoneThatWorkedNeedsTwoFailuresInARow）。
+        book.record(phoneB, null, PcmVerdict.WORKS, 2_000)
+        assertFalse(book.record(phoneB, null, PcmVerdict.NO_ANSWER, 3_000).useAac)
+        assertTrue(book.record(phoneB, null, PcmVerdict.NO_ANSWER, 4_000).useAac)
+    }
+
+    @Test
     fun unplayableNeedsTwoInARowEvenForANewPhone() {
         val book = PcmFallbackBook()
         assertFalse(book.record(phoneA, null, PcmVerdict.UNPLAYABLE, 1_000).useAac, "靠我们自己判断的结论，一次不算")

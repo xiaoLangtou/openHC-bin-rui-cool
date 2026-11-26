@@ -391,7 +391,7 @@ internal class SpeakerSession(
             return
         }
         reply(sessionId, cseq)
-        val codec = plan().codec
+        val plan = plan()
         check?.onTrigger()
         val active = current
         if (active != null && active.info.dataSessionId == sessionId) {
@@ -400,7 +400,14 @@ internal class SpeakerSession(
             return
         }
         if (active != null) end(active, AudioEndReason.REPLACED, nowMillis)
-        val stream = Stream(streamInfo(sessionId, message.header(PARA_AUDIO) ?: "", transport(), codec))
+        val paraAudio = message.header(PARA_AUDIO) ?: ""
+        // 手机在 ParaAudio 里明确要 AAC（Codec=1）而声明是 PCM：顺着手机给 AAC。实测华为（HiCar 15.2）有线时
+        // 不应答 PCM 的 SETUP，会话反复拆掉重试直到把整条投屏拆掉；它自己要的编码没有理由不给。
+        // 只从 PCM 往 AAC 让步，不反向：退回 AAC 的手机是按实测记的（PcmFallbackBook），不因请求字段改回 PCM。
+        val requested = streamInfo(sessionId, paraAudio, transport(), plan.codec).requestedCodec
+        val codec = if (plan.codec == AudioCodec.PCM && requested == REQUESTED_AAC) AudioCodec.AAC else plan.codec
+        val stream = Stream(streamInfo(sessionId, paraAudio, transport(), codec))
+        if (codec != plan.codec) note(stream.info, "手机的 ParaAudio 要 AAC（声明的 PCM 它不应答），这次数据会话顺着手机给 AAC")
         current = stream
         emit(AudioEvent.Requested(stream.info))
         out?.add(DmsdpAction.OpenAudioListeners(stream.info.transport))
@@ -519,6 +526,13 @@ internal class SpeakerSession(
                 udpFallback = true
                 emit(AudioEvent.TransportFallback(peer, AudioEvent.TransportFallback.ACCEPTED_NO_CONNECT))
             }
+        }
+        // 声明是 PCM、手机明确要 AAC（ParaAudio Codec=1）、SETUP 没应答就被拆：这台手机在 PCM 下出不了声
+        // （它自己都不要 PCM），记进退回名单，下次连接从头声明 AAC，不再浪费第一轮数据会话。
+        if (reason == AudioEndReason.PEER_TEARDOWN && stream.port != 0 && stream.answer == null &&
+            plan?.codec == AudioCodec.PCM && stream.info.requestedCodec == REQUESTED_AAC
+        ) {
+            verdict(PcmVerdict.NO_ANSWER)
         }
         stream.data?.finish()
         if (current === stream) current = null
@@ -732,5 +746,8 @@ internal class SpeakerSession(
         private const val DEFAULT_CHANNELS = 2
         private const val DEFAULT_BITS = 16
         private const val MAX_PARAMETER_CHARS = 200
+
+        /** ParaAudio 的 Codec 里代表 AAC 的值（0 是 PCM）。 */
+        private const val REQUESTED_AAC = 1
     }
 }

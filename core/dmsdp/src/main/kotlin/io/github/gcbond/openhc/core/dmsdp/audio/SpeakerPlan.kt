@@ -66,6 +66,12 @@ enum class PcmVerdict(val label: String, val failure: Boolean) {
 
     /** 手机发来的 PCM 载荷不像声音（多半两边对编码的理解不一致），被静音不放。 */
     UNPLAYABLE("手机发来的 PCM 不像声音", true),
+
+    /**
+     * 手机在 ParaAudio 里明确要 AAC（Codec=1），却不应答 PCM 的 SETUP、把会话拆掉
+     * （华为 HiCar 15.2 有线实测）。手机自己都不要 PCM，一次就记退回。
+     */
+    NO_ANSWER("手机不应答 PCM 的 SETUP（它要的是 AAC）", true),
 }
 
 /**

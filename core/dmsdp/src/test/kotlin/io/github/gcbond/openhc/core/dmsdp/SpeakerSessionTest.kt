@@ -83,12 +83,20 @@ class SpeakerSessionTest {
         phoneVersion: String? = null,
     ): DmsdpSession = encryptedSession(config = Synthetic.config(speaker = speaker, phoneVersion = phoneVersion), audio = audio).first
 
-    /** 手机的数据会话触发：头部名是小写，正文是触发字段。 */
-    private fun trigger(method: String, sessionId: String = "77", cseq: String = "5", simple: String = "1", extraHeaders: String = ""): ByteArray {
+    /** 手机的数据会话触发：头部名是小写，正文是触发字段。[codec] 是 ParaAudio 里的 Codec（0 PCM、1 AAC）。 */
+    private fun trigger(
+        method: String,
+        sessionId: String = "77",
+        cseq: String = "5",
+        simple: String = "1",
+        codec: Int = 0,
+        extraHeaders: String = "",
+    ): ByteArray {
         val body = "msdp_trigger_method: $method\r\n"
         return phone.encryptedText(
             "SET_PARAMETER * DMSDP/1.0\r\ncseq: $cseq\r\nserviceid: speaker1\r\nservicetype: 3\r\n" +
-                "datasessionid: $sessionId\r\nsimple: $simple\r\nparaaudio: SampleRate=48000;Format=16;ChannelNum=2;Codec=0\r\n" +
+                "datasessionid: $sessionId\r\nsimple: $simple\r\n" +
+                "paraaudio: SampleRate=48000;Format=16;ChannelNum=2;Codec=$codec\r\n" +
                 extraHeaders + "content-length: ${body.length}\r\n\r\n" + body,
         )
     }
@@ -285,6 +293,54 @@ class SpeakerSessionTest {
         assertTrue(answer.isEmpty())
         assertEquals(406, audio.only<AudioEvent.SetupAnswered>().statusCode)
         assertTrue(audio.events.any { it is AudioEvent.Note && "没有接受" in it.message })
+    }
+
+    /**
+     * 声明是 PCM、手机在 ParaAudio 里明确要 AAC（Codec=1）：SETUP 顺着手机给 AAC（华为 HiCar 15.2 有线实测
+     * 不应答 PCM 的 SETUP，反复拆会话直到拆掉整条投屏）。手机要 PCM 时照旧按声明走。
+     */
+    @Test
+    fun setupHonorsAacRequestedInParaAudio() {
+        val audio = AudioRecorder()
+        val session = speakerSession(speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio = audio)
+        session.phoneDeviceInfo()
+        session.speakerProfile()
+        session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", codec = 1), 1_000)
+        val setup = text(session.audioListenersReady(40100, 1_050).single())
+        assertTrue("Codec: 1\r\n" in setup, setup)
+        assertEquals(AudioCodec.AAC, audio.only<AudioEvent.Requested>().stream.codec)
+        assertTrue(audio.events.any { it is AudioEvent.Note && "顺着手机给 AAC" in it.message }, "记一笔说明")
+
+        // 手机要 PCM（Codec=0）时不受影响：照旧 Codec: 0。
+        val pcm = AudioRecorder()
+        val pcmSession = speakerSession(speaker = DmsdpConfig.Speaker(codec = AudioCodec.PCM), audio = pcm)
+        pcmSession.phoneDeviceInfo()
+        pcmSession.speakerProfile()
+        pcmSession.feed(DmsdpChannel.CONTROL, trigger("OPTIONS"), 1_000)
+        assertTrue("Codec: 0\r\n" in text(pcmSession.audioListenersReady(40100, 1_050).single()))
+    }
+
+    /** 手机要 AAC、不应答 PCM 的 SETUP 就拆会话：记 NO_ANSWER，这台手机下次连接从头声明 AAC。 */
+    @Test
+    fun unansweredSetupForAacRequestIsRecordedAsNoAnswer() {
+        val audio = AudioRecorder()
+        val session = toSetupSent(audio, DmsdpConfig.Speaker(codec = AudioCodec.PCM))
+        // 手机换个会话号再触发，这次 ParaAudio 要 AAC（第一次的 PCM 会话被替换掉）。
+        session.feed(DmsdpChannel.CONTROL, trigger("OPTIONS", sessionId = "88", codec = 1), 2_000)
+        session.audioListenersReady(40200, 2_050)
+        session.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", sessionId = "88"), 9_000)
+        assertEquals(PcmVerdict.NO_ANSWER, audio.only<AudioEvent.CodecVerdict>().verdict)
+
+        // 手机应答了 SETUP（或没要 AAC）就不记：判定只属于「要 AAC 又不应答」这一种。
+        val answered = AudioRecorder()
+        val answeredSession = toSetupSent(answered, DmsdpConfig.Speaker(codec = AudioCodec.PCM))
+        answeredSession.feed(
+            DmsdpChannel.CONTROL,
+            phone.encryptedText("DMSDP/1.0 200 OK\r\nCSeq: 2\r\nServiceID: speaker1\r\nTransport: RTP/AVP/TCP;unicast;server_port=50000\r\n\r\n"),
+            1_100,
+        )
+        answeredSession.feed(DmsdpChannel.CONTROL, trigger("TEARDOWN", cseq = "7"), 9_000)
+        assertTrue(answered.events.none { it is AudioEvent.CodecVerdict })
     }
 
     /**
