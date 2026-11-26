@@ -78,16 +78,14 @@ object VpnConsent {
                 Log.w(TAG, "VPN 静默自授出错，回退系统授权框", e)
                 false
             }
-            val rechecked = try {
-                prepare()
-            } catch (e: RuntimeException) {
-                null
-            }
-            if (granted && rechecked == null) {
-                Log.i(TAG, "VPN 静默自授成功，跳过授权框")
+            // 重查不能吞异常：prepare 抛异常说明系统侧出问题（策略禁止、服务异常），让最外层
+            // catch 转成 Unavailable，绝不能把异常当成 null 放行。
+            val rechecked = prepare()
+            if (rechecked == null) {
+                Log.i(TAG, "VPN 静默自授成功，跳过授权框（重查通过）")
                 Status.Granted
             } else {
-                Log.i(TAG, "VPN 静默自授未生效，走系统授权框")
+                Log.i(TAG, "VPN 静默自授未生效（granted=$granted），走系统授权框")
                 Status.NeedsUserConsent(intent)
             }
         }
@@ -194,13 +192,18 @@ object VpnConsent {
         FALLBACK_ACTIVATE_VPN_OP
     }
 
-    /** B：直调 ConnectivityService 的 VPN 授权接口（点确认的等价动作）。 */
+    /**
+     * B：直调 ConnectivityService 的 VPN 授权接口（点确认的等价动作）。
+     * 两个步骤都要跑：setVpnPackageAuthorization 只把授权记录改成自己，别的 VPN 占坑时还要靠
+     * prepareVpn(null, pkg, user) 把旧连接一并断开切过来，所以不能提前返回。
+     */
     private fun grantViaConnectivity(context: Context): Boolean {
+        var ok = false
         try {
             val cm = systemService("connectivity", "android.net.IConnectivityManager")
             val pkg = context.packageName
             val userId = context.applicationInfo.uid / 100_000
-            // API 28～29：setVpnPackageAuthorization(String, int, boolean)。
+            // 步骤 1：setVpnPackageAuthorization —— API 28～29 用 boolean 版，API 30+ 用 int 版。
             try {
                 val m = cm.javaClass.getMethod(
                     "setVpnPackageAuthorization",
@@ -210,46 +213,48 @@ object VpnConsent {
                 )
                 m.invoke(cm, pkg, userId, true)
                 Log.i(TAG, "setVpnPackageAuthorization(pkg, user=$userId, true) 已调用")
-                return true
+                ok = true
             } catch (e: NoSuchMethodException) {
                 Log.w(TAG, "没有 boolean 版 setVpnPackageAuthorization，试 int 版")
             } catch (e: Throwable) {
                 Log.w(TAG, "boolean 版 setVpnPackageAuthorization 调用失败", e)
             }
-            // API 30+：setVpnPackageAuthorization(String, int, int)，1 = TYPE_VPN_SERVICE。
-            try {
-                val m = cm.javaClass.getMethod(
-                    "setVpnPackageAuthorization",
-                    String::class.java,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                )
-                m.invoke(cm, pkg, userId, 1)
-                Log.i(TAG, "setVpnPackageAuthorization(pkg, user=$userId, 1) 已调用")
-                return true
-            } catch (e: NoSuchMethodException) {
-                Log.w(TAG, "没有 int 版 setVpnPackageAuthorization，试 prepareVpn")
-            } catch (e: Throwable) {
-                Log.w(TAG, "int 版 setVpnPackageAuthorization 调用失败", e)
-            }
-            // 最后一手：prepareVpn(String, String, int)，传 null 旧包名即「同意当前请求」。
-            try {
-                val m = cm.javaClass.getMethod(
-                    "prepareVpn",
-                    String::class.java,
-                    String::class.java,
-                    Int::class.javaPrimitiveType,
-                )
-                m.invoke(cm, null, pkg, userId)
-                Log.i(TAG, "prepareVpn(null, pkg, user=$userId) 已调用")
-                return true
-            } catch (e: Throwable) {
-                Log.w(TAG, "prepareVpn 调用失败", e)
+            if (!ok) {
+                try {
+                    val m = cm.javaClass.getMethod(
+                        "setVpnPackageAuthorization",
+                        String::class.java,
+                        Int::class.javaPrimitiveType,
+                        Int::class.javaPrimitiveType,
+                    )
+                    m.invoke(cm, pkg, userId, 1)
+                    Log.i(TAG, "setVpnPackageAuthorization(pkg, user=$userId, 1) 已调用")
+                    ok = true
+                } catch (e: Throwable) {
+                    Log.w(TAG, "int 版 setVpnPackageAuthorization 不可用", e)
+                }
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "ConnectivityService 不可用", e)
+            Log.w(TAG, "ConnectivityService 不可用，跳过 setVpnPackageAuthorization", e)
         }
-        return false
+        // 步骤 2：prepareVpn(String, String, int)，传 null 旧包名即「同意当前请求」，把别的 VPN 占的坑一并切过来。
+        try {
+            val cm = systemService("connectivity", "android.net.IConnectivityManager")
+            val pkg = context.packageName
+            val userId = context.applicationInfo.uid / 100_000
+            val m = cm.javaClass.getMethod(
+                "prepareVpn",
+                String::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType,
+            )
+            m.invoke(cm, null, pkg, userId)
+            Log.i(TAG, "prepareVpn(null, pkg, user=$userId) 已调用")
+            ok = true
+        } catch (e: Throwable) {
+            Log.w(TAG, "prepareVpn 调用失败", e)
+        }
+        return ok
     }
 
     /** `ServiceManager.getService(name)` → `接口名$Stub.asInterface(binder)`。 */

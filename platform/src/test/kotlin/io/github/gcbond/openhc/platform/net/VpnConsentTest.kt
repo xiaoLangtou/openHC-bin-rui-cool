@@ -79,6 +79,38 @@ class VpnConsentTest {
     }
 
     @Test
+    fun recheckPrepareFailureIsUnavailableNeverGranted() {
+        val dialog = consentIntent()
+        var prepareCalls = 0
+        val status = VpnConsent.checkWith(
+            prepare = {
+                prepareCalls++
+                if (prepareCalls == 1) dialog else throw RuntimeException("策略禁止 / 服务异常")
+            },
+            isSystemUid = { true },
+            autoGrant = { true },
+        )
+        assertTrue(status is VpnConsent.Status.Unavailable, "二次 prepare 抛异常必须转 Unavailable")
+        assertEquals(2, prepareCalls)
+    }
+
+    @Test
+    fun recheckNullMeansGrantedEvenIfAutoGrantUnsure() {
+        val dialog = consentIntent()
+        var prepareCalls = 0
+        // 自授两步的结果只是「尽力而为」，最终以重查 prepare 的系统权威结果放行。
+        val status = VpnConsent.checkWith(
+            prepare = {
+                prepareCalls++
+                if (prepareCalls == 1) dialog else null
+            },
+            isSystemUid = { true },
+            autoGrant = { false },
+        )
+        assertEquals(VpnConsent.Status.Granted, status, "重查通过即授权，不绑自授步骤的结果")
+    }
+
+    @Test
     fun nonSystemUidKeepsTheExistingDialogBehavior() {
         val dialog = consentIntent()
         var grantCalls = 0

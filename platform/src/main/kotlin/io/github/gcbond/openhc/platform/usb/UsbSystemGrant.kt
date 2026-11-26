@@ -19,7 +19,10 @@ internal object UsbSystemGrant {
 
     private const val TAG = "OpenHC-Wired"
 
-    /** 尝试静默授予 [device] 给 [packageName] 使用的权限，成功与否看调用方随后再查一次 [UsbManager.hasPermission]。 */
+    /**
+     * 尝试静默授予 [device] 给 [packageName] 使用的权限；返回是否真的授上了
+     * （以 [UsbManager.hasPermission] 的系统记录为准，不是「接口调用成功」就算数）。
+     */
     fun grant(usb: UsbManager, device: UsbDevice, packageName: String): Boolean {
         // 路一：UsbManager.grantPermission(UsbDevice, String)。
         try {
@@ -30,10 +33,12 @@ internal object UsbSystemGrant {
             )
             m.invoke(usb, device, packageName)
             Log.i(TAG, "USB 权限已静默自授（UsbManager.grantPermission）")
-            return true
+            if (usb.hasPermission(device)) return true
+            Log.w(TAG, "grantPermission 调了但系统没记上权限，改走 IUsbManager")
         } catch (e: NoSuchMethodException) {
             Log.w(TAG, "UsbManager.grantPermission 不存在，改走 IUsbManager")
         } catch (e: Throwable) {
+            // hasPermission 在系统服务异常时也可能抛，这里不算授上，继续路二。
             Log.w(TAG, "UsbManager.grantPermission 调用失败", e)
         }
         // 路二：IUsbManager.grantDevicePermission(UsbDevice, int uid)。
@@ -47,11 +52,14 @@ internal object UsbSystemGrant {
             )
             m.invoke(usbService, device, Process.myUid())
             Log.i(TAG, "USB 权限已静默自授（IUsbManager.grantDevicePermission）")
-            return true
         } catch (e: Throwable) {
             Log.w(TAG, "IUsbManager.grantDevicePermission 不可用", e)
         }
-        return false
+        return try {
+            usb.hasPermission(device)
+        } catch (e: RuntimeException) {
+            false
+        }
     }
 
     private fun systemUsbBinder(): IBinder {
