@@ -461,15 +461,30 @@ private fun AppRoot(
     }
     // 沉浸衔接：动画在首页/设置页盖着时先藏系统栏（投屏页的 SystemBars 由 ProjectionSurface 自己管），
     // 动画收起后还停在首页（没切进投屏页）时恢复，防止 HOME → PROJECTION 切换瞬间状态栏闪烁跳动。
+    // 不能用 DisposableEffect(showSplash, screen) 的 onDispose 判断——onDispose 闭包捕获的是
+    // 效果创建那一刻的旧值，「动画刚收起」的恢复分支永远走不到；这里用状态标记跟效果解耦。
     val view = LocalView.current
     val window = remember { (context as? Activity)?.window }
-    DisposableEffect(showSplash, screen) {
-        val splashCoveredScreen = showSplash && screen != Screen.PROJECTION
-        if (splashCoveredScreen) {
-            window?.let { SystemBars.hide(it, view, settings.fullScreen) }
+    var hidBarsForSplash by remember { mutableStateOf(false) }
+    LaunchedEffect(showSplash, screen) {
+        when {
+            showSplash && screen != Screen.PROJECTION -> {
+                window?.let { SystemBars.hide(it, view, settings.fullScreen) }
+                hidBarsForSplash = true
+            }
+            hidBarsForSplash -> {
+                // 切进投屏页时不恢复：栏的显隐交给 ProjectionView 继续保持隐藏，别抢着 show 打架。
+                if (screen != Screen.PROJECTION) {
+                    window?.let { SystemBars.show(it, view) }
+                }
+                hidBarsForSplash = false
+            }
         }
+    }
+    // 界面整体离场（退出 AppRoot）的兜底：动画还盖着时把系统栏恢复回来。
+    DisposableEffect(Unit) {
         onDispose {
-            if (splashCoveredScreen && screen == Screen.HOME && !showSplash) {
+            if (hidBarsForSplash) {
                 window?.let { SystemBars.show(it, view) }
             }
         }

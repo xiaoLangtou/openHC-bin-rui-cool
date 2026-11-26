@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +52,9 @@ import androidx.compose.ui.unit.sp
  */
 @Composable
 internal fun HiCarSplashOverlay(visible: Boolean, onDismiss: () -> Unit) {
+    // pointerInput(Unit) 只捕获第一次的 lambda：用 rememberUpdatedState 保持最新引用，
+    // 不然外层 Screen / attempt 变化后重建的 onDismiss 收起的是旧状态（attempt 记错人）。
+    val latestOnDismiss by rememberUpdatedState(onDismiss)
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(tween(durationMillis = 300, easing = FastOutSlowInEasing)),
@@ -78,20 +82,22 @@ internal fun HiCarSplashOverlay(visible: Boolean, onDismiss: () -> Unit) {
                 .background(Color.Black)
                 // 吃掉所有单击防误触底层；双击是逃生出口。
                 .pointerInput(Unit) {
-                    detectTapGestures(onDoubleTap = { onDismiss() })
+                    detectTapGestures(onDoubleTap = { latestOnDismiss() })
                 },
             contentAlignment = Alignment.Center,
         ) {
             val w = textSize.width.coerceAtLeast(1).toFloat()
             val h = textSize.height.coerceAtLeast(1).toFloat()
-            // 银白高光：一道柔边的亮带随起亮进度自左向右扫过字标。
+            // 底层字标从微暗起亮渐变为纯白；纯白叠纯白什么都看不见，起亮先压暗才有「亮起来」的余地。
+            val baseColor = Color.White.copy(alpha = 0.35f + 0.65f * appear.value)
+            // 银白高光：一道柔边的亮带随起亮进度自左向右扫过字标，扫完淡出。
             val sweepX = w * (appear.value * 1.6f - 0.3f)
             val shineBrush = Brush.linearGradient(
                 colors = listOf(
                     Color.Transparent,
-                    Color(0xFFD9E1E9),
+                    Color(0xCCFFFFFF),
                     Color.White,
-                    Color(0xFFD9E1E9),
+                    Color(0xCCFFFFFF),
                     Color.Transparent,
                 ),
                 start = Offset(sweepX - w * 0.35f, 0f),
@@ -107,9 +113,9 @@ internal fun HiCarSplashOverlay(visible: Boolean, onDismiss: () -> Unit) {
                         alpha = breathe.value
                     },
             ) {
-                Text(wordmark(fontSize, brush = null), fontSize = fontSize)
+                Text(wordmark(fontSize, color = baseColor), fontSize = fontSize)
                 Text(
-                    wordmark(fontSize, brush = shineBrush),
+                    wordmark(fontSize, color = Color.Transparent, brush = shineBrush),
                     fontSize = fontSize,
                     modifier = Modifier.graphicsLayer { alpha = shine.value },
                 )
@@ -120,10 +126,11 @@ internal fun HiCarSplashOverlay(visible: Boolean, onDismiss: () -> Unit) {
 
 /**
  * 字标：HUAWEI（SemiBold、宽字距）+ 空格 + HiCar（Medium、紧字距）。
- * [brush] 为 null 时用纯亮白（显式指定，不吃主题字色——浅色主题下也不能变黑字）。
+ * [color] 是显式指定的字色（不吃主题字色——浅色主题下也不能变黑字）；[brush] 存在时覆盖字色
+ * （SpanStyle 的 color 与 brush 互斥），扫光层传 Color.Transparent 兜底。
  */
-private fun wordmark(fontSize: TextUnit, brush: Brush?): AnnotatedString {
-    val foreground = if (brush != null) SpanStyle(brush = brush) else SpanStyle(color = Color.White)
+private fun wordmark(fontSize: TextUnit, color: Color, brush: Brush? = null): AnnotatedString {
+    val foreground = if (brush != null) SpanStyle(brush = brush) else SpanStyle(color = color)
     return buildAnnotatedString {
         withStyle(foreground.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 2.sp)) { append("HUAWEI") }
         append(" ")
